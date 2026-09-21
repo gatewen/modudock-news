@@ -7,6 +7,8 @@ from dataclasses import dataclass, field
 import http.client
 import ipaddress
 import socket
+import ssl
+import os
 import time
 from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin, urlsplit
@@ -82,12 +84,34 @@ class _Redirect(HTTPRedirectHandler):
 
 class Fetcher:
     def __init__(self, allow_hosts=frozenset(), resolver=socket.getaddrinfo,
-                 timeout=15, deadline=30, clock=time.monotonic):
+                 timeout=15, deadline=30, clock=time.monotonic, ssl_context=None, ca_file=None):
         if timeout <= 0 or deadline <= 0:
             raise ValueError("timeouts must be positive")
         self.allow_hosts = frozenset(allow_hosts)
         self.resolver = resolver
         self.timeout, self.deadline, self.clock = timeout, deadline, clock
+        self.ssl_context = ssl_context if ssl_context is not None else ssl.create_default_context()
+        # Enforce verification even on an injected context. Configure once,
+        # before the shared Fetcher is handed to worker threads.
+        self.ssl_context.verify_mode = ssl.CERT_REQUIRED
+        # check_hostname=True can itself upgrade CERT_NONE in CPython. Check
+        # this invariant first so that implicit upgrade cannot hide a broken
+        # certificate-verification configuration step.
+        if self.ssl_context.verify_mode != ssl.CERT_REQUIRED:
+            raise ValueError("TLS requires certificate verification")
+        self.ssl_context.check_hostname = True
+        paths = [ca_file] if ca_file is not None else [
+            os.environ.get("SSL_CERT_FILE"), "/etc/ssl/cert.pem",
+            "/etc/ssl/certs/ca-certificates.crt", "/etc/pki/tls/certs/ca-bundle.crt"]
+        for path in paths:
+            if self.ssl_context.cert_store_stats()["x509_ca"]:
+                break
+            if path:
+                try:
+                    self.ssl_context.load_verify_locations(cafile=path)
+                except (OSError, ssl.SSLError):
+                    pass
+        self.has_ca = self.ssl_context.cert_store_stats()["x509_ca"] > 0
 
     def check_destination(self, url):
         if not isinstance(url, str) or any(ord(c) <= 32 or ord(c) == 127 for c in url):
@@ -97,6 +121,8 @@ class Fetcher:
             raise FetchError("scheme must be http/https with a host")
         if parts.username is not None or parts.password is not None:
             raise FetchError("userinfo forbidden")
+        if parts.scheme == "https" and not self.has_ca:
+            raise FetchError("no CA certificates")
         port = parts.port or (443 if parts.scheme == "https" else 80)
         host = parts.hostname
         addresses = self.resolver(host, port, type=socket.SOCK_STREAM)
@@ -127,7 +153,7 @@ class Fetcher:
                     if not isinstance(value, str) or "\r" in value or "\n" in value:
                         raise FetchError("invalid validator")
                     headers[header] = value
-            opener = build_opener(ProxyHandler({}), _HTTP(), _HTTPS(), _Redirect(self, check_deadline))
+            opener = build_opener(ProxyHandler({}), _HTTP(), _HTTPS(context=self.ssl_context), _Redirect(self, check_deadline))
             try:
                 response = opener.open(Request(url, headers=headers), timeout=self.timeout)
             except HTTPError as exc:

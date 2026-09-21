@@ -1,8 +1,8 @@
 # news — 繁中新聞 RSS 模組
 
-目前交付第 1–4 塊：宣告檔、協定、RSS/Atom 解析與正規化、HTTP Fetcher，
+目前交付第 1–5 塊：宣告檔、協定、RSS/Atom 解析與正規化、HTTP Fetcher、前半渲染，
 以及固定四條 worker 的協調者／排程。`up` 開始第一輪，結束後隔 10 分鐘下一輪；
-抓取中的 refresh 合併成一次待辦。**前半仍是工具列與空清單，尚未渲染新聞。**
+抓取中的 refresh 合併成一次待辦。前半提供新聞列表、來源篩選與失敗來源數。
 完整定稿見 [docs/SPEC.md](docs/SPEC.md)。執行期只用 Python 標準庫與原生 ES module。
 
 ## 安裝
@@ -33,6 +33,8 @@ go run ./cmd/modudock -addr 127.0.0.1:8731 -modules /Users/gatewenlee/Code/modud
 
 ```sh
 python3 -m unittest -v
+npm ci --ignore-scripts
+npm test
 ./scripts/dev-check.sh
 ```
 
@@ -55,10 +57,14 @@ worker 只回候選；協調者驗輪 id 與期限後才整份提交 items/valid
 
 ### 已知限制
 
-下列是完整 v1 的既定限制，並非宣稱抓取功能已完成：
+執行期不需要 npm；happy-dom 只用於開發測試。已知限制：
 
 - 不防 DNS rebinding（解析與連線會是兩次查詢）。
 - 固定四條 daemon worker 可能被慢 headers、慢 body 或 DNS 佔住，不能強制回收；
   全部占用時停止更新，每輪回報 deadline，直到連線自行結束。
 - 不持久化；殼重啟或模組重載都從零開始。
 - stdout 堵塞時 done 盡力送；等待 0.8 秒後強制退出，優先維持 1 秒退出政策。
+- Python 的 CA store 可能是空的（例如 python.org macOS 安裝未裝憑證）。Fetcher
+  先用預設 SSL context；若無 CA，依序嘗試 SSL_CERT_FILE、macOS/Debian/RHEL
+  常見系統 bundle。仍無 CA 時 HTTPS 回報 `no CA certificates`，不連線、不關驗證。
+  系統必須提供可信且有效的 CA bundle；修正憑證後須重新載入模組。
