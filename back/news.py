@@ -1,6 +1,7 @@
 """Protocol-1 skeleton. Fetching and scheduling are intentionally not wired yet."""
 
 import json
+import argparse
 import os
 from pathlib import Path
 import queue
@@ -9,6 +10,11 @@ import threading
 import time
 from urllib.parse import urlsplit
 from xml.parsers import expat
+
+if __package__:
+    from .fetch import Fetcher
+else:
+    from fetch import Fetcher
 
 
 MAX_PACKET = 900 * 1024
@@ -187,14 +193,18 @@ def valid_seq(value):
     return type(value) is int and 0 <= value < 2**53
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--allow-host", action="append", default=[])
+    args = parser.parse_args(argv)
+    fetcher = Fetcher(allow_hosts=args.allow_host)
     hooks = TestHooks()
     feeds_path = Path(__file__).with_name("feeds.json")
     if hooks.directory:
         feeds_path = os.environ.get("NEWS_TEST_FEEDS", feeds_path)
     feeds, error = preflight(feeds_path)
     # Retained for the fetch implementation in the next block.
-    _ = feeds
+    _ = feeds, fetcher  # No HTTP or scheduler is connected yet.
     hooks.mark("preflight-complete")
     outbox = Outbox(sys.stdout.buffer, hooks)
     seq = None
