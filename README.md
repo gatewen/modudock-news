@@ -1,6 +1,6 @@
 # news — 繁中新聞 RSS 模組
 
-目前交付第 1–5 塊：宣告檔、協定、RSS/Atom 解析與正規化、HTTP Fetcher、前半渲染，
+已完成宣告檔、協定、RSS/Atom 解析與正規化、HTTP Fetcher、前半渲染，
 以及固定四條 worker 的協調者／排程。`up` 開始第一輪，結束後隔 10 分鐘下一輪；
 抓取中的 refresh 合併成一次待辦。前半提供新聞列表、來源篩選與失敗來源數。
 完整定稿見 [docs/SPEC.md](docs/SPEC.md)。執行期只用 Python 標準庫與原生 ES module。
@@ -15,7 +15,10 @@
 modudock add https://github.com/<owner>/modudock-news
 ```
 
-安裝登記為 `modules/news` submodule；裝完重啟殼，從 catalog 載入「新聞」。
+指令須在主 repo 根（有 `.git/` 與 `modules/`）執行，且 `modudock` 執行檔已在 PATH。
+安裝登記為 `modules/news` submodule，但不自動 commit、不自動載入；
+自行檢查並 commit 登記變更，重啟殼後從 catalog 載入「新聞」。
+殼需包含 `4aa95dd` 的後半 publish Topic 修正，否則 `news.fetched` 會被丟棄。
 目前 repo 尚未發布，不能把上述模板當成已驗收的安裝 URL。
 來源設定在 `back/feeds.json`，不在公開的 `front/` 裡；改完須重新載入模組。
 
@@ -48,7 +51,7 @@ dev-check 需要 Go 與提供內建 WebSocket 的 Node，會起自己的殼、�
 `ok` / `not_modified` / `error`。validators 使用 `etag`、`last_modified`；成功取得
 只回候選值，不代表 XML 解析成功，也不提交快取。`timeout`、`deadline` 可在測試縮短。
 `news.py --allow-host HOST` 可重複，只配置 Fetcher 的精確主機放行名單；收到 up 才抓取。
-正式宣告檔不帶此參數。User-Agent 的 GitHub owner 仍是規格模板，發布前需填實值。
+正式宣告檔不帶此參數。User-Agent 的 `<owner>` 仍維持模板，發布前填 GitHub 帳號。
 
 協調者接住 `fit_packet` 的 `ValueError` 並記 stderr，該輪不送 list/publish、仍算結束；
 304 無快取標失敗並清 validators，解析失敗不提交 validators，失敗保留 stale items。
@@ -68,3 +71,8 @@ worker 只回候選；協調者驗輪 id 與期限後才整份提交 items/valid
   先用預設 SSL context；若無 CA，依序嘗試 SSL_CERT_FILE、macOS/Debian/RHEL
   常見系統 bundle。仍無 CA 時 HTTPS 回報 `no CA certificates`，不連線、不關驗證。
   系統必須提供可信且有效的 CA bundle；修正憑證後須重新載入模組。
+
+### 刻意不做（SPEC §9）
+
+- 全文抓取、圖片、關鍵字搜尋、使用者自訂來源 UI、持久化、通知。
+- GitHub 發布由使用者處理；公開 repo 發布後才做 `modudock add` 安裝驗收。

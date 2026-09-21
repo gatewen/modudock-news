@@ -47,7 +47,7 @@
 | 自由時報即時 | https://news.ltn.com.tw/rss/all.xml |
 | 中央社 政治 | https://feeds.feedburner.com/rsscna/politics |
 | 中央社 財經 | https://feeds.feedburner.com/rsscna/finance |
-| 聯合新聞網 | https://udn.com/rssfeed/news/2/6638?ch=news |
+| 中央社 國際 | https://feeds.feedburner.com/rsscna/intworld |
 | BBC 中文（繁） | https://feeds.bbci.co.uk/zhongwen/trad/rss.xml |
 | 端傳媒 | https://theinitium.com/feed |
 | 科技新報 | https://technews.tw/feed/ |
