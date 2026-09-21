@@ -1,8 +1,8 @@
 # news — 繁中新聞 RSS 模組
 
-目前交付第 1–3 塊：可被 modudock 掃描的宣告檔、協定骨架、工具列與空清單，
-獨立的 RSS/Atom 解析、正規化、去重、封包大小守衛，以及單來源同步 HTTP Fetcher。
-**尚未接上排程或顯示新聞**；收到 `up` 不會發出網路請求。
+目前交付第 1–4 塊：宣告檔、協定、RSS/Atom 解析與正規化、HTTP Fetcher，
+以及固定四條 worker 的協調者／排程。`up` 開始第一輪，結束後隔 10 分鐘下一輪；
+抓取中的 refresh 合併成一次待辦。**前半仍是工具列與空清單，尚未渲染新聞。**
 完整定稿見 [docs/SPEC.md](docs/SPEC.md)。執行期只用 Python 標準庫與原生 ES module。
 
 ## 安裝
@@ -39,17 +39,19 @@ python3 -m unittest -v
 dev-check 需要 Go 與提供內建 WebSocket 的 Node，會起自己的殼、連 `/ws` 比對
 完整 catalog 宣告，再關閉自己的 process group；8731 已占用時拒絕執行。
 此檢查不等於瀏覽器掛載驗收。協定測試使用真 subprocess；
-`NEWS_TEST_DIR`、`NEWS_TEST_MODE`、`NEWS_TEST_FEEDS` 僅供測試注入及 writer 閘門，
+`NEWS_TEST_DIR`、`NEWS_TEST_MODE`、`NEWS_TEST_FEEDS`、`NEWS_TEST_SCHEDULER` 僅供測試注入及 writer 閘門，
 正常執行請勿設定；宣告檔沒有啟用它們。
 
 `back/fetch.py` 的 `Fetcher.fetch(url, validators)` 回傳 `Result`，status 為
 `ok` / `not_modified` / `error`。validators 使用 `etag`、`last_modified`；成功取得
 只回候選值，不代表 XML 解析成功，也不提交快取。`timeout`、`deadline` 可在測試縮短。
-`news.py --allow-host HOST` 可重複，只配置 Fetcher 的精確主機放行名單，不啟動抓取；
+`news.py --allow-host HOST` 可重複，只配置 Fetcher 的精確主機放行名單；收到 up 才抓取。
 正式宣告檔不帶此參數。User-Agent 的 GitHub owner 仍是規格模板，發布前需填實值。
 
-後續協調者必須接住 `fit_packet` 的 `ValueError`、記 stderr，不能讓 process 因此退出；
-304 無快取、解析失敗不提交 validators、保留 stale items 也由後續協調者負責。
+協調者接住 `fit_packet` 的 `ValueError` 並記 stderr，該輪不送 list/publish、仍算結束；
+304 無快取標失敗並清 validators，解析失敗不提交 validators，失敗保留 stale items。
+worker 只回候選；協調者驗輪 id 與期限後才整份提交 items/validators/first_seen。
+每來源採納期限由 worker 取件時計起；尚在排隊的來源由整輪期限兜底。
 
 ### 已知限制
 

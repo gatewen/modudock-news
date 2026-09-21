@@ -217,9 +217,18 @@ class DestinationTests(unittest.TestCase):
                 fetcher.check_destination("http://" + host)
 
     def test_invalid_scheme_userinfo_and_empty_dns(self):
-        fetcher = Fetcher(allow_hosts={"localhost"})
-        for url in ("file:///x", "http://u:p@localhost/", "http://localhost:bad/", "http://localhost/\n"):
-            self.assertEqual(fetcher.fetch(url).status, "error")
+        with server() as (base, received, *_):
+            fetcher = Fetcher(allow_hosts={"127.0.0.1"})
+            cases = ((base.replace("http://", "http://u:p@"), "userinfo forbidden"),
+                     ("file:///x", "scheme must be http/https with a host"),
+                     ("http://127.0.0.1:bad/", "Port could not be cast to integer value as 'bad'"),
+                     (base + "/\n", "invalid URL"))
+            for url, reason in cases:
+                with self.subTest(url=url):
+                    result = fetcher.fetch(url)
+                    self.assertEqual(result.status, "error")
+                    self.assertEqual(result.error, reason)
+                    self.assertEqual(received, [])
         self.assertEqual(Fetcher(resolver=self.resolver()).fetch("http://example.com").status, "error")
 
     def test_errors_bounded_and_validator_injection_rejected(self):

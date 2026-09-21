@@ -1,4 +1,4 @@
-"""Protocol-1 skeleton. Fetching and scheduling are intentionally not wired yet."""
+"""Protocol-1 news backend: lifecycle, Outbox and scheduler wiring."""
 
 import json
 import argparse
@@ -13,8 +13,10 @@ from xml.parsers import expat
 
 if __package__:
     from .fetch import Fetcher
+    from .scheduler import Scheduler
 else:
     from fetch import Fetcher
+    from scheduler import Scheduler
 
 
 MAX_PACKET = 900 * 1024
@@ -57,8 +59,8 @@ class TestHooks:
     """Opt-in subprocess test gates. No hooks unless NEWS_TEST_DIR is set.
 
     Tests own this directory. Hooks never change production packet dispatch.
-    Synthetic traffic after up exists only to exercise the Outbox before fetching
-    is implemented; the manifest does not enable these environment variables.
+    Synthetic traffic in gate/flood mode isolates the Outbox from fetching;
+    the manifest does not enable these environment variables.
     """
 
     def __init__(self):
@@ -193,7 +195,7 @@ def valid_seq(value):
     return type(value) is int and 0 <= value < 2**53
 
 
-def main(argv=None):
+def main(argv=None, scheduler_factory=Scheduler):
     parser = argparse.ArgumentParser()
     parser.add_argument("--allow-host", action="append", default=[])
     args = parser.parse_args(argv)
@@ -203,16 +205,21 @@ def main(argv=None):
     if hooks.directory:
         feeds_path = os.environ.get("NEWS_TEST_FEEDS", feeds_path)
     feeds, error = preflight(feeds_path)
-    # Retained for the fetch implementation in the next block.
-    _ = feeds, fetcher  # No HTTP or scheduler is connected yet.
     hooks.mark("preflight-complete")
     outbox = Outbox(sys.stdout.buffer, hooks)
     seq = None
     running = False
+    scheduler = None
+
+    def finish():
+        if scheduler is not None:
+            scheduler.stop()
+        return shutdown(outbox, {"t": "done", "seq": seq} if seq is not None else None)
+
     while True:
         line = sys.stdin.buffer.readline()
         if not line:
-            return shutdown(outbox, {"t": "done", "seq": seq} if seq is not None else None)
+            return finish()
         try:
             packet = json.loads(line)
         except (ValueError, UnicodeError):
@@ -234,14 +241,21 @@ def main(argv=None):
             print("discard: seq mismatch", file=sys.stderr, flush=True)
             hooks.mark("seq-discarded")
         elif kind == "bye":
-            return shutdown(outbox, {"t": "done", "seq": seq})
+            return finish()
         elif kind == "up" and not running:
             running = True
+            # Writer-only stress tests use synthetic traffic, never live feeds.
+            if hooks.mode not in ("gate", "flood"):
+                options = {}
+                if hooks.directory:
+                    options = json.loads(os.environ.get("NEWS_TEST_SCHEDULER", "{}"))
+                scheduler = scheduler_factory(feeds, fetcher, outbox, seq, **options)
+                scheduler.start()
             hooks.on_up(outbox, seq)
-            # Fetching is not implemented in block 1.
         elif kind == "msg" and running:
-            # refresh dispatch will be connected to the scheduler in block 2.
-            pass
+            body = packet.get("body")
+            if scheduler is not None and isinstance(body, dict) and body.get("op") == "refresh":
+                scheduler.refresh()
         elif kind == "event":
             pass  # No subscribed topics.
         else:

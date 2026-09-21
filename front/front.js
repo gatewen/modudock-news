@@ -38,7 +38,7 @@ export default function mount(ctx) {
     if (disposed) return;
     up = true;
     refresh.disabled = false;
-    status.textContent = "協定已就緒；抓取尚未實作";
+    status.textContent = "協定已就緒；清單渲染尚未實作";
   });
   ctx.report("ready");
   return {

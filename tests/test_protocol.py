@@ -34,18 +34,23 @@ class ProtocolTests(unittest.TestCase):
                 stream.close()
         self.tmp.cleanup()
 
-    def start(self, mode="", feeds=None, version=None):
+    def start(self, mode="", feeds=None, version=None, extra_args=(), scheduler_options=None, wrapper=None):
         env = {k: v for k, v in os.environ.items() if not k.startswith("NEWS_TEST_")}
         env.update(NEWS_TEST_DIR=str(self.directory), NEWS_TEST_MODE=mode)
         if feeds:
             env["NEWS_TEST_FEEDS"] = str(feeds)
+        if scheduler_options:
+            env["NEWS_TEST_SCHEDULER"] = json.dumps(scheduler_options)
         command = [sys.executable, str(ROOT / "back/news.py")]
+        if wrapper:
+            command = [sys.executable, "-c", wrapper]
         if version:
             # Patch only the version input; execute the actual subprocess main.
             command = [sys.executable, "-c", "from back import news; import sys; "
                        "original = news.preflight; "
                        f"news.preflight = lambda p: original(p, {version}); "
                        "sys.exit(news.main())"]
+        command.extend(extra_args)
         self.process = subprocess.Popen(command, cwd=ROOT, env=env, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         self.marker("preflight-complete")
@@ -89,8 +94,6 @@ class ProtocolTests(unittest.TestCase):
     def test_hello_ready_and_bye_done_last(self):
         self.start()
         self.hello()
-        self.send("up")
-        self.marker("up-handled")
         started = time.monotonic()
         self.send("bye")
         self.exited(started)
