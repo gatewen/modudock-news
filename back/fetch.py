@@ -15,7 +15,7 @@ from urllib.parse import urljoin, urlsplit
 from urllib.request import HTTPHandler, HTTPSHandler, HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 MAX_BODY = 2 * 1024 * 1024
-USER_AGENT = "modudock-news/0.1 (+https://github.com/<owner>/modudock-news)"
+USER_AGENT = "modudock-news/0.1 (+https://github.com/gatewen/modudock-news)"
 
 
 @dataclass(frozen=True)

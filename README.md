@@ -9,10 +9,10 @@
 
 需要 Python ≥ 3.12、Expat ≥ 2.6，以及支援 protocol 1 的 modudock。
 啟動預檢失敗會在 hello 後回帶 seq 的 fail。公開 repo 由使用者發布；發布後，
-在 modudock 主 repo 執行以下指令（將 `<owner>` 換成實際 GitHub 帳號）：
+在 modudock 主 repo 執行以下指令：
 
 ```sh
-modudock add https://github.com/<owner>/modudock-news
+modudock add https://github.com/gatewen/modudock-news
 ```
 
 指令須在主 repo 根（有 `.git/` 與 `modules/`）執行，且 `modudock` 執行檔已在 PATH。
@@ -51,7 +51,7 @@ dev-check 需要 Go 與提供內建 WebSocket 的 Node，會起自己的殼、�
 `ok` / `not_modified` / `error`。validators 使用 `etag`、`last_modified`；成功取得
 只回候選值，不代表 XML 解析成功，也不提交快取。`timeout`、`deadline` 可在測試縮短。
 `news.py --allow-host HOST` 可重複，只配置 Fetcher 的精確主機放行名單；收到 up 才抓取。
-正式宣告檔不帶此參數。User-Agent 的 `<owner>` 仍維持模板，發布前填 GitHub 帳號。
+正式宣告檔不帶此參數。User-Agent 帶 repo 網址 `https://github.com/gatewen/modudock-news`。
 
 協調者接住 `fit_packet` 的 `ValueError` 並記 stderr，該輪不送 list/publish、仍算結束；
 304 無快取標失敗並清 validators，解析失敗不提交 validators，失敗保留 stale items。
