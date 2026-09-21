@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="UTF-16"?>
+<!DOCTYPE rss [<!ENTITY payload "EXPANDED_SENTINEL">]>
+<rss><channel><item><title>&payload;</title><link>https://example.com/</link></item></channel></rss>

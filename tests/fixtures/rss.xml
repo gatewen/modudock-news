@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0"><channel><title>Fixture</title>
+<item><title><![CDATA[ 新聞 <b>標題</b> ]]></title><link>../story?utm_source=rss&amp;a=1#top</link><pubDate>Mon, 21 Sep 2026 10:00:00 +0800</pubDate><description><![CDATA[<p>摘要 &amp; 內容</p><p>第二段</p>]]></description></item>
+<item><title>無日期</title><guid>/undated</guid></item>
+<item><title>不可用 guid</title><guid isPermaLink="false">/no</guid></item>
+<item><title>缺連結</title></item>
+<item><title>危險連結</title><link>javascript:alert(1)</link></item>
+</channel></rss>

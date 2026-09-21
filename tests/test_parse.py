@@ -1,0 +1,193 @@
+from collections import OrderedDict
+from copy import deepcopy
+from datetime import datetime, timezone
+from pathlib import Path
+import unittest
+from unittest.mock import patch
+from xml.parsers import expat
+
+from back import feedparse as fp
+from back.news import Outbox
+
+FIXTURES = Path(__file__).with_name("fixtures")
+NOW = datetime(2026, 9, 21, tzinfo=timezone.utc)
+BASE = "https://example.com/redirected/feed.xml"
+
+
+def rss(content):
+    return ("<rss><channel>" + content + "</channel></rss>").encode()
+
+
+def entry(title="標題", link="/story", extra=""):
+    return f"<item><title>{title}</title><link>{link}</link>{extra}</item>"
+
+
+def parse(data, seen=None, now=NOW):
+    return fp.parse_feed(data, BASE, "來源", OrderedDict() if seen is None else seen, now)
+
+
+class ParseTests(unittest.TestCase):
+    def test_rss_fixture_normalization_and_drops(self):
+        items, seen = parse((FIXTURES / "rss.xml").read_bytes())
+        self.assertEqual(len(items), 2)
+        self.assertEqual(items[0], dict(title="新聞 標題", link="https://example.com/story?utm_source=rss&a=1#top",
+                         published="2026-09-21T02:00:00.000000Z", summary="摘要 & 內容 第二段",
+                         source="來源", time_guessed=False))
+        self.assertEqual(items[1]["link"], "https://example.com/undated")
+        self.assertTrue(items[1]["time_guessed"])
+        self.assertEqual(len(seen), 1)
+
+    def test_atom_priority_and_namespace(self):
+        items, _ = parse((FIXTURES / "atom.xml").read_bytes())
+        self.assertEqual(len(items), 3)
+        self.assertEqual(items[0]["link"], "https://example.com/redirected/article")
+        self.assertEqual(items[0]["published"], "2026-09-21T02:00:00.000000Z")
+        self.assertEqual(items[0]["summary"], "摘要")
+        self.assertEqual(items[1]["link"], "https://example.com/fallback")
+        self.assertEqual(items[1]["summary"], "正文 粗體")
+        self.assertEqual(items[1]["published"], "2026-09-20T00:00:00.000000Z")
+        self.assertEqual(items[2]["link"], "https://example.com/implicit")
+
+    def test_first_seen_two_rounds_and_no_input_mutation(self):
+        data = rss(entry(extra="<pubDate>not a date</pubDate>"))
+        original = OrderedDict()
+        items1, seen1 = parse(data, original)
+        items2, seen2 = parse(data, seen1, datetime(2026, 10, 1, tzinfo=timezone.utc))
+        self.assertEqual(original, {})
+        self.assertEqual(items1, items2)
+        self.assertEqual(seen1, seen2)
+        self.assertIsNot(seen1, seen2)
+        self.assertTrue(items2[0]["time_guessed"])
+
+    def test_first_seen_oldest_insertion_eviction(self):
+        seen = OrderedDict((f"https://example.com/{i}", "2026-01-01T00:00:00.000000Z") for i in range(1000))
+        _, candidate = parse(rss(entry(link="/new")), seen)
+        self.assertEqual(len(candidate), 1000)
+        self.assertNotIn("https://example.com/0", candidate)
+        self.assertIn("https://example.com/0", seen)
+
+    def test_bad_xml_root_and_namespace_rejected(self):
+        for data in (b"", b"<rss>", b"<html/>", b'<feed xmlns="urn:wrong"/>'):
+            with self.subTest(data=data), self.assertRaises(fp.FeedError):
+                parse(data)
+
+    def test_utf16_dtd_rejected_before_expansion(self):
+        # Stored as readable text; the parser receives real BOM-bearing UTF-16.
+        data = (FIXTURES / "doctype.xml").read_text().encode("utf-16")
+        control = expat.ParserCreate()
+        control_text = []
+        control.CharacterDataHandler = control_text.append
+        control.Parse(data, True)
+        self.assertIn("EXPANDED_SENTINEL", "".join(control_text))
+        original_factory = expat.ParserCreate
+        observed = []
+
+        class ObservedParser:
+            def __init__(self, *args, **kwargs):
+                object.__setattr__(self, "parser", original_factory(*args, **kwargs))
+
+            def __setattr__(self, key, value):
+                if key == "CharacterDataHandler":
+                    original = value
+                    def value(text):
+                        observed.append(text)
+                        original(text)
+                setattr(self.parser, key, value)
+
+            def Parse(self, *args):
+                return self.parser.Parse(*args)
+
+        with patch.object(fp.expat, "ParserCreate", ObservedParser):
+            with self.assertRaisesRegex(fp.FeedError, "DTD/entity forbidden"):
+                parse(data)
+        self.assertNotIn("EXPANDED_SENTINEL", "".join(observed))
+
+    def test_dtd_internal_external_and_utf16_plain(self):
+        for declaration in ('<!DOCTYPE rss>', '<!DOCTYPE rss SYSTEM "file:///etc/passwd">',
+                            '<!DOCTYPE rss [<!ENTITY x "value">]>'):
+            with self.subTest(declaration=declaration), self.assertRaisesRegex(fp.FeedError, "DTD/entity"):
+                parse((declaration + '<rss/>').encode())
+        items, _ = parse(('<?xml version="1.0" encoding="UTF-16"?>' + rss(entry()).decode()).encode("utf-16"))
+        self.assertEqual(items[0]["title"], "標題")
+
+    def test_element_limit_boundary(self):
+        parse(b"<rss>" + b"<x/>" * 19999 + b"</rss>")
+        with self.assertRaisesRegex(fp.FeedError, "element limit"):
+            parse(b"<rss>" + b"<x/>" * 20000 + b"</rss>")
+
+    def test_depth_limit_boundary(self):
+        parse(b"<rss>" + b"<x>" * 31 + b"</x>" * 31 + b"</rss>")
+        with self.assertRaisesRegex(fp.FeedError, "depth limit"):
+            parse(b"<rss>" + b"<x>" * 32 + b"</x>" * 32 + b"</rss>")
+
+    def test_text_limit_accumulates_across_callbacks(self):
+        parse(b"<rss>" + b"a" * (256 * 1024) + b"</rss>")
+        # Entity references force multiple CharacterData callbacks.
+        with self.assertRaisesRegex(fp.FeedError, "text node limit"):
+            parse(b"<rss>" + b"a" * (128 * 1024) + b"&amp;" + b"b" * (128 * 1024) + b"</rss>")
+        with self.assertRaisesRegex(fp.FeedError, "text node limit"):
+            parse(("<rss>" + "中" * 90000 + "</rss>").encode())
+
+    def test_field_limits_empty_title_and_link_validation(self):
+        items, _ = parse(rss(entry("中" * 301, "/" + "a" * 2028,
+                                  "<description>文" + "文" * 200 + "</description>")))
+        self.assertEqual(len(items[0]["title"]), 300)
+        self.assertEqual(len(items[0]["summary"]), 200)
+        self.assertLessEqual(len(items[0]["link"]), 2048)
+        for title, link in ((" ", "/x"), ("x", ""), ("x", "file:///x"),
+                            ("x", "http://[bad"), ("x", "https://example.com/" + "x" * 2048)):
+            with self.subTest(link=link):
+                self.assertEqual(parse(rss(entry(title, link)))[0], [])
+
+    def test_date_fallbacks_and_utc(self):
+        items, _ = parse(rss(entry(extra="<updated>2026-09-21T03:00:00</updated>")))
+        self.assertEqual(items[0]["published"], "2026-09-21T03:00:00.000000Z")
+        items, _ = parse(rss(entry(extra="<pubDate>bad</pubDate><updated>2027-01-01T00:00:00Z</updated>")))
+        self.assertTrue(items[0]["time_guessed"])
+
+    def test_parse_failure_does_not_change_cache(self):
+        seen = OrderedDict([("old", "time")])
+        with self.assertRaises(fp.FeedError):
+            parse(rss(entry())[:-5], seen)
+        self.assertEqual(seen, {"old": "time"})
+
+
+class MergeAndSizeTests(unittest.TestCase):
+    def item(self, title, link, date="2026-09-21T00:00:00.000000Z", source="A"):
+        return dict(title=title, link=link, published=date, source=source, summary="", time_guessed=False)
+
+    def test_tracking_dedup_newest_and_source_order(self):
+        old = self.item("old", "https://example.com/x?a=1&utm_source=x#top")
+        newer = self.item("new", "https://example.com/x?a=1&fbclid=y", "2026-09-22T00:00:00.000000Z", "Z")
+        tied = dict(newer, title="tie", source="A")
+        self.assertEqual(fp.merge_items([[old], [newer], [tied]]), [newer])
+        self.assertEqual(fp.dedup_key(old["link"]), "https://example.com/x?a=1")
+
+    def test_sort_ties_stable_and_200_cap(self):
+        items = [self.item(f"{i:03d}", f"https://example.com/{i}", source="B" if i % 2 else "A") for i in range(205)]
+        first = fp.merge_items([list(reversed(items))])
+        self.assertEqual(first, fp.merge_items([items]))
+        self.assertEqual(len(first), 200)
+        self.assertEqual([(x["source"], x["title"]) for x in first], sorted((x["source"], x["title"]) for x in items)[:200])
+
+    def test_size_guard_reachable_and_matches_outbox(self):
+        items = [dict(self.item("中" * 300, "https://example.com/" + "x" * 2028, source="源" * 64), summary="文" * 200) for _ in range(200)]
+        self.assertEqual(len(items[0]["link"]), 2048)
+        sources = [dict(name="源" * 64 if i == 0 else str(i), ok=False, error="錯" * 200, count=0) for i in range(32)]
+        packet = dict(t="msg", seq=2**53 - 1, body=dict(op="list", items=items, sources=sources, count=200))
+        original = deepcopy(packet)
+        self.assertGreater(len(fp.packet_bytes(packet)), 900 * 1024)
+        fitted = fp.fit_packet(packet)
+        self.assertLessEqual(len(fp.packet_bytes(fitted)), 900 * 1024)
+        self.assertEqual(fp.packet_bytes(fitted), Outbox.encode(fitted))
+        remaining = len(fitted["body"]["items"])
+        self.assertGreater(remaining, 0)
+        self.assertLess(remaining, 200)
+        self.assertEqual(fitted["body"]["items"], items[:remaining])
+        self.assertEqual(fitted["body"]["count"], remaining)
+        self.assertEqual(fitted["body"]["sources"][0]["count"], remaining)
+        self.assertEqual(packet, original)
+
+    def test_oversized_envelope_is_error(self):
+        with self.assertRaisesRegex(ValueError, "without items"):
+            fp.fit_packet(dict(t="msg", seq=4, body=dict(items=[], extra="x" * (900 * 1024))))

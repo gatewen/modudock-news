@@ -1,0 +1,5 @@
+<feed xmlns="http://www.w3.org/2005/Atom">
+<entry><title>Atom 新聞</title><link rel="self" href="/self"/><link rel="alternate" href="article"/><published>2026-09-21T10:00:00+08:00</published><updated>2027-01-01T00:00:00Z</updated><summary>摘要</summary><content>不選</content></entry>
+<entry><title>備援</title><link rel="enclosure" href="/fallback"/><updated>2026-09-20T00:00:00Z</updated><content type="xhtml"><div xmlns="http://www.w3.org/1999/xhtml">正文 <b>粗體</b></div></content></entry>
+<entry><title>無 rel</title><link rel="self" href="/self"/><link href="/implicit"/></entry>
+</feed>
