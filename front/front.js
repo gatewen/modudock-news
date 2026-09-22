@@ -1,4 +1,10 @@
 // Native ES module; untrusted feed fields are only assigned as text.
+const categoryNames = new Map([
+  ["politics", "政治"], ["finance", "財經"], ["tech", "科技"],
+  ["world", "國際"], ["society", "社會"], ["life", "生活"],
+  ["sports", "體育"], ["entertainment", "娛樂"], ["other", "其他"],
+]);
+
 export default function mount(ctx) {
   const document = ctx.container.ownerDocument;
   const root = document.createElement("section");
@@ -13,12 +19,20 @@ export default function mount(ctx) {
   all.value = "";
   all.textContent = "全部來源";
   sources.append(all);
+  const categories = document.createElement("select");
+  categories.setAttribute("aria-label", "新聞類別");
+  for (const [id, name] of [["", "全部類別"], ...categoryNames]) {
+    const option = document.createElement("option");
+    option.value = id;
+    option.textContent = name;
+    categories.append(option);
+  }
   const status = document.createElement("span");
   status.setAttribute("role", "status");
   status.textContent = "等待模組就緒";
   const list = document.createElement("ul");
   list.setAttribute("aria-label", "新聞清單");
-  toolbar.append(refresh, sources, status);
+  toolbar.append(refresh, sources, categories, status);
   root.append(toolbar, list);
   ctx.container.append(root);
 
@@ -41,8 +55,10 @@ export default function mount(ctx) {
     for (const item of items) {
       if (!item || typeof item !== "object") continue;
       if (sources.value && text(item.source) !== sources.value) continue;
+      const category = text(item.category);
+      if (categories.value && category !== categories.value) continue;
       const row = document.createElement("li");
-      row.textContent = `${text(item.source)} · ${localTime(item.published)} · `;
+      row.textContent = `[${categoryNames.get(category) || "未分類"}] ${text(item.source)} · ${localTime(item.published)} · `;
       let safeURL = null;
       try {
         const url = new URL(text(item.link));
@@ -77,11 +93,15 @@ export default function mount(ctx) {
     }
     sources.value = names.has(previous) ? previous : "";
     const failed = records.filter(source => source?.ok === false).length;
-    status.textContent = `更新：${text(body.at)} · 失敗來源：${failed}`;
+    const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
+    const pending = Number.isInteger(classify.pending) && classify.pending >= 0 ? classify.pending : 0;
+    const classification = classify.enabled === false ? "分類：關閉" : `未分類：${pending}`;
+    status.textContent = `更新：${text(body.at)} · 失敗來源：${failed} · ${classification}`;
     drawItems();
   }
   refresh.addEventListener("click", onRefresh);
   sources.addEventListener("change", drawItems);
+  categories.addEventListener("change", drawItems);
   ctx.channel.onMessage((body) => {
     if (!disposed && body && body.op === "list") renderList(body);
   });
@@ -99,6 +119,7 @@ export default function mount(ctx) {
       refresh.disabled = true;
       refresh.removeEventListener("click", onRefresh);
       sources.removeEventListener("change", drawItems);
+      categories.removeEventListener("change", drawItems);
       items = [];
       root.remove();
     },

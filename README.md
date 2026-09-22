@@ -3,6 +3,7 @@
 已完成宣告檔、協定、RSS/Atom 解析與正規化、HTTP Fetcher、前半渲染，
 以及固定四條 worker 的協調者／排程。`up` 開始第一輪，結束後隔 10 分鐘下一輪；
 抓取中的 refresh 合併成一次待辦。前半提供新聞列表、來源篩選與失敗來源數。
+v0.2 加入可選的自動新聞分類、類別標籤與來源／類別交叉篩選。
 完整定稿見 [docs/SPEC.md](docs/SPEC.md)。執行期只用 Python 標準庫與原生 ES module。
 
 ## 安裝
@@ -22,6 +23,20 @@ modudock add https://github.com/gatewen/modudock-news
 目前 repo 尚未發布，不能把上述模板當成已驗收的安裝 URL。
 來源設定在 `back/feeds.json`，不在公開的 `front/` 裡；改完須重新載入模組。
 
+## 分類（v0.2）
+
+在啟動 modudock 殼之前，於殼的環境設定 `TYPESAFE_API_KEY`；殼會將自己的
+環境變數繼承給新聞後半。設定或更換 key 後，需讓殼取得新環境並重新載入模組。
+key 不寫入模組檔案，也不送到前半或記錄中。
+
+沒有 key 時新聞照常列出，標籤顯示「未分類」，狀態列顯示「分類：關閉」。
+有 key 時，列表先顯示，分類完成後補上類別；可同時用來源與類別篩選。
+API 回傳 401 或 403 後，本 process 會永久關閉分類，不再嘗試；修正 key 後須重新載入。
+其他分類失敗會停止本輪分類，下一輪再試，新聞抓取與顯示照常。
+
+**資料出境提醒：**啟用分類後，新聞的標題＋摘要會送到 TypeSafe AI 的雲端 API，
+服務由美國託管；不送連結、來源或全文。分類快取不持久化，殼重啟或模組重載後會重新分類。
+
 ## 本機開發
 
 工作副本放在 `/Users/gatewenlee/Code/modudock-modules/news`，目錄名就是 id。
@@ -35,7 +50,7 @@ go run ./cmd/modudock -addr 127.0.0.1:8731 -modules /Users/gatewenlee/Code/modud
 瀏覽器開 `http://127.0.0.1:8731`。模組 repo 內執行：
 
 ```sh
-python3 -m unittest -v
+/usr/local/bin/python3 -m unittest -v
 npm ci --ignore-scripts
 npm test
 ./scripts/dev-check.sh
@@ -44,7 +59,8 @@ npm test
 dev-check 需要 Go 與提供內建 WebSocket 的 Node，會起自己的殼、連 `/ws` 比對
 完整 catalog 宣告，再關閉自己的 process group；8731 已占用時拒絕執行。
 此檢查不等於瀏覽器掛載驗收。協定測試使用真 subprocess；
-`NEWS_TEST_DIR`、`NEWS_TEST_MODE`、`NEWS_TEST_FEEDS`、`NEWS_TEST_SCHEDULER` 僅供測試注入及 writer 閘門，
+`NEWS_TEST_DIR`、`NEWS_TEST_MODE`、`NEWS_TEST_FEEDS`、`NEWS_TEST_SCHEDULER`、`NEWS_TEST_JEV_URL`
+僅供測試注入及 writer 閘門，
 正常執行請勿設定；宣告檔沒有啟用它們。
 
 `back/fetch.py` 的 `Fetcher.fetch(url, validators)` 回傳 `Result`，status 為
