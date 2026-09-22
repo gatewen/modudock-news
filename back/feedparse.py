@@ -15,6 +15,13 @@ import json
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.parsers import expat
 
+if __package__:
+    from .classify import CRITERIA
+else:
+    from classify import CRITERIA
+
+LONGEST_CATEGORY = max(CRITERIA, key=len)
+CATEGORY_RESERVE = len(json.dumps(LONGEST_CATEGORY)) - len(json.dumps(""))
 MAX_PACKET = 900 * 1024
 ATOM = "http://www.w3.org/2005/Atom"
 
@@ -222,6 +229,7 @@ def packet_bytes(packet):
 def fit_packet(packet):
     """Copy a full list envelope, trim the tail, recount sources/count if present.
 
+    Empty categories reserve space for the longest id without changing output.
     Returns a packet, not bytes. An oversized envelope even with zero items is
     an error, never an oversized success. publish count must use returned items.
     """
@@ -231,9 +239,13 @@ def fit_packet(packet):
     while True:
         for source in body.get("sources", []):
             source["count"] = sum(item["source"] == source["name"] for item in items)
+        if "classify" in body:
+            body["classify"]["pending"] = (sum(item.get("category", "") == "" for item in items)
+                                             if body["classify"]["enabled"] else 0)
         if "count" in body:
             body["count"] = len(items)
-        if len(packet_bytes(result)) <= MAX_PACKET:
+        reserved = sum(CATEGORY_RESERVE for item in items if item.get("category") == "")
+        if len(packet_bytes(result)) + reserved <= MAX_PACKET:
             return result
         if not items:
             raise ValueError("envelope exceeds 900 KiB without items")

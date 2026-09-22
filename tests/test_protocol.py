@@ -23,6 +23,7 @@ class ProtocolTests(unittest.TestCase):
         self.directory = Path(self.tmp.name)
         self.process = None
         self.buffer = b""
+        self.stdout_seen = bytearray()
         self.seq = secrets.randbelow(2**40) + 2
 
     def tearDown(self):
@@ -34,13 +35,14 @@ class ProtocolTests(unittest.TestCase):
                 stream.close()
         self.tmp.cleanup()
 
-    def start(self, mode="", feeds=None, version=None, extra_args=(), scheduler_options=None, wrapper=None):
-        env = {k: v for k, v in os.environ.items() if not k.startswith("NEWS_TEST_")}
+    def start(self, mode="", feeds=None, version=None, extra_args=(), scheduler_options=None, wrapper=None, extra_env=None):
+        env = {k: v for k, v in os.environ.items() if not k.startswith("NEWS_TEST_") and k != "TYPESAFE_API_KEY"}
         env.update(NEWS_TEST_DIR=str(self.directory), NEWS_TEST_MODE=mode)
         if feeds:
             env["NEWS_TEST_FEEDS"] = str(feeds)
         if scheduler_options:
             env["NEWS_TEST_SCHEDULER"] = json.dumps(scheduler_options)
+        env.update(extra_env or {})
         command = [sys.executable, str(ROOT / "back/news.py")]
         if wrapper:
             command = [sys.executable, "-c", wrapper]
@@ -74,6 +76,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertTrue(select.select([self.process.stdout], [], [], remaining)[0])
             chunk = os.read(self.process.stdout.fileno(), 65536)
             self.assertTrue(chunk, "EOF before packet")
+            self.stdout_seen.extend(chunk)
             self.buffer += chunk
         line, self.buffer = self.buffer.split(b"\n", 1)
         return json.loads(line)
@@ -87,7 +90,9 @@ class ProtocolTests(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 1)
 
     def tail(self):
-        data = self.buffer + self.process.stdout.read()
+        rest = self.process.stdout.read()
+        self.stdout_seen.extend(rest)
+        data = self.buffer + rest
         self.buffer = b""
         return [json.loads(line) for line in data.splitlines()]
 
@@ -207,6 +212,66 @@ class ProtocolTests(unittest.TestCase):
         self.assertFalse((self.directory / "late-accepted").exists())
 
 
+    def test_blocked_classifier_bye_exits_within_second_without_leaking_key(self):
+        import threading
+        from tests.test_classify import server, answers
+        from tests.test_scheduler import feed_server
+        entered = threading.Event()
+        def respond(payload, count, release):
+            entered.set()
+            release.wait()  # No headers or body before subprocess exits.
+            return 200, answers(len(payload["state"])), {}
+        secret = "protocol-secret-" + secrets.token_hex(24)
+        with feed_server() as (feed_url, _, _), server(respond) as (url, received):
+            feeds = self.directory / "feeds.json"
+            feeds.write_text(json.dumps([{"name": "Local", "url": feed_url}]))
+            self.start(feeds=feeds, extra_args=["--allow-host", "127.0.0.1"],
+                       extra_env={"TYPESAFE_API_KEY": secret, "NEWS_TEST_JEV_URL": url})
+            self.assertFalse(entered.is_set())
+            self.hello()
+            self.assertFalse(entered.is_set())
+            self.send("up")
+            listing, publish = self.packet(), self.packet()
+            self.assertEqual(listing["body"]["classify"], {"enabled": True, "pending": 1})
+            self.assertEqual(publish["t"], "publish")
+            self.assertTrue(entered.wait(2))
+            self.assertEqual(len(received), 1)
+            self.assertEqual(received[0][1]["Authorization"], "Bearer " + secret)
+            self.assertFalse(select.select([self.process.stdout], [], [], 0.05)[0])
+            self.assertIsNone(self.process.poll())
+            started = time.monotonic()
+            self.send("bye")
+            self.exited(started)
+            self.assertEqual(self.tail(), [{"t": "done", "seq": self.seq}])
+            self.assertNotIn(secret.encode(), self.stdout_seen)
+            self.assertNotIn(secret.encode(), self.process.stderr.read())
+
+    def test_classifier_401_echoed_key_never_appears_in_protocol_or_logs(self):
+        from tests.test_classify import server
+        from tests.test_scheduler import feed_server
+        secret = "protocol-secret-" + secrets.token_hex(24)
+        with feed_server() as (feed_url, _, _), server(lambda *_: (401, secret.encode(), {})) as (url, received):
+            feeds = self.directory / "feeds.json"
+            feeds.write_text(json.dumps([{"name": "Local", "url": feed_url}]))
+            self.start(feeds=feeds, extra_args=["--allow-host", "127.0.0.1"],
+                       extra_env={"TYPESAFE_API_KEY": secret, "NEWS_TEST_JEV_URL": url})
+            self.hello()
+            self.send("up")
+            listing, publish, update = self.packet(), self.packet(), self.packet()
+            self.assertEqual(listing["body"]["classify"]["enabled"], True)
+            self.assertEqual(publish["t"], "publish")
+            self.assertEqual(update["body"]["classify"], {"enabled": False, "pending": 0})
+            started = time.monotonic()
+            self.send("bye")
+            self.exited(started)
+            self.assertEqual(self.tail(), [{"t": "done", "seq": self.seq}])
+            logs = self.process.stderr.read()
+            self.assertIn(b"classify: disabled (HTTP 401)", logs)
+            self.assertNotIn(secret.encode(), self.stdout_seen)
+            self.assertNotIn(secret.encode(), logs)
+            self.assertEqual(len(received), 1)
+
+
 class PreflightTests(unittest.TestCase):
     def test_shipped_nine_sources(self):
         feeds, error = preflight(ROOT / "back/feeds.json")
@@ -222,3 +287,30 @@ class PreflightTests(unittest.TestCase):
                 with self.subTest(value=value):
                     path.write_text(json.dumps(value), encoding="utf-8")
                     self.assertIsNotNone(preflight(path)[1])
+
+
+class ClassifierWiringTests(unittest.TestCase):
+    def test_test_endpoint_is_read_only_when_hooks_directory_is_set(self):
+        import io
+        from types import SimpleNamespace
+        from unittest.mock import patch, Mock
+        from back import news
+        with tempfile.TemporaryDirectory() as directory:
+            for hooks in (False, True):
+                with self.subTest(hooks=hooks):
+                    env = {"NEWS_TEST_JEV_URL": "http://127.0.0.1:9/jev", "TYPESAFE_API_KEY": "test"}
+                    if hooks:
+                        env["NEWS_TEST_DIR"] = directory
+                    incoming = b'{"t":"hello","seq":42}\n{"t":"up","seq":42}\n{"t":"bye","seq":42}\n'
+                    factory = Mock()
+                    with patch.dict(os.environ, env, clear=True), patch.object(news, "Classifier") as constructor, \
+                         patch.object(news.sys, "stdin", SimpleNamespace(buffer=io.BytesIO(incoming))), \
+                         patch.object(news.sys, "stdout", SimpleNamespace(buffer=io.BytesIO())):
+                        self.assertEqual(news.main([], scheduler_factory=factory), 0)
+                        if hooks:
+                            constructor.assert_called_once_with(endpoint=env["NEWS_TEST_JEV_URL"])
+                        else:
+                            constructor.assert_called_once_with()
+                        self.assertIs(factory.call_args.kwargs["classifier"], constructor.return_value)
+                        factory.return_value.start.assert_called_once_with()
+                        factory.return_value.stop.assert_called_once_with()

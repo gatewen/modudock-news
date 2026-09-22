@@ -171,7 +171,7 @@ class MergeAndSizeTests(unittest.TestCase):
         self.assertEqual([(x["source"], x["title"]) for x in first], sorted((x["source"], x["title"]) for x in items)[:200])
 
     def test_size_guard_reachable_and_matches_outbox(self):
-        items = [dict(self.item("中" * 300, "https://example.com/" + "x" * 2028, source="源" * 64), summary="文" * 200) for _ in range(200)]
+        items = [dict(self.item("中" * 300, "https://example.com/" + "x" * 2028, source="源" * 64), summary="文" * 200, category="entertainment") for _ in range(200)]
         self.assertEqual(len(items[0]["link"]), 2048)
         sources = [dict(name="源" * 64 if i == 0 else str(i), ok=False, error="錯" * 200, count=0) for i in range(32)]
         packet = dict(t="msg", seq=2**53 - 1, body=dict(op="list", items=items, sources=sources, count=200))
@@ -191,3 +191,21 @@ class MergeAndSizeTests(unittest.TestCase):
     def test_oversized_envelope_is_error(self):
         with self.assertRaisesRegex(ValueError, "without items"):
             fp.fit_packet(dict(t="msg", seq=4, body=dict(items=[], extra="x" * (900 * 1024))))
+
+
+class ClassifySizeTests(unittest.TestCase):
+    def test_pending_recount_after_size_trim_and_disabled_is_zero(self):
+        items = [dict(title="中" * 300, link="https://example.com/" + "x" * 2028,
+                      summary="文" * 200, source="源" * 64, published="2026-09-22",
+                      time_guessed=False, category="" if i % 2 else "entertainment")
+                 for i in range(200)]
+        packet = dict(t="msg", seq=42, body=dict(op="list", items=items,
+                      classify={"enabled": True, "pending": 100}))
+        self.assertGreater(len(fp.packet_bytes(packet)), 900 * 1024)
+        fitted = fp.fit_packet(packet)
+        self.assertLess(len(fitted["body"]["items"]), 200)
+        self.assertEqual(fitted["body"]["classify"]["pending"],
+                         sum(i["category"] == "" for i in fitted["body"]["items"]))
+        self.assertLess(fitted["body"]["classify"]["pending"], 100)
+        packet["body"]["classify"]["enabled"] = False
+        self.assertEqual(fp.fit_packet(packet)["body"]["classify"]["pending"], 0)

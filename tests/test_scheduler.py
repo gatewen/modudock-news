@@ -53,7 +53,7 @@ class SchedulerTests(unittest.TestCase):
         for gate in self.gates:
             gate.set()
         for scheduler in self.schedulers:
-            for thread in scheduler.workers + [scheduler.coordinator]:
+            for thread in scheduler.workers + [scheduler.coordinator] + ([scheduler.classify_worker] if scheduler.classify_worker else []):
                 thread.join(timeout=2)
                 self.assertFalse(thread.is_alive())
 
@@ -370,3 +370,381 @@ class SchedulerProcessTests(unittest.TestCase):
             h.send("bye")
             h.exited(start)
             self.assertEqual(h.tail(), [{"t": "done", "seq": h.seq}])
+
+
+class ClassificationSchedulerTests(unittest.TestCase):
+    setUp = SchedulerTests.setUp
+    tearDown = SchedulerTests.tearDown
+    gate = SchedulerTests.gate
+    create = SchedulerTests.create
+    round = SchedulerTests.round
+
+    def classifier(self, url):
+        from back.classify import Classifier
+        return Classifier(endpoint=url, key="test", log=lambda _: None)
+
+    def cache(self, scheduler):
+        with scheduler.cv:
+            return dict(scheduler.classify_cache)
+
+    def test_first_list_publish_then_each_batch_resends_without_publish(self):
+        from tests.test_classify import server, answers
+        first, second = self.gate(), self.gate()
+        entered = threading.Event()
+        def respond(payload, n, _):
+            entered.set()
+            (first if n == 1 else second).wait()
+            return 200, answers(len(payload["state"])), {}
+        data = ('<rss><channel>' + ''.join(
+            f'<item><title>{i:02d}</title><link>https://example.com/{i}</link></item>'
+            for i in range(21)) + '</channel></rss>').encode()
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: Result("ok", data, "https://example.com"),
+                                             classifier=self.classifier(url))
+            scheduler.start()
+            try:
+                initial = self.round(sink)
+                self.assertEqual(initial["classify"], {"enabled": True, "pending": 21})
+                self.assertTrue(all(i["category"] == "" for i in initial["items"]))
+                self.assertTrue(entered.wait(1))
+                self.assertTrue(sink.packets.empty())
+                first.set()
+                update = sink.packets.get(timeout=2)
+                self.assertEqual(update["t"], "msg")
+                self.assertEqual(update["body"]["classify"], {"enabled": True, "pending": 1})
+                second.set()
+                final = sink.packets.get(timeout=2)
+                self.assertEqual(final["t"], "msg")
+                self.assertEqual(final["body"]["classify"], {"enabled": True, "pending": 0})
+                for packet in (update, final):
+                    body = deepcopy(packet["body"])
+                    self.assertEqual(body["at"], initial["at"])
+                    body.pop("classify")
+                    for item in body["items"]:
+                        item["category"] = ""
+                    expected = deepcopy(initial)
+                    expected.pop("classify")
+                    self.assertEqual(body, expected)
+                eventually(lambda: not scheduler.in_flight)
+                with self.assertRaises(queue.Empty):
+                    sink.packets.get(timeout=0.05)
+                self.assertEqual(len(received), 2)
+                self.assertTrue(all("category" not in i for i in scheduler.snapshot()[0].items))
+            finally:
+                first.set()
+                second.set()
+
+    def test_cached_keys_make_zero_requests_next_round_only_new_key_requested(self):
+        from tests.test_classify import server
+        label = ["new"]
+        with server() as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: ok(label[0]), classifier=self.classifier(url))
+            scheduler.start()
+            self.round(sink)
+            self.assertEqual(sink.packets.get(timeout=2)["body"]["items"][0]["category"], "tech")
+            scheduler.refresh()
+            body = self.round(sink)
+            self.assertEqual(body["classify"]["pending"], 0)
+            eventually(lambda: scheduler.completed == 2)
+            self.assertEqual(len(received), 1)
+            label[0] = "fresh"
+            scheduler.refresh()
+            self.assertEqual(self.round(sink)["classify"]["pending"], 1)
+            self.assertEqual(sink.packets.get(timeout=2)["body"]["items"][0]["category"], "tech")
+            self.assertEqual(len(received), 2)
+            self.assertEqual(received[1][2]["state"]["news_0"]["title"], "fresh")
+
+    def test_cache_4000_fifo_only_success_and_evicted_key_is_requested(self):
+        from back.scheduler import ClassifyResult
+        from tests.test_classify import server
+        with server() as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: ok(), classifier=self.classifier(url))
+            with scheduler.cv:
+                scheduler._accept(ClassifyResult({"https://example.com/new": "tech"}))
+                scheduler._accept(ClassifyResult({f"key-{i}": "life" for i in range(3999)}))
+                # Updating an existing key must not turn FIFO eviction into LRU.
+                scheduler._accept(ClassifyResult({"https://example.com/new": "finance", "bad": "", "bad2": "zzz"}))
+                self.assertEqual(len(scheduler.classify_cache), 4000)
+                self.assertNotIn("bad", scheduler.classify_cache)
+                self.assertNotIn("bad2", scheduler.classify_cache)
+                scheduler._accept(ClassifyResult({"newest": "other"}))
+                self.assertEqual(len(scheduler.classify_cache), 4000)
+                self.assertNotIn("https://example.com/new", scheduler.classify_cache)
+                self.assertEqual(next(iter(scheduler.classify_cache)), "key-0")
+            scheduler.start()
+            self.assertEqual(self.round(sink)["classify"]["pending"], 1)
+            self.assertEqual(sink.packets.get(timeout=2)["body"]["classify"]["pending"], 0)
+            self.assertEqual(len(received), 1)
+            self.assertEqual(len(self.cache(scheduler)), 4000)
+            self.assertNotIn("key-0", self.cache(scheduler))
+
+    def test_old_classification_during_active_round_commits_without_resend(self):
+        from tests.test_classify import server, answers
+        classify_gate, fetch_gate = self.gate(), self.gate()
+        classify_entered, fetch_entered = threading.Event(), threading.Event()
+        calls = []
+        def respond(payload, *_):
+            classify_entered.set()
+            classify_gate.wait()
+            return 200, answers(len(payload["state"])), {}
+        def fetch(*_):
+            calls.append(1)
+            if len(calls) == 2:
+                fetch_entered.set()
+                fetch_gate.wait()
+            return ok()
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(fetch, classifier=self.classifier(url), source_timeout=3, round_timeout=4)
+            scheduler.start()
+            try:
+                self.round(sink)
+                self.assertTrue(classify_entered.wait(1))
+                scheduler.refresh()
+                self.assertTrue(fetch_entered.wait(1))
+                with scheduler.cv:
+                    self.assertTrue(scheduler.active)
+                    self.assertEqual(scheduler.round_id, 2)
+                classify_gate.set()
+                eventually(lambda: self.cache(scheduler).get("https://example.com/new") == "tech")
+                # Give the coordinator time to perform any forbidden resend.
+                with self.assertRaises(queue.Empty):
+                    sink.packets.get(timeout=0.05)
+                fetch_gate.set()
+                body = self.round(sink)
+                self.assertEqual(body["items"][0]["category"], "tech")
+                self.assertEqual(body["classify"]["pending"], 0)
+                self.assertEqual(len(received), 1)
+            finally:
+                classify_gate.set()
+                fetch_gate.set()
+
+    def test_old_classification_after_new_round_resends_latest_list(self):
+        from tests.test_classify import server, answers
+        gate, entered = self.gate(), threading.Event()
+        def respond(payload, *_):
+            entered.set()
+            gate.wait()
+            return 200, answers(len(payload["state"])), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: ok(), classifier=self.classifier(url))
+            scheduler.start()
+            try:
+                self.round(sink)
+                self.assertTrue(entered.wait(1))
+                scheduler.refresh()
+                second = self.round(sink)
+                eventually(lambda: scheduler.completed == 2)
+                gate.set()
+                update = sink.packets.get(timeout=2)
+                self.assertEqual(update["body"]["at"], second["at"])
+                self.assertEqual(update["body"]["items"][0]["category"], "tech")
+                self.assertEqual(len(received), 1)
+            finally:
+                gate.set()
+
+    def test_no_key_or_none_starts_no_classification_thread(self):
+        from back.classify import Classifier
+        for classifier in (None, Classifier(key="", log=lambda _: None)):
+            with self.subTest(classifier=classifier):
+                scheduler, sink, _ = self.create(lambda *_: ok(), classifier=classifier)
+                before = threading.active_count()
+                scheduler.start()
+                body = self.round(sink)
+                self.assertEqual(threading.active_count(), before + 5)  # Four fetch + coordinator.
+                self.assertIsNone(scheduler.classify_worker)
+                self.assertEqual(body["classify"], {"enabled": False, "pending": 0})
+                self.assertEqual(body["items"][0]["category"], "")
+                scheduler.stop()
+                for thread in scheduler.workers + [scheduler.coordinator]:
+                    thread.join(1)
+
+    def test_queue_200_nonblocking_and_inflight_dedup_queued_and_processing(self):
+        from tests.test_classify import server, answers
+        gate, entered = self.gate(), threading.Event()
+        group = [("a", 1)]
+        def fetch(*_):
+            prefix, count = group[0]
+            data = ('<rss><channel>' + ''.join(
+                f'<item><title>{prefix}{i}</title><link>https://example.com/{prefix}{i}</link></item>'
+                for i in range(count)) + '</channel></rss>').encode()
+            return Result("ok", data, "https://example.com")
+        def respond(payload, *_):
+            entered.set()
+            gate.wait()
+            return 200, answers(len(payload["state"])), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(fetch, classifier=self.classifier(url))
+            before = threading.active_count()
+            scheduler.start()
+            try:
+                self.round(sink)
+                self.assertTrue(entered.wait(1))
+                # Server adds one handler thread in addition to our six.
+                self.assertEqual(threading.active_count(), before + 7)
+                self.assertEqual(scheduler.classify_worker.name, "news-classify")
+                self.assertTrue(scheduler.classify_worker.daemon)
+                for n, (value, queued, flying) in enumerate([
+                    (("a", 1), 0, 1),     # Already processing.
+                    (("b", 100), 100, 101),
+                    (("b", 100), 100, 101),  # Already queued, with free capacity.
+                    (("c", 200), 200, 201),  # Overflow drops 100 without blocking.
+                ], start=2):
+                    group[0] = value
+                    start = time.monotonic()
+                    scheduler.refresh()
+                    self.round(sink)
+                    eventually(lambda: scheduler.completed == n)
+                    self.assertLess(time.monotonic() - start, 0.5)
+                    with scheduler.cv:
+                        self.assertEqual(scheduler.classify_jobs.maxsize, 200)
+                        self.assertEqual(scheduler.classify_jobs.qsize(), queued)
+                        self.assertEqual(len(scheduler.in_flight), flying)
+                self.assertEqual(len(received), 1)
+            finally:
+                scheduler.stop()
+                gate.set()
+
+    def test_failure_releases_inflight_and_next_round_retries(self):
+        from tests.test_classify import server, answers
+        with server(lambda p, n, _: (500, {}, {}) if n == 1 else (200, answers(len(p["state"])), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: ok(), classifier=self.classifier(url))
+            scheduler.start()
+            self.round(sink)
+            eventually(lambda: len(received) == 1 and not scheduler.in_flight)
+            self.assertEqual(self.cache(scheduler), {})
+            self.assertTrue(sink.packets.empty())
+            scheduler.refresh()
+            self.round(sink)
+            self.assertEqual(sink.packets.get(timeout=2)["body"]["items"][0]["category"], "tech")
+            self.assertEqual(len(received), 2)
+
+    def test_401_resends_disabled_state_and_never_retries(self):
+        from tests.test_classify import server
+        with server(lambda *_: (401, {}, {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: ok(), classifier=self.classifier(url))
+            scheduler.start()
+            self.round(sink)
+            body = sink.packets.get(timeout=2)["body"]
+            self.assertEqual(body["classify"], {"enabled": False, "pending": 0})
+            self.assertEqual(body["items"][0]["category"], "")
+            scheduler.refresh()
+            self.assertEqual(self.round(sink)["classify"], {"enabled": False, "pending": 0})
+            eventually(lambda: scheduler.completed == 2)
+            self.assertEqual(len(received), 1)
+
+    def test_nonvisible_classification_cached_without_resend(self):
+        from back.scheduler import ClassifyResult
+        scheduler, sink, _ = self.create(lambda *_: ok())
+        scheduler.start()
+        self.round(sink)
+        eventually(lambda: scheduler.completed == 1)
+        with scheduler.cv:
+            scheduler.results.append(ClassifyResult({"https://example.com/absent": "life"}, round_id=-1))
+            scheduler.cv.notify_all()
+        eventually(lambda: "https://example.com/absent" in self.cache(scheduler))
+        with self.assertRaises(queue.Empty):
+            sink.packets.get(timeout=0.05)
+
+    def test_resend_uses_fit_and_preserves_items(self):
+        from back.feedparse import fit_packet
+        from back.scheduler import ClassifyResult
+        calls = []
+        def fit(packet):
+            calls.append(deepcopy(packet))
+            return fit_packet(packet)
+        # Direct candidate injection isolates the resend path from HTTP timing.
+        scheduler, sink, _ = self.create(lambda *_: ok(), fit=fit)
+        scheduler.start()
+        initial = self.round(sink)
+        eventually(lambda: scheduler.completed == 1)
+        with scheduler.cv:
+            scheduler.results.append(ClassifyResult({"https://example.com/new": "entertainment"}))
+            scheduler.cv.notify_all()
+        update = sink.packets.get(timeout=2)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["body"]["items"][0]["category"], "entertainment")
+        self.assertEqual(len(update["body"]["items"]), len(initial["items"]))
+        self.assertEqual([i["link"] for i in update["body"]["items"]],
+                         [i["link"] for i in initial["items"]])
+        self.assertEqual(update["body"]["classify"]["pending"], 0)
+        self.assertEqual(update["body"]["at"], initial["at"])
+        with self.assertRaises(queue.Empty):
+            sink.packets.get(timeout=0.05)
+
+
+    def test_initial_emit_reserves_category_space_at_900_kib_boundary(self):
+        from datetime import datetime, timezone
+        from types import SimpleNamespace
+        from back.feedparse import MAX_PACKET, packet_bytes
+        from back.scheduler import ClassifyResult
+        now = datetime(2026, 9, 22, tzinfo=timezone.utc)
+        sink, logs = Sink(), []
+        scheduler = Scheduler([{"name": "0", "url": "https://example.com/feed"}],
+                              FunctionFetcher(lambda *_: ok()), sink, 891,
+                              now=lambda: now, classifier=SimpleNamespace(enabled=True), log=logs.append)
+        items = [dict(title="中" * 300, summary="文" * 200,
+                      link=f"https://example.com/{i:03d}/", source="0",
+                      published=now.isoformat(), time_guessed=False, category="")
+                 for i in range(200)]
+        sources = [{"name": "0", "ok": True, "error": None, "count": 200}]
+        packet = {"t": "msg", "seq": 891, "body": {"op": "list", "items": items,
+                  "sources": sources, "at": now.isoformat(),
+                  "classify": {"enabled": True, "pending": 200}}}
+        # Real bounded fields, no artificial oversized envelope padding.
+        needed = MAX_PACKET - 1000 - len(packet_bytes(packet))
+        self.assertGreater(needed, 0)
+        for item in items:
+            padding = min(needed, 2048 - len(item["link"]))
+            item["link"] += "x" * padding
+            needed -= padding
+        self.assertEqual(needed, 0)
+        self.assertEqual(len(packet_bytes(packet)), MAX_PACKET - 1000)
+        classified = deepcopy(packet)
+        for item in classified["body"]["items"]:
+            item["category"] = "entertainment"
+        classified["body"]["classify"]["pending"] = 0
+        self.assertGreater(len(packet_bytes(classified)), MAX_PACKET)
+        original = deepcopy(items)
+        initial = scheduler._emit([Cache(items=items)], sources)
+        first = self.round(sink)
+        self.assertLess(len(first["items"]), 200)
+        self.assertGreater(len(first["items"]), 0)
+        self.assertTrue(all(i["category"] == "" for i in first["items"]))
+        self.assertEqual(first["classify"]["pending"], len(first["items"]))
+        self.assertEqual(items, original)
+        with scheduler.cv:
+            resend = scheduler._accept(ClassifyResult({i["link"]: "entertainment" for i in first["items"]}))
+        scheduler._send_list(resend)
+        update = sink.packets.get_nowait()
+        self.assertEqual(update["t"], "msg")
+        self.assertEqual([i["link"] for i in update["body"]["items"]],
+                         [i["link"] for i in first["items"]])
+        self.assertEqual(len(update["body"]["items"]), len(first["items"]))
+        self.assertTrue(all(i["category"] == "entertainment" for i in update["body"]["items"]))
+        self.assertEqual(update["body"]["classify"]["pending"], 0)
+        self.assertEqual(update["body"]["at"], first["at"])
+        self.assertLessEqual(len(packet_bytes(initial)), MAX_PACKET)
+        self.assertLessEqual(len(packet_bytes(update)), MAX_PACKET)
+        self.assertTrue(sink.packets.empty())
+        self.assertEqual(logs, [])
+
+    def test_unexpected_resend_trim_logs_and_still_sends(self):
+        from back.feedparse import fit_packet
+        from back.scheduler import ClassifyResult
+        calls = []
+        def broken_fit(packet):
+            calls.append(1)
+            if len(calls) == 2:
+                packet["body"]["items"] = []
+            return fit_packet(packet)
+        scheduler, sink, logs = self.create(lambda *_: ok(), fit=broken_fit)
+        scheduler.start()
+        self.round(sink)
+        eventually(lambda: scheduler.completed == 1)
+        with scheduler.cv:
+            scheduler.results.append(ClassifyResult({"https://example.com/new": "entertainment"}))
+            scheduler.cv.notify_all()
+        update = sink.packets.get(timeout=2)
+        self.assertEqual(update["body"]["items"], [])
+        self.assertEqual(logs.count("classify: resend unexpectedly trimmed items"), 1)
+        self.assertTrue(scheduler.coordinator.is_alive())

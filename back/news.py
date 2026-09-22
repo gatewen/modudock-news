@@ -12,9 +12,11 @@ from urllib.parse import urlsplit
 from xml.parsers import expat
 
 if __package__:
+    from .classify import Classifier
     from .fetch import Fetcher
     from .scheduler import Scheduler
 else:
+    from classify import Classifier
     from fetch import Fetcher
     from scheduler import Scheduler
 
@@ -204,6 +206,12 @@ def main(argv=None, scheduler_factory=Scheduler):
     feeds_path = Path(__file__).with_name("feeds.json")
     if hooks.directory:
         feeds_path = os.environ.get("NEWS_TEST_FEEDS", feeds_path)
+    classify_options = {}
+    if hooks.directory:
+        endpoint = os.environ.get("NEWS_TEST_JEV_URL")
+        if endpoint:
+            classify_options["endpoint"] = endpoint
+    classifier = Classifier(**classify_options)
     feeds, error = preflight(feeds_path)
     hooks.mark("preflight-complete")
     outbox = Outbox(sys.stdout.buffer, hooks)
@@ -249,7 +257,7 @@ def main(argv=None, scheduler_factory=Scheduler):
                 options = {}
                 if hooks.directory:
                     options = json.loads(os.environ.get("NEWS_TEST_SCHEDULER", "{}"))
-                scheduler = scheduler_factory(feeds, fetcher, outbox, seq, **options)
+                scheduler = scheduler_factory(feeds, fetcher, outbox, seq, classifier=classifier, **options)
                 scheduler.start()
             hooks.on_up(outbox, seq)
         elif kind == "msg" and running:
