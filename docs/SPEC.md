@@ -1,6 +1,6 @@
 # modudock-news 規格
 
-- 狀態：定稿（Codex 五輪，22 條已納入，第五輪判可開工）
+- 狀態：v0.1 定稿（Codex 五輪，22 條已納入）；v0.2 分類增補見 §12
 - 日期：2026-09-21
 - 角色：codex-modudock 開發；claude-modudock 對抗審核（門檻：只收中高——抓不到 / 假綠 / 安全洞 / 違反殼協定）
 - 依據：modudock `docs/MANIFEST.md`、`docs/RUNTIME-PROTOCOL.md`（protocol 1）、`docs/ADD.md`
@@ -193,3 +193,119 @@ modudock-news/
 - 不防 DNS rebinding（解析與連線是兩次查詢）。
 - worker 可能被慢 headers / 慢 body / 卡住的 DNS 佔住且無法回收；四條全佔住時新聞停止更新直到連線自己結束，殼看到的是每輪 `deadline` 錯誤。
 - 不做持久化：殼重啟、模組重載都從零抓。
+
+---
+
+## 12. v0.2 分類（jev）— 增補規格
+
+- 狀態：**已實作、已驗收**（2026-09-22；三塊各審一次，第 2 塊退回一次改補送預留、request 格式因真 API 實測改過一次；真實端到端 200 則 other 僅 2）
+- 角色：cx-mod（Codex，wE:p2）開發；cc-mod（Claude，wE:p1）審核；門檻同本文開頭——只收中高：抓不到 / 假綠 / 安全洞 / 違反殼協定 / 破壞 v0.1 既有保證
+- 依據：`~/Code/jevmodel/docs/jev-application-guide.md` §0、§2、§7（由 claude-jevmodel 摘要，2026-09-22）
+- 本節**覆寫**前面章節的地方都明寫；沒寫到的 v0.1 規則全部維持。
+
+### 12.1 一句話
+
+每則新聞多一個 `category` 欄位，由 TypeSafe AI 的 jev 決策模型（雲端 HTTPS API）分類；前半多一個類別篩選。**沒有 API key 或分類失敗時，模組行為與 v0.1 完全相同**（新聞照列、只是沒類別）。
+
+### 12.2 類別（固定，模組內寫死）
+
+| id | 顯示 | criteria（給 jev 的邊界描述，繁中） |
+|---|---|---|
+| `politics` | 政治 | 台灣或各國政府、選舉、政黨、法案、外交 |
+| `finance` | 財經 | 股匯市、經濟數據、企業財報與併購、房市、產業景氣（科技公司的財報歸這裡） |
+| `tech` | 科技 | 產品、技術、AI、半導體技術本身、網路服務（不含財報） |
+| `world` | 國際 | 國外的社會事件、戰爭、災難、國際組織（外交歸政治） |
+| `society` | 社會 | 台灣的治安、司法案件、事故、災害、公共安全 |
+| `life` | 生活 | 健康、醫療、教育、消費、旅遊、天氣、交通 |
+| `sports` | 體育 | 各項運動賽事、球員、賽果 |
+| `entertainment` | 娛樂 | 影視、音樂、藝人、遊戲、綜藝 |
+| `other` | 其他 | 以上皆非 |
+
+- `other` 是**棄權選項，必須存在**（jev 沒有棄權選項會硬選並給高機率）。
+- criteria 文字是模組原始碼的一部分（`back/classify.py`），改 criteria = 改版本。
+- 前半顯示用中文，線 B 與 API 一律用 id。
+
+### 12.3 資料與欄位（覆寫 §5.6）
+
+- 每則 item 多一個 `category`：**字串**，值是 12.2 的 id 之一或空字串 `""`（= 尚未分類 / 分類關閉 / 分類失敗）。**永遠出現**，前半不用猜。
+- `list` 的 body 多一個 `classify`：`{"enabled": bool, "pending": int}`。`enabled` = 這個 process 有 key 且沒被永久關閉；`pending` = 本次送出的 items 中 `category == ""` 且 `enabled` 的數量。
+- 分類快取：`OrderedDict(dedup_key → category)`，**最多 4000 個 key**，超過淘汰最早進入的；只存成功的分類結果，不存 `""`。**分類快取由協調者擁有**（同 items 快取的所有權規則 §5.3），worker / classifier 執行緒只回候選。
+- 大小守衛 §5.7 不變（900 KB），但滿欄位測試（§8.3）要把 `category` 用最長 id `entertainment` 一起算。
+
+### 12.4 Key 與開關
+
+- 後半啟動時讀環境變數 **`TYPESAFE_API_KEY`**（殼 `proc.go` 用 `os.Environ()` 起後半，殼的環境會繼承下來）。**不寫進任何檔案、不進 log、不進線 B。**
+- 沒有 key → `enabled: false`、stderr 一行 `classify: disabled (no TYPESAFE_API_KEY)`，之後**不再嘗試**、不建 classifier 執行緒。
+- 有 key 但 API 回 **401 / 403** → 記 stderr、**永久關閉**（`enabled` 轉 false，本 process 內不再打）。
+- 其他失敗（逾時、429、5xx、格式壞）→ 本輪剩餘不分類、記 stderr、**下一輪再試**（不在同一輪內重試；429 多等一輪也算退避）。
+- `--allow-host` 與 §5.4 的私有位址 / redirect 政策**不套用**在 jev 的連線上（它是固定的公網 endpoint，不跟 redirect：3xx 視為失敗）。
+
+### 12.5 呼叫 jev（`back/classify.py`）
+
+- `POST https://api.typesafe.ai/v1/systemone`，`Authorization: Bearer <key>`，`Content-Type: application/json`，`User-Agent` 同 §5.4。**model 固定 `jev-1.13.0`**，不用 `jev-latest`。
+- 純標準庫 `urllib.request` + 同 `fetch.py` 的 SSL context 建法（含 CA fallback；**無 CA 一樣拒絕連線、不關驗證**，錯誤與 §11 相同語意）。
+- **批次**：一次請求最多 **20 則**，且 `sum(len(title)+len(summary))` ≤ **8000 字**（先到者為準）。state 是**物件** `{"news_0": {"title", "summary"}, …, "news_{N-1}": …}`；questions 是 `item_0 … item_{N-1}`，每題 `type:"choice"`、同一份 `criteria`，但 **`instructions` 每題不同、必須點名那一則**：`"news_n 這則新聞屬於哪一類？"`。**只送 title 與 summary**，不送 link / source / 全文。
+  - 2026-09-22 實測教訓：原本每題共用同一句 instructions（「item_n 對應 state 中 i 為 n」）→ jev 分不出哪題問哪則，200 則有 196 則回 `other`（p≈0.5–0.65）；改成每題點名後同一批 20 則全部正確落類、p 多在 0.9 以上、延遲 0.76 秒。
+  - `other` 的 criteria 用「以上皆非」，**不要**寫「資訊不足無法判斷」（會把模型往棄權推）；instructions 也不要加「資訊不足選 other」。§12.2 表格的 other 一列以此為準。
+- 回應驗證（全部嚴格，任何一條不過整批當失敗、不採納半批）：HTTP 200；JSON 物件；`answers` 是物件；每個 `item_n` 有 `choice`（字串、在 12.2 id 內）與 `probabilities`（物件，值是 0–1 的數）。**回應 ≤ 1 MB**，超過視為失敗。
+- **閾值**：`p_max = max(probabilities.values())`；`p_max < 0.35` → 改記 `other`。閾值是常數，測試要覆蓋 0.34 / 0.35 兩側。
+- 逾時：**單次請求 15 秒**（connect + read 各自）；**每輪分類總預算 60 秒**（由 classifier 自己看時鐘，超過就不再發下一批，剩餘留給下一輪）。
+- 一條 daemon 執行緒 `news-classify`，一次一個請求，序列進行。它跟 fetch worker 一樣**不可回收**：卡住時 §11 的耗盡政策成立（分類停擺、新聞照更新）。
+
+### 12.6 時序（覆寫 §5.3 的輪結束）
+
+1. 輪結束 → 協調者照 v0.1 `_emit`：items 帶快取裡已有的 `category`（沒有就 `""`），照常 `publish news.fetched`。**列表不等分類。**
+2. `_emit` 之後，協調者把「`category == ""` 且 enabled」的 `(dedup_key, title, summary)` 交給 classifier（有界佇列，長度 200；佇列滿就丟、不阻塞協調者）。**同一個 key 已在佇列或處理中就不重送。**
+3. classifier 每批回傳候選 `ClassifyResult(keys → category)`，走**同一個** `results` deque 給協調者（協調者的 `_accept` 分辨型別）。**分類結果不看輪 id**（category 是 key 的屬性，不是輪的屬性），永遠提交到分類快取。
+4. 協調者提交後，若**目前不在抓取中**（`active == False`）且本次有任何 key 對應到最近一次送出的 items → 重送一次 `msg op=list`（同一份 items、只補 `category`、`classify.pending` 更新、`at` 不變）；**不重送 `publish`**（`news.fetched` 只代表抓到新聞）。若正在抓取中 → 不重送，下一輪 `_emit` 自然帶上。
+5. 一輪內 classifier 可能回多批，每批一次重送；**重送也過 §5.7 的 900 KB 守衛**。
+6. `refresh` 期間分類照常；`bye` → classifier 跟 worker 同等待遇：`stop()` 不 join，1 秒退出政策不變。
+
+### 12.7 前半（覆寫 §6）
+
+- 工具列多一個 `<select aria-label="新聞類別">`：「全部類別」+ 12.2 的九個中文名，**選項固定、不從資料長**。
+- 每則列前面加 `[類別]`（`category` 對得上 id 才顯示中文名；`""` 或不認得的值顯示 `[未分類]`）。
+- 篩選 = 來源 AND 類別；重畫規則同 v0.1（`drawItems`）。
+- 狀態列加 `· 未分類：N`（`classify.pending`，型別不對當 0）；`classify.enabled === false` 時改顯示 `· 分類：關閉`。
+- 收到重送的 `list`（同 `at`）就照常整份重畫；篩選選值要保留（沿用 v0.1 保留來源選值的做法）。
+- 其餘 v0.1 規則全部維持：`textContent`、禁 `innerHTML`、型別檢查、`unmount` 清乾淨。
+
+### 12.8 測試（增補 §8）
+
+後半測試一律用 **`/usr/local/bin/python3`**（python.org 3.12，CA 空）跑一次，Homebrew 版本不算數。
+
+- 假 jev：本機 `http.server`，測試以環境變數 **`NEWS_TEST_JEV_URL`** 覆寫 endpoint（**只在 `hooks.directory` 有設時才讀**，同 `NEWS_TEST_FEEDS` 的閘門；正式路徑不讀）；key 用 `TYPESAFE_API_KEY=test`。
+- 9. **classify 單元**（`tests/test_classify.py`）：
+  - 請求形狀：Authorization header、model 固定、state 只有 title/summary、20 則與 8000 字兩個上限各自觸發分批（21 則→2 批；3 則各 3000 字→2 批）。
+  - 回應驗證：非 200 / 非 JSON / 缺 answers / choice 不在名單 / probabilities 不是數 / 回應 > 1 MB → 整批失敗、**沒有半批採納**。
+  - 閾值 0.34 → `other`、0.35 → 原 choice。
+  - 401 → 永久關閉（之後不再有請求打到假 server，計數器為證）；429 / 500 / 逾時 → 本輪停、下一輪再打。
+  - 60 秒預算：假 server 每批睡 X 秒，斷言預算到了不再發下一批（用可注入的 clock）。
+- 10. **協調者整合**（`tests/test_scheduler.py` 增補）：
+  - 一輪 → 先收到 `list`（category 全 `""`、`classify.pending == N`）與 `publish`，**之後**收到第二個 `list`（category 補上、`pending == 0`、`at` 相同）且**沒有第二個 `publish`**。
+  - 快取：第二輪同樣的 items → 假 server **零請求**；新 key 才請求。
+  - 4000 上限：塞 4001 個 key，最早的被淘汰（下一輪會重問）。
+  - 分類進行中新一輪開始 → 分類結果照常入快取、但不重送（`active`），下一輪 `_emit` 帶上。
+  - 沒 key → 沒有 classifier 執行緒（`threading.active_count()` 少一）、`classify.enabled == false`、沒有任何請求。
+  - 佇列 200 上限：同 key 不重送、超過丟棄不阻塞（協調者在時限內收輪）。
+  - **變異**：拔掉「不看輪 id」→ 舊輪結果被丟、測試要紅；拔掉 `active` 檢查 → 抓取中重送、要紅；拔掉回應驗證任一條 → 要紅。
+- 11. **協定**（`tests/test_protocol.py` 增補）：classifier 卡在假 server（永不回應）時送 `bye` → 1 秒內退出；key **不出現在** stdout / stderr 任何一行（用一個獨特的假 key 字串 grep）。
+- 12. **前半**（`front.test.mjs` 增補）：類別 select 有 10 個選項；item `category:"tech"` 顯示 `[科技]`、`""` 與 `"zzz"` 顯示 `[未分類]`；來源 AND 類別篩選；`classify.enabled:false` 顯示「分類：關閉」；重送 list 後篩選值保留。
+- §8.3 滿欄位大小測試加 `category:"entertainment"`。
+
+### 12.9 明確不做（v0.2）
+
+- 不持久化分類快取（同 §9）。
+- 不讓使用者自訂類別、不做多選 / 多標籤、不做信心值顯示。
+- 不做 key 的 UI 設定；只認環境變數。
+- 不重試同一輪內的失敗批次。
+
+### 12.10 版本與交付
+
+- `modudock.json` `version` → `0.2.0`；`provides` 不變。
+- README 增：`TYPESAFE_API_KEY` 說明、資料出境提醒（標題＋摘要送到 TypeSafe AI，美國託管）、沒 key 的行為。
+- cx-mod 分三塊交付，每塊附 `/usr/local/bin/python3 -m unittest -v` 與 `npm test` 結果：
+  1. `back/classify.py` + `tests/test_classify.py`（§12.5、§12.8-9）
+  2. 協調者接線 + 快取 + 重送（§12.3、§12.6、§12.8-10/11）
+  3. 前半 + README + 版本（§12.7、§12.8-12、§12.10）
+- 每塊 cc-mod 審完才進下一塊；審核發現中高問題退回，不順手改。
