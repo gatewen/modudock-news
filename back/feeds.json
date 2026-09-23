@@ -7,5 +7,9 @@
   {"name": "中央社 國際", "url": "https://feeds.feedburner.com/rsscna/intworld"},
   {"name": "BBC 中文（繁）", "url": "https://feeds.bbci.co.uk/zhongwen/trad/rss.xml"},
   {"name": "端傳媒", "url": "https://theinitium.com/feed"},
-  {"name": "科技新報", "url": "https://technews.tw/feed/"}
+  {"name": "科技新報", "url": "https://technews.tw/feed/"},
+  {"name": "經濟日報 證券", "url": "https://money.udn.com/rssfeed/news/1001/5590?ch=money"},
+  {"name": "經濟日報 產業", "url": "https://money.udn.com/rssfeed/news/1001/5591?ch=money"},
+  {"name": "MoneyDJ 頭條", "url": "https://www.moneydj.com/KMDJ/RssCenter.aspx?svc=NR&fno=1&arg=MB010000"},
+  {"name": "Yahoo 台股動態", "url": "https://tw.stock.yahoo.com/rss?category=tw-market"}
 ]

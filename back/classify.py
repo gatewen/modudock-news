@@ -9,6 +9,7 @@ do not call this object concurrently. Each new iterator is a new round.
 The budget is admission-only: an in-flight request can finish after it expires.
 Socket timeouts cannot reclaim a worker stuck in DNS or trickling headers.
 """
+from dataclasses import dataclass
 import http.client
 import json
 import os
@@ -51,9 +52,23 @@ class _InvalidResponse(ValueError):
     pass
 
 
-class Classifier:
+@dataclass
+class _ClientState:
+    enabled: bool
+
+
+class _ChoiceClient:
+    """Shared transport, bounded batching and atomic choice validation."""
+
+    _label = "classify"
     def __init__(self, *, endpoint=ENDPOINT, key=None, clock=time.monotonic,
-                 timeout=15, budget=60, ssl_context=None, ca_file=None, log=None):
+                 timeout=15, budget=60, ssl_context=None, ca_file=None, log=None, shared=None):
+        if shared is not None:
+            # One authentication switch and the exact same HTTP/TLS settings.
+            for name in ("endpoint", "_key", "clock", "timeout", "budget", "log",
+                         "ssl_context", "has_ca", "_opener", "_state"):
+                setattr(self, name, getattr(shared, name))
+            return
         if timeout <= 0 or budget <= 0:
             raise ValueError("timeouts must be positive")
         parts = urlsplit(endpoint)
@@ -63,7 +78,7 @@ class Classifier:
             raise ValueError("invalid classifier endpoint")
         self.endpoint = endpoint
         self._key = os.environ.get("TYPESAFE_API_KEY", "") if key is None else key
-        self.enabled = bool(self._key)
+        self._state = _ClientState(bool(self._key))
         self.clock, self.timeout, self.budget = clock, timeout, budget
         self.log = log or (lambda message: print(message, file=sys.stderr, flush=True))
         # Reuse the exact CA fallback and verification policy without applying
@@ -73,9 +88,17 @@ class Classifier:
         self._opener = build_opener(ProxyHandler({}),
                                    HTTPSHandler(context=self.ssl_context), _NoRedirect())
         if not self.enabled:
-            self.log("classify: disabled (no TYPESAFE_API_KEY)")
+            self.log(f"{self._label}: disabled (no TYPESAFE_API_KEY)")
 
-    def classify_round(self, items):
+    @property
+    def enabled(self):
+        return self._state.enabled
+
+    @enabled.setter
+    def enabled(self, value):
+        self._state.enabled = value
+
+    def _run_round(self, items, request):
         """Yield detached successful candidates; never retry within this round."""
         started = self.clock()
         batch, chars = [], 0
@@ -85,10 +108,10 @@ class Classifier:
             key, title, summary = item
             size = len(title) + len(summary)
             if size > MAX_CHARS:
-                self.log("classify: item exceeds character limit")
+                self.log(f"{self._label}: item exceeds character limit")
                 return
             if batch and (len(batch) == MAX_ITEMS or chars + size > MAX_CHARS):
-                result = self.classify(batch)
+                result = request(batch)
                 if result is None:
                     return
                 yield result
@@ -98,11 +121,11 @@ class Classifier:
             batch.append((key, title, summary))
             chars += size
         if batch and self.enabled and self.clock() - started < self.budget:
-            result = self.classify(batch)
+            result = request(batch)
             if result is not None:
                 yield result
 
-    def classify(self, batch):
+    def _request(self, batch):
         """One bounded HTTP batch. None means disabled or whole-batch failure."""
         if not self.enabled:
             return None
@@ -110,17 +133,16 @@ class Classifier:
         if not batch:
             return {}
         if len(batch) > MAX_ITEMS or sum(len(t) + len(s) for _, t, s in batch) > MAX_CHARS:
-            self.log("classify: batch exceeds limit")
+            self.log(f"{self._label}: batch exceeds limit")
             return None
         if urlsplit(self.endpoint).scheme == "https" and not self.has_ca:
-            self.log("classify: no CA certificates")
+            self.log(f"{self._label}: no CA certificates")
             return None
         payload = {
             "model": MODEL,
             "state": {f"news_{i}": {"title": title, "summary": summary}
                       for i, (_, title, summary) in enumerate(batch)},
-            "questions": {f"item_{i}": {"type": "choice", "instructions": f"news_{i} 這則新聞屬於哪一類？",
-                                        "criteria": CRITERIA} for i in range(len(batch))},
+            "questions": self._questions(len(batch)),
         }
         try:
             request = Request(self.endpoint, data=json.dumps(payload).encode("utf-8"),
@@ -134,10 +156,10 @@ class Classifier:
             with response:
                 if response.code in (401, 403):
                     self.enabled = False
-                    self.log(f"classify: disabled (HTTP {response.code})")
+                    self.log(f"{self._label}: disabled (HTTP {response.code})")
                     return None
                 if response.code != 200:
-                    self.log(f"classify: HTTP {response.code}")
+                    self.log(f"{self._label}: HTTP {response.code}")
                     return None
                 data = bytearray()
                 while True:
@@ -152,24 +174,41 @@ class Classifier:
             document = json.loads(data)
             if not isinstance(document, dict) or not isinstance(document.get("answers"), dict):
                 raise _InvalidResponse()
-            answers = document["answers"]
-            result = {}
-            for i, (key, _, _) in enumerate(batch):
-                answer = answers.get(f"item_{i}")
-                if not isinstance(answer, dict):
-                    raise _InvalidResponse()
-                choice, probabilities = answer.get("choice"), answer.get("probabilities")
-                if not isinstance(choice, str) or choice not in CRITERIA:
-                    raise _InvalidResponse()
-                if not isinstance(probabilities, dict) or not probabilities:
-                    raise _InvalidResponse()
-                if any(type(p) not in (int, float) or not 0 <= p <= 1
-                       for p in probabilities.values()):
-                    raise _InvalidResponse()
-                result[key] = "other" if max(probabilities.values()) < THRESHOLD else choice
-            return result
+            return self._decode(batch, document["answers"])
         except (OSError, URLError, ValueError, http.client.HTTPException, RecursionError):
             # Never log exception text, response content or request headers:
             # any of them could contain the secret (including an echoed key).
-            self.log("classify: request or response failed")
+            self.log(f"{self._label}: request or response failed")
             return None
+
+
+def _choice(answer, criteria, abstain):
+    """Validate one answer; return its thresholded choice and raw p_max."""
+    if not isinstance(answer, dict):
+        raise _InvalidResponse()
+    choice, probabilities = answer.get("choice"), answer.get("probabilities")
+    if not isinstance(choice, str) or choice not in criteria:
+        raise _InvalidResponse()
+    if not isinstance(probabilities, dict) or not probabilities:
+        raise _InvalidResponse()
+    if any(type(p) not in (int, float) or not 0 <= p <= 1
+           for p in probabilities.values()):
+        raise _InvalidResponse()
+    p_max = max(probabilities.values())
+    return (abstain if p_max < THRESHOLD else choice), p_max
+
+
+class Classifier(_ChoiceClient):
+    def classify_round(self, items):
+        return self._run_round(items, self.classify)
+
+    def classify(self, batch):
+        return self._request(batch)
+
+    def _questions(self, size):
+        return {f"item_{i}": {"type": "choice", "instructions": f"news_{i} 這則新聞屬於哪一類？",
+                              "criteria": CRITERIA} for i in range(size)}
+
+    def _decode(self, batch, answers):
+        return {key: _choice(answers.get(f"item_{i}"), CRITERIA, "other")[0]
+                for i, (key, _, _) in enumerate(batch)}

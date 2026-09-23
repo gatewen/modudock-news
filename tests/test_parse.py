@@ -163,18 +163,18 @@ class MergeAndSizeTests(unittest.TestCase):
         self.assertEqual(fp.merge_items([[old], [newer], [tied]]), [newer])
         self.assertEqual(fp.dedup_key(old["link"]), "https://example.com/x?a=1")
 
-    def test_sort_ties_stable_and_200_cap(self):
-        items = [self.item(f"{i:03d}", f"https://example.com/{i}", source="B" if i % 2 else "A") for i in range(205)]
+    def test_sort_ties_stable_and_300_cap(self):
+        items = [self.item(f"{i:03d}", f"https://example.com/{i}", source="B" if i % 2 else "A") for i in range(305)]
         first = fp.merge_items([list(reversed(items))])
         self.assertEqual(first, fp.merge_items([items]))
-        self.assertEqual(len(first), 200)
-        self.assertEqual([(x["source"], x["title"]) for x in first], sorted((x["source"], x["title"]) for x in items)[:200])
+        self.assertEqual(len(first), 300)
+        self.assertEqual([(x["source"], x["title"]) for x in first], sorted((x["source"], x["title"]) for x in items)[:300])
 
     def test_size_guard_reachable_and_matches_outbox(self):
-        items = [dict(self.item("中" * 300, "https://example.com/" + "x" * 2028, source="源" * 64), summary="文" * 200, category="entertainment") for _ in range(200)]
+        items = [dict(self.item("中" * 300, "https://example.com/" + "x" * 2028, source="源" * 64), summary="文" * 200, category="entertainment") for _ in range(300)]
         self.assertEqual(len(items[0]["link"]), 2048)
         sources = [dict(name="源" * 64 if i == 0 else str(i), ok=False, error="錯" * 200, count=0) for i in range(32)]
-        packet = dict(t="msg", seq=2**53 - 1, body=dict(op="list", items=items, sources=sources, count=200))
+        packet = dict(t="msg", seq=2**53 - 1, body=dict(op="list", items=items, sources=sources, count=300))
         original = deepcopy(packet)
         self.assertGreater(len(fp.packet_bytes(packet)), 900 * 1024)
         fitted = fp.fit_packet(packet)
@@ -182,7 +182,7 @@ class MergeAndSizeTests(unittest.TestCase):
         self.assertEqual(fp.packet_bytes(fitted), Outbox.encode(fitted))
         remaining = len(fitted["body"]["items"])
         self.assertGreater(remaining, 0)
-        self.assertLess(remaining, 200)
+        self.assertLess(remaining, 300)
         self.assertEqual(fitted["body"]["items"], items[:remaining])
         self.assertEqual(fitted["body"]["count"], remaining)
         self.assertEqual(fitted["body"]["sources"][0]["count"], remaining)

@@ -272,11 +272,69 @@ class ProtocolTests(unittest.TestCase):
             self.assertEqual(len(received), 1)
 
 
+    def test_blocked_analysis_bye_exits_within_second_and_key_never_logged(self):
+        import threading
+        from tests.test_classify import server
+        from tests.test_scheduler import feed_server, model_kind
+        from tests.test_analyze import answers
+        entered = threading.Event()
+        def respond(payload, n, release):
+            if model_kind(payload) == 'analysis':
+                entered.set()
+                release.wait()  # Does not return until the process has exited.
+                return 200, answers(len(payload['state'])), {}
+            return 200, {'answers': {'item_0': {'choice': 'finance', 'probabilities': {'finance': 0.9}}}}, {}
+        secret = 'analysis-protocol-secret-' + secrets.token_hex(24)
+        with feed_server() as (feed_url, _, _), server(respond) as (url, received):
+            feeds = self.directory / 'feeds.json'
+            feeds.write_text(json.dumps([{'name': 'Local', 'url': feed_url}]))
+            self.start(feeds=feeds, extra_args=['--allow-host', '127.0.0.1'],
+                       extra_env={'TYPESAFE_API_KEY': secret, 'NEWS_TEST_JEV_URL': url})
+            self.hello()
+            self.assertEqual(received, [])
+            self.send('up')
+            initial, publish, classified = self.packet(), self.packet(), self.packet()
+            self.assertEqual(initial['body']['items'][0]['analysis'], None)
+            self.assertEqual(publish['t'], 'publish')
+            self.assertEqual(classified['body']['analysis']['pending'], 1)
+            self.assertTrue(entered.wait(2))
+            self.assertEqual([model_kind(p) for _, _, p in received], ['classification', 'analysis'])
+            self.assertTrue(all(headers['Authorization'] == 'Bearer ' + secret for _, headers, _ in received))
+            self.assertFalse(select.select([self.process.stdout], [], [], 0.05)[0])
+            self.assertIsNone(self.process.poll())
+            started = time.monotonic()
+            self.send('bye')
+            self.exited(started)
+            self.assertEqual(self.tail(), [{'t': 'done', 'seq': self.seq}])
+            self.assertNotIn(secret.encode(), self.stdout_seen)
+            self.assertNotIn(secret.encode(), self.process.stderr.read())
+
+    def test_no_key_logs_disabled_once_for_both_clients(self):
+        from tests.test_scheduler import feed_server
+        with feed_server() as (url, _, _):
+            feeds = self.directory / 'feeds.json'
+            feeds.write_text(json.dumps([{'name': 'Local', 'url': url}]))
+            self.start(feeds=feeds, extra_args=['--allow-host', '127.0.0.1'])
+            self.hello()
+            self.send('up')
+            body = self.packet()['body']
+            self.assertEqual(body['classify'], {'enabled': False, 'pending': 0})
+            self.assertEqual(body['analysis'], {'pending': 0})
+            self.assertIsNone(body['items'][0]['analysis'])
+            self.assertEqual(self.packet()['t'], 'publish')
+            started = time.monotonic()
+            self.send('bye')
+            self.exited(started)
+            self.assertEqual(self.tail(), [{'t': 'done', 'seq': self.seq}])
+            logs = self.process.stderr.read()
+            self.assertEqual(logs.count(b'disabled (no TYPESAFE_API_KEY)'), 1)
+
+
 class PreflightTests(unittest.TestCase):
-    def test_shipped_nine_sources(self):
+    def test_shipped_thirteen_sources(self):
         feeds, error = preflight(ROOT / "back/feeds.json")
         self.assertIsNone(error)
-        self.assertEqual(len(feeds), 9)
+        self.assertEqual(len(feeds), 13)
 
     def test_invalid_shapes(self):
         with tempfile.TemporaryDirectory() as directory:

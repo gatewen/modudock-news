@@ -7,6 +7,7 @@ import threading
 import time
 import unittest
 
+from back.feedparse import MAX_ITEMS_LIST
 from back.fetch import Result
 from back.scheduler import Scheduler, Cache
 from tests import test_protocol
@@ -420,10 +421,13 @@ class ClassificationSchedulerTests(unittest.TestCase):
                     body = deepcopy(packet["body"])
                     self.assertEqual(body["at"], initial["at"])
                     body.pop("classify")
+                    self.assertEqual(body.pop("analysis")["pending"],
+                                     sum(i["category"] in {"finance", "tech"} for i in body["items"]))
                     for item in body["items"]:
                         item["category"] = ""
                     expected = deepcopy(initial)
                     expected.pop("classify")
+                    expected.pop("analysis")
                     self.assertEqual(body, expected)
                 eventually(lambda: not scheduler.in_flight)
                 with self.assertRaises(queue.Empty):
@@ -558,7 +562,7 @@ class ClassificationSchedulerTests(unittest.TestCase):
                 for thread in scheduler.workers + [scheduler.coordinator]:
                     thread.join(1)
 
-    def test_queue_200_nonblocking_and_inflight_dedup_queued_and_processing(self):
+    def test_queue_list_limit_nonblocking_and_inflight_dedup_queued_and_processing(self):
         from tests.test_classify import server, answers
         gate, entered = self.gate(), threading.Event()
         group = [("a", 1)]
@@ -587,7 +591,7 @@ class ClassificationSchedulerTests(unittest.TestCase):
                     (("a", 1), 0, 1),     # Already processing.
                     (("b", 100), 100, 101),
                     (("b", 100), 100, 101),  # Already queued, with free capacity.
-                    (("c", 200), 200, 201),  # Overflow drops 100 without blocking.
+                    (("c", MAX_ITEMS_LIST), MAX_ITEMS_LIST, MAX_ITEMS_LIST + 1),  # Overflow drops 100 without blocking.
                 ], start=2):
                     group[0] = value
                     start = time.monotonic()
@@ -596,7 +600,7 @@ class ClassificationSchedulerTests(unittest.TestCase):
                     eventually(lambda: scheduler.completed == n)
                     self.assertLess(time.monotonic() - start, 0.5)
                     with scheduler.cv:
-                        self.assertEqual(scheduler.classify_jobs.maxsize, 200)
+                        self.assertEqual(scheduler.classify_jobs.maxsize, MAX_ITEMS_LIST)
                         self.assertEqual(scheduler.classify_jobs.qsize(), queued)
                         self.assertEqual(len(scheduler.in_flight), flying)
                 self.assertEqual(len(received), 1)
@@ -748,3 +752,506 @@ class ClassificationSchedulerTests(unittest.TestCase):
         self.assertEqual(update["body"]["items"], [])
         self.assertEqual(logs.count("classify: resend unexpectedly trimmed items"), 1)
         self.assertTrue(scheduler.coordinator.is_alive())
+
+
+def analysis_feed(labels):
+    data = ('<rss><channel>' + ''.join(
+        f'<item><title>{label}</title><link>https://example.com/{label}</link></item>'
+        for label in labels) + '</channel></rss>').encode()
+    return Result("ok", data, "https://example.com")
+
+
+def model_answers(payload):
+    from tests.test_analyze import answers as analysis_answers
+    if "market_0" in payload["questions"]:
+        return analysis_answers(len(payload["state"]))
+    return {"answers": {f"item_{i}": {"choice": item["title"].split('-')[0],
+                         "probabilities": {item["title"].split('-')[0]: 0.9}}
+                         for i, item in enumerate(payload["state"].values())}}
+
+
+def model_kind(payload):
+    return "analysis" if "market_0" in payload["questions"] else "classification"
+
+
+class AnalysisSchedulerTests(unittest.TestCase):
+    setUp = SchedulerTests.setUp
+    tearDown = SchedulerTests.tearDown
+    gate = SchedulerTests.gate
+    create = SchedulerTests.create
+    round = SchedulerTests.round
+
+    def clients(self, url, **options):
+        from back.classify import Classifier
+        from back.analyze import Analyzer
+        classifier = Classifier(endpoint=url, key="analysis-integration-secret", log=lambda _: None, **options)
+        analyzer = Analyzer(shared=classifier)
+        self.assertIs(analyzer._opener, classifier._opener)
+        self.assertIs(analyzer.ssl_context, classifier.ssl_context)
+        return {"classifier": classifier, "analyzer": analyzer}
+
+    def cache(self, scheduler):
+        with scheduler.cv:
+            return deepcopy(scheduler.analysis_cache)
+
+    def idle(self, scheduler):
+        with scheduler.cv:
+            return not scheduler.in_flight and not scheduler.analysis_in_flight
+
+    def next_analysis(self, sink):
+        packet = sink.packets.get(timeout=2)
+        self.assertEqual(packet["t"], "msg")
+        self.assertEqual(packet["body"]["op"], "list")
+        return packet["body"]
+
+    def test_finance_tech_analysis_resend_and_other_categories_null(self):
+        from tests.test_classify import server
+        with server(lambda p, *_: (200, model_answers(p), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a', 'tech-b', 'society-c']), **self.clients(url))
+            scheduler.start()
+            initial = self.round(sink)
+            self.assertEqual(initial["analysis"], {"pending": 0})
+            self.assertTrue(all(i["analysis"] is None for i in initial["items"]))
+            classified = self.next_analysis(sink)
+            self.assertEqual(classified["analysis"], {"pending": 2})
+            final = self.next_analysis(sink)
+            self.assertEqual(final["analysis"], {"pending": 0})
+            self.assertEqual(final["at"], initial["at"])
+            self.assertEqual([i["link"] for i in final["items"]], [i["link"] for i in initial["items"]])
+            for item in final["items"]:
+                if item["category"] in {'finance', 'tech'}:
+                    self.assertEqual(item["analysis"], {"market": "positive", "theme": "memory", "dir": "bull", "dir_p": 0.8})
+                else:
+                    self.assertIsNone(item["analysis"])
+            self.assertEqual([model_kind(p) for _, _, p in received], ['classification', 'analysis'])
+            self.assertEqual(len(received[1][2]["state"]), 2)
+            eventually(lambda: self.idle(scheduler))
+            with self.assertRaises(queue.Empty):
+                sink.packets.get(timeout=0.05)
+            self.assertTrue(all('analysis' not in i for i in scheduler.snapshot()[0].items))
+
+    def test_nonfinancial_cached_category_never_sends_analysis(self):
+        from tests.test_classify import server
+        with server(lambda p, *_: (200, model_answers(p), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['society-a']), **self.clients(url))
+            with scheduler.cv:
+                scheduler.classify_cache['https://example.com/society-a'] = 'society'
+            scheduler.start()
+            body = self.round(sink)
+            self.assertIsNone(body['items'][0]['analysis'])
+            self.assertEqual(body['analysis']['pending'], 0)
+            eventually(lambda: scheduler.completed == 1)
+            with self.assertRaises(queue.Empty):
+                sink.packets.get(timeout=0.05)
+            self.assertEqual(received, [])
+            self.assertEqual(self.cache(scheduler), {})
+
+    def test_emit_schedules_cached_category_and_analysis_cache_hit_zero_requests(self):
+        from tests.test_classify import server
+        with server(lambda p, *_: (200, model_answers(p), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a']), **self.clients(url))
+            with scheduler.cv:
+                scheduler.classify_cache['https://example.com/finance-a'] = 'finance'
+            scheduler.start()
+            self.assertEqual(self.round(sink)['analysis']['pending'], 1)
+            self.assertEqual(self.next_analysis(sink)['analysis']['pending'], 0)
+            self.assertEqual([model_kind(p) for _, _, p in received], ['analysis'])
+            scheduler.refresh()
+            body = self.round(sink)
+            self.assertIsNotNone(body['items'][0]['analysis'])
+            eventually(lambda: scheduler.completed == 2)
+            self.assertEqual(len(received), 1)
+
+    def test_analysis_fifo_4000_success_only_and_evicted_key_requeried(self):
+        from back.scheduler import AnalysisResult
+        from tests.test_classify import server
+        value = {'market': 'positive', 'theme': 'memory', 'dir': 'bull', 'dir_p': 0.9}
+        with server(lambda p, *_: (200, model_answers(p), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a']), **self.clients(url))
+            key = 'https://example.com/finance-a'
+            with scheduler.cv:
+                scheduler.classify_cache[key] = 'finance'
+                scheduler._accept(AnalysisResult({key: value}))
+                scheduler._accept(AnalysisResult({f'key-{i}': value for i in range(3999)}))
+                scheduler._accept(AnalysisResult({key: value, 'bad': None, 'bad2': {**value, 'dir_p': True}}))
+                self.assertEqual(len(scheduler.analysis_cache), 4000)
+                scheduler._accept(AnalysisResult({'latest': value}))
+                self.assertNotIn(key, scheduler.analysis_cache)
+                self.assertNotIn('bad', scheduler.analysis_cache)
+                self.assertNotIn('bad2', scheduler.analysis_cache)
+                self.assertEqual(next(iter(scheduler.analysis_cache)), 'key-0')
+            scheduler.start()
+            self.round(sink)
+            self.next_analysis(sink)
+            self.assertEqual(len(received), 1)
+            self.assertEqual(len(self.cache(scheduler)), 4000)
+            self.assertNotIn('key-0', self.cache(scheduler))
+
+    def test_analysis_failure_releases_all_keys_and_stops_round_then_retries(self):
+        from tests.test_classify import server
+        attempts = []
+        def respond(payload, *_):
+            if model_kind(payload) == 'analysis':
+                attempts.append(1)
+                if len(attempts) == 1:
+                    return 500, {}, {}
+            return 200, model_answers(payload), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed([f'finance-{i}' for i in range(21)]), **self.clients(url))
+            scheduler.start()
+            self.round(sink)
+            self.next_analysis(sink)
+            self.next_analysis(sink)
+            eventually(lambda: len(attempts) == 1 and self.idle(scheduler))
+            self.assertEqual(self.cache(scheduler), {})
+            self.assertEqual(len(received), 3)
+            self.assertTrue(sink.packets.empty())
+            scheduler.refresh()
+            self.round(sink)
+            self.next_analysis(sink)
+            self.next_analysis(sink)
+            eventually(lambda: self.idle(scheduler))
+            self.assertEqual(len(attempts), 3)
+            self.assertEqual(len(self.cache(scheduler)), 21)
+
+    def test_auth_failure_in_either_client_disables_both_permanently(self):
+        from tests.test_classify import server
+        for stage in ('classification', 'analysis'):
+            for status in (401, 403):
+                with self.subTest(stage=stage, status=status):
+                    def respond(payload, *_):
+                        return (status, {}, {}) if model_kind(payload) == stage else (200, model_answers(payload), {})
+                    with server(respond) as (url, received):
+                        clients = self.clients(url)
+                        scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a']), **clients)
+                        scheduler.start()
+                        self.round(sink)
+                        if stage == 'analysis':
+                            self.next_analysis(sink)
+                        body = self.next_analysis(sink)
+                        self.assertFalse(clients['classifier'].enabled)
+                        self.assertFalse(clients['analyzer'].enabled)
+                        self.assertEqual(body['classify'], {'enabled': False, 'pending': 0})
+                        self.assertEqual(body['analysis']['pending'], 0)
+                        self.assertTrue(all(i['analysis'] is None for i in body['items']))
+                        count = len(received)
+                        self.assertIsNone(clients['classifier'].classify([('x', 'title', '')]))
+                        self.assertIsNone(clients['analyzer'].analyze([('x', 'title', '')]))
+                        scheduler.refresh()
+                        self.round(sink)
+                        eventually(lambda: scheduler.completed == 2)
+                        self.assertEqual(len(received), count)
+                        scheduler.stop()
+
+    def test_analysis_from_old_round_during_fetch_commits_without_resend(self):
+        from tests.test_classify import server
+        agate, fgate = self.gate(), self.gate()
+        aentered, fentered = threading.Event(), threading.Event()
+        calls = []
+        def fetch(*_):
+            calls.append(1)
+            if len(calls) == 2:
+                fentered.set()
+                fgate.wait()
+            return analysis_feed(['finance-a'])
+        def respond(payload, *_):
+            if model_kind(payload) == 'analysis':
+                aentered.set()
+                agate.wait()
+            return 200, model_answers(payload), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(fetch, source_timeout=3, round_timeout=4, **self.clients(url))
+            scheduler.start()
+            try:
+                self.round(sink)
+                self.next_analysis(sink)
+                self.assertTrue(aentered.wait(1))
+                scheduler.refresh()
+                self.assertTrue(fentered.wait(1))
+                self.assertEqual(scheduler.round_id, 2)
+                agate.set()
+                eventually(lambda: len(self.cache(scheduler)) == 1)
+                with self.assertRaises(queue.Empty):
+                    sink.packets.get(timeout=0.05)
+                fgate.set()
+                self.assertIsNotNone(self.round(sink)['items'][0]['analysis'])
+                self.assertEqual(len(received), 2)
+            finally:
+                agate.set()
+                fgate.set()
+
+    def test_classification_preempts_remaining_analysis_at_batch_boundary(self):
+        from tests.test_classify import server
+        gate, entered = self.gate(), threading.Event()
+        labels = [[f'finance-{i}' for i in range(21)]]
+        def respond(payload, n, _):
+            if n == 1:
+                entered.set()
+                gate.wait()
+            return 200, model_answers(payload), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels[0]), **self.clients(url))
+            with scheduler.cv:
+                for label in labels[0]:
+                    scheduler.classify_cache['https://example.com/' + label] = 'finance'
+            scheduler.start()
+            try:
+                self.round(sink)
+                self.assertTrue(entered.wait(1))
+                labels[0] = ['tech-new']
+                scheduler.refresh()
+                self.round(sink)
+                eventually(lambda: scheduler.completed == 2)
+                with scheduler.cv:
+                    self.assertEqual(scheduler.classify_jobs.qsize(), 1)
+                    self.assertEqual(scheduler.analysis_jobs.qsize(), 1)
+                gate.set()
+                eventually(lambda: len(received) >= 3)
+                self.assertEqual([model_kind(p) for _, _, p in received[:3]], ['analysis', 'classification', 'analysis'])
+            finally:
+                gate.set()
+
+    def test_shared_budget_40_seconds_classify_20_analyze_no_third_request(self):
+        from tests.test_classify import server
+        now = [0]
+        labels = [f'finance-{i:02d}' for i in range(22)]
+        def respond(payload, *_):
+            now[0] += 40 if model_kind(payload) == 'classification' else 20
+            return 200, model_answers(payload), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels), **self.clients(url, clock=lambda: now[0]))
+            with scheduler.cv:
+                for label in labels[:21]:
+                    scheduler.classify_cache['https://example.com/' + label] = 'finance'
+            scheduler.start()
+            self.round(sink)
+            self.next_analysis(sink)
+            self.next_analysis(sink)
+            eventually(lambda: self.idle(scheduler))
+            self.assertEqual([model_kind(p) for _, _, p in received], ['classification', 'analysis'])
+            self.assertEqual(now[0], 60)
+            self.assertEqual(len(self.cache(scheduler)), 20)
+            scheduler.refresh()
+            self.assertEqual(self.round(sink)['analysis']['pending'], 2)
+            self.assertEqual(self.next_analysis(sink)['analysis']['pending'], 0)
+            self.assertEqual(len(received), 3)
+            self.assertEqual(len(received[-1][2]['state']), 2)
+
+    def test_classification_exhausts_budget_analysis_waits_next_round(self):
+        from tests.test_classify import server
+        now = [0]
+        def respond(payload, *_):
+            now[0] += 60
+            return 200, model_answers(payload), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a']), **self.clients(url, clock=lambda: now[0]))
+            scheduler.start()
+            self.round(sink)
+            self.next_analysis(sink)
+            eventually(lambda: self.idle(scheduler))
+            self.assertEqual(len(received), 1)
+            self.assertEqual(self.cache(scheduler), {})
+            scheduler.refresh()
+            self.round(sink)
+            self.assertEqual(self.next_analysis(sink)['analysis']['pending'], 0)
+            self.assertEqual(len(received), 2)
+
+    def test_classification_failure_also_stops_cached_analysis_same_round(self):
+        from tests.test_classify import server
+        with server(lambda p, n, _: (500, {}, {}) if n == 1 else (200, model_answers(p), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a', 'tech-new']), **self.clients(url))
+            with scheduler.cv:
+                scheduler.classify_cache['https://example.com/finance-a'] = 'finance'
+            scheduler.start()
+            self.round(sink)
+            eventually(lambda: len(received) == 1 and self.idle(scheduler))
+            self.assertEqual(self.cache(scheduler), {})
+            scheduler.refresh()
+            self.round(sink)
+            eventually(lambda: len(self.cache(scheduler)) == 2)
+            self.assertGreaterEqual(len(received), 3)
+
+    def test_analysis_queue_bounded_and_deduplicates_queued_processing_keys(self):
+        from tests.test_classify import server
+        gate, entered = self.gate(), threading.Event()
+        labels = [['finance-a']]
+        def respond(payload, *_):
+            entered.set()
+            gate.wait()
+            return 200, model_answers(payload), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels[0]), **self.clients(url))
+            with scheduler.cv:
+                for label in ['finance-a'] + [f'finance-b{i}' for i in range(100)] + [f'finance-c{i}' for i in range(MAX_ITEMS_LIST)]:
+                    scheduler.classify_cache['https://example.com/' + label] = 'finance'
+            scheduler.start()
+            try:
+                self.round(sink)
+                self.assertTrue(entered.wait(1))
+                for round_id, (group, queued) in enumerate([
+                    (['finance-a'], 0),
+                    ([f'finance-b{i}' for i in range(100)], 100),
+                    ([f'finance-b{i}' for i in range(100)], 100),
+                    ([f'finance-c{i}' for i in range(MAX_ITEMS_LIST)], MAX_ITEMS_LIST),
+                ], start=2):
+                    labels[0] = group
+                    scheduler.refresh()
+                    self.round(sink)
+                    eventually(lambda: scheduler.completed == round_id)
+                    with scheduler.cv:
+                        self.assertEqual(scheduler.analysis_jobs.maxsize, MAX_ITEMS_LIST)
+                        self.assertEqual(scheduler.analysis_jobs.qsize(), queued)
+                        self.assertEqual(len(scheduler.analysis_in_flight), queued + 1)
+                self.assertEqual(len(received), 1)
+            finally:
+                scheduler.stop()
+                gate.set()
+
+    def test_300_items_always_have_analysis_even_without_key(self):
+        scheduler, sink, _ = self.create(lambda *_: analysis_feed([f'society-{i}' for i in range(305)]))
+        scheduler.start()
+        body = self.round(sink)
+        self.assertEqual(len(body['items']), 300)
+        self.assertTrue(all('analysis' in i and i['analysis'] is None for i in body['items']))
+        self.assertEqual(body['analysis']['pending'], 0)
+
+    def test_analysis_reserve_boundary_preserves_links_through_both_resends(self):
+        from datetime import datetime, timezone
+        from back.scheduler import ClassifyResult, AnalysisResult
+        from back.feedparse import MAX_PACKET, packet_bytes
+        now = datetime(2026, 9, 23, tzinfo=timezone.utc)
+        sink, logs = Sink(), []
+        clients = self.clients('http://127.0.0.1:9/')
+        scheduler = Scheduler([{'name': '0', 'url': 'https://example.com'}],
+                              FunctionFetcher(lambda *_: ok()), sink, 891,
+                              now=lambda: now, log=logs.append, **clients)
+        items = [dict(title='中' * 300, summary='文' * 200,
+                      link=f'https://example.com/{i:03d}/', source='0',
+                      published=now.isoformat(), time_guessed=False, category='', analysis=None)
+                 for i in range(200)]
+        sources = [{'name': '0', 'ok': True, 'error': None, 'count': 200}]
+        packet = {'t': 'msg', 'seq': 891, 'body': {'op': 'list', 'items': items,
+                  'sources': sources, 'at': now.isoformat(),
+                  'classify': {'enabled': True, 'pending': 200}, 'analysis': {'pending': 0}}}
+        # Leaves room for all category ids but not the pending analyses.
+        needed = MAX_PACKET - 13 * 200 - 1000 - len(packet_bytes(packet))
+        self.assertGreater(needed, 0)
+        for item in items:
+            padding = min(needed, 2048 - len(item['link']))
+            item['link'] += 'x' * padding
+            needed -= padding
+        self.assertEqual(needed, 0)
+        self.assertLessEqual(len(packet_bytes(packet)) + 13 * 200, MAX_PACKET)
+        value = {'market': 'not_market', 'theme': 'consumer_elec', 'dir': 'neutral', 'dir_p': 0.99}
+        filled = deepcopy(packet)
+        for item in filled['body']['items']:
+            item.update(category='finance', analysis=deepcopy(value))
+        filled['body']['classify']['pending'] = 0
+        self.assertGreater(len(packet_bytes(filled)), MAX_PACKET)
+        scheduler._emit([Cache(items=items)], sources)
+        initial = self.round(sink)
+        self.assertLess(len(initial['items']), 200)
+        self.assertGreater(len(initial['items']), 0)
+        keys = [i['link'] for i in initial['items']]
+        with scheduler.cv:
+            resend = scheduler._accept(ClassifyResult({key: 'finance' for key in keys}))
+        scheduler._send_list(resend)
+        classified = self.next_analysis(sink)
+        self.assertEqual(classified['analysis']['pending'], len(keys))
+        with scheduler.cv:
+            resend = scheduler._accept(AnalysisResult({key: value for key in keys}, round_id=-123))
+        scheduler._send_list(resend)
+        final = self.next_analysis(sink)
+        self.assertEqual(final['analysis']['pending'], 0)
+        for body in (classified, final):
+            self.assertEqual([i['link'] for i in body['items']], keys)
+            self.assertEqual(len(body['items']), len(initial['items']))
+            self.assertEqual(body['at'], initial['at'])
+            self.assertLessEqual(len(packet_bytes({'t': 'msg', 'seq': 891, 'body': body})), MAX_PACKET)
+        self.assertTrue(all(i['analysis'] is None and i['category'] == '' for i in items))
+        self.assertTrue(all(i['analysis'] == value for i in final['items']))
+        self.assertEqual(logs, [])
+        self.assertTrue(sink.packets.empty())
+
+    def test_analysis_pending_recount_after_fit_and_when_disabled(self):
+        from back.feedparse import fit_packet, MAX_PACKET, packet_bytes
+        items = [dict(title='中' * 300, summary='文' * 200,
+                      link='https://example.com/' + 'x' * 2028, source='0',
+                      published='2026-09-23', category='finance' if i % 2 else 'society', analysis=None)
+                 for i in range(300)]
+        packet = {'t': 'msg', 'seq': 42, 'body': {'items': items,
+                  'classify': {'enabled': True, 'pending': 0}, 'analysis': {'pending': 150}}}
+        self.assertGreater(len(packet_bytes(packet)), MAX_PACKET)
+        fitted = fit_packet(packet)
+        self.assertLess(len(fitted['body']['items']), 300)
+        self.assertEqual(fitted['body']['analysis']['pending'],
+                         sum(i['category'] == 'finance' for i in fitted['body']['items']))
+        self.assertLess(fitted['body']['analysis']['pending'], 150)
+        packet['body']['classify']['enabled'] = False
+        self.assertEqual(fit_packet(packet)['body']['analysis']['pending'], 0)
+
+    def test_old_analysis_after_new_round_resends_latest_at(self):
+        from tests.test_classify import server
+        gate, entered = self.gate(), threading.Event()
+        def respond(payload, *_):
+            if model_kind(payload) == 'analysis':
+                entered.set()
+                gate.wait()
+            return 200, model_answers(payload), {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a']), **self.clients(url))
+            scheduler.start()
+            try:
+                self.round(sink)
+                self.next_analysis(sink)
+                self.assertTrue(entered.wait(1))
+                scheduler.refresh()
+                second = self.round(sink)
+                eventually(lambda: scheduler.completed == 2)
+                gate.set()
+                final = self.next_analysis(sink)
+                self.assertEqual(final['at'], second['at'])
+                self.assertEqual(final['analysis']['pending'], 0)
+                self.assertEqual(len(received), 2)
+            finally:
+                gate.set()
+
+
+    def test_300_items_classified_and_analyzed_in_first_round(self):
+        self.complete_full_model_round(cached_categories=False)
+
+    def test_300_cached_categories_analyzed_in_first_round(self):
+        self.complete_full_model_round(cached_categories=True)
+
+    def complete_full_model_round(self, cached_categories):
+        from tests.test_classify import server
+        self.assertEqual(MAX_ITEMS_LIST, 300)
+        labels = [f'finance-{i:03d}' for i in range(MAX_ITEMS_LIST)]
+        with server(lambda p, *_: (200, model_answers(p), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels), **self.clients(url))
+            if cached_categories:
+                with scheduler.cv:
+                    scheduler.classify_cache.update({'https://example.com/' + label: 'finance' for label in labels})
+            scheduler.start()
+            first = self.round(sink)
+            self.assertEqual(len(first['items']), MAX_ITEMS_LIST)
+            self.assertEqual(first['classify']['pending'], 0 if cached_categories else MAX_ITEMS_LIST)
+            def complete():
+                with scheduler.cv:
+                    return (scheduler.completed == 1 and scheduler.last_list is not None
+                            and scheduler.last_list['body']['classify']['pending'] == 0
+                            and scheduler.last_list['body']['analysis']['pending'] == 0)
+            eventually(complete, timeout=4)
+            with scheduler.cv:
+                final = deepcopy(scheduler.last_list['body'])
+                self.assertEqual(scheduler.round_id, 1)
+                self.assertEqual(len(scheduler.classify_cache), MAX_ITEMS_LIST)
+                self.assertEqual(len(scheduler.analysis_cache), MAX_ITEMS_LIST)
+            self.assertTrue(all(i['category'] == 'finance' and i['analysis'] is not None for i in final['items']))
+            self.assertEqual(final['at'], first['at'])
+            self.assertEqual([i['link'] for i in final['items']], [i['link'] for i in first['items']])
+            for kind, expected in [('classification', 0 if cached_categories else MAX_ITEMS_LIST),
+                                   ('analysis', MAX_ITEMS_LIST)]:
+                self.assertEqual(sum(len(p['state']) for _, _, p in received if model_kind(p) == kind), expected)
+            while not sink.packets.empty():
+                self.assertEqual(sink.packets.get_nowait()['t'], 'msg')  # No second publish.

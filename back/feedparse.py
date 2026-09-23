@@ -16,12 +16,18 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.parsers import expat
 
 if __package__:
+    from .analyze import ANALYSIS_CATEGORIES, QUESTIONS
     from .classify import CRITERIA
 else:
+    from analyze import ANALYSIS_CATEGORIES, QUESTIONS
     from classify import CRITERIA
 
 LONGEST_CATEGORY = max(CRITERIA, key=len)
 CATEGORY_RESERVE = len(json.dumps(LONGEST_CATEGORY)) - len(json.dumps(""))
+MAX_ANALYSIS = {name: max(criteria, key=len) for name, (_, criteria, _) in QUESTIONS.items()}
+MAX_ANALYSIS["dir_p"] = 0.99
+ANALYSIS_RESERVE = len(json.dumps(MAX_ANALYSIS)) - len(json.dumps(None))
+MAX_ITEMS_LIST = 300
 MAX_PACKET = 900 * 1024
 ATOM = "http://www.w3.org/2005/Atom"
 
@@ -219,7 +225,7 @@ def merge_items(source_items):
                 winners[key] = item
     result = sorted(winners.values(), key=lambda item: (item["source"], item["title"]))
     result.sort(key=lambda item: item["published"], reverse=True)
-    return deepcopy(result[:200])
+    return deepcopy(result[:MAX_ITEMS_LIST])
 
 
 def packet_bytes(packet):
@@ -229,7 +235,7 @@ def packet_bytes(packet):
 def fit_packet(packet):
     """Copy a full list envelope, trim the tail, recount sources/count if present.
 
-    Empty categories reserve space for the longest id without changing output.
+    Unfilled category/analysis fields reserve their maximum future byte lengths.
     Returns a packet, not bytes. An oversized envelope even with zero items is
     an error, never an oversized success. publish count must use returned items.
     """
@@ -242,9 +248,16 @@ def fit_packet(packet):
         if "classify" in body:
             body["classify"]["pending"] = (sum(item.get("category", "") == "" for item in items)
                                              if body["classify"]["enabled"] else 0)
+        if "analysis" in body:
+            body["analysis"]["pending"] = (sum(item.get("category") in ANALYSIS_CATEGORIES
+                and item.get("analysis") is None for item in items)
+                if body.get("classify", {}).get("enabled", False) else 0)
         if "count" in body:
             body["count"] = len(items)
         reserved = sum(CATEGORY_RESERVE for item in items if item.get("category") == "")
+        reserved += sum(ANALYSIS_RESERVE for item in items
+                        if "analysis" in item and item["analysis"] is None
+                        and item.get("category") in ANALYSIS_CATEGORIES | {""})
         if len(packet_bytes(result)) + reserved <= MAX_PACKET:
             return result
         if not items:

@@ -14,11 +14,13 @@ import threading
 import time
 
 if __package__:
-    from .feedparse import parse_feed, merge_items, fit_packet, dedup_key
-    from .classify import CRITERIA
+    from .feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
+    from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS
+    from .analyze import ANALYSIS_CATEGORIES, valid_analysis
 else:
-    from feedparse import parse_feed, merge_items, fit_packet, dedup_key
-    from classify import CRITERIA
+    from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
+    from classify import CRITERIA, MAX_ITEMS, MAX_CHARS
+    from analyze import ANALYSIS_CATEGORIES, valid_analysis
 
 
 @dataclass
@@ -39,16 +41,32 @@ class Candidate:
 
 
 @dataclass
+class ModelRound:
+    round_id: int
+    deadline: float | None = None  # Starts with this round's first model request.
+    failed: bool = False
+
+
+@dataclass
+class AnalysisResult:
+    analyses: dict = field(default_factory=dict)
+    finished: tuple = ()
+    round_id: int = 0
+
+
+@dataclass
 class ClassifyResult:
     categories: dict = field(default_factory=dict)
     finished: tuple = ()  # Failed/unattempted keys also need an acknowledgement.
     round_id: int = 0  # Diagnostic provenance only; never an acceptance guard.
+    items: tuple = ()
+    work: ModelRound | None = None
 
 
 class Scheduler:
     def __init__(self, feeds, fetcher, outbox, seq, *, interval=600,
                  source_timeout=30, round_timeout=60, clock=time.monotonic,
-                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None):
+                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None):
         if not 1 <= len(feeds) <= 32 or min(interval, source_timeout, round_timeout) <= 0:
             raise ValueError("invalid scheduler limits")
         self.feeds, self.fetcher, self.outbox, self.seq = deepcopy(feeds), fetcher, outbox, seq
@@ -58,7 +76,13 @@ class Scheduler:
         self.cv = threading.Condition()
         self.jobs = queue.Queue(maxsize=32)
         self.classifier = classifier
-        self.classify_jobs = queue.Queue(maxsize=200)
+        self.analyzer = analyzer
+        self.model_clock = getattr(classifier, "clock", clock)
+        self.model_budget = getattr(classifier, "budget", 60)
+        self.analysis_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
+        self.analysis_cache = OrderedDict()
+        self.analysis_in_flight = set()
+        self.classify_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
         self.classify_cache = OrderedDict()
         self.in_flight = set()  # Coordinator-owned, including queued work.
         self.last_list = None
@@ -164,12 +188,14 @@ class Scheduler:
         with self.cv:
             if self.stopping or not self._classify_enabled():
                 return
+            work = ModelRound(self.round_id)
             for item in packet["body"]["items"]:
                 key = dedup_key(item["link"])
+                self._enqueue_analysis(work, (key, item["title"], item["summary"]))
                 if item["category"] or key in self.classify_cache or key in self.in_flight:
                     continue
                 try:
-                    self.classify_jobs.put_nowait((self.round_id, (key, item["title"], item["summary"])))
+                    self.classify_jobs.put_nowait((work, (key, item["title"], item["summary"])))
                 except queue.Full:
                     continue
                 self.in_flight.add(key)
@@ -185,37 +211,63 @@ class Scheduler:
             self.cv.notify_all()
             return True
 
+    def _enqueue_analysis(self, work, item):
+        # Coordinator only, under cv; work carries the shared original budget.
+        key = item[0]
+        category = self.classify_cache.get(key, "")
+        if category not in ANALYSIS_CATEGORIES:
+            return
+        if (self.analyzer is None or self.stopping or not self._classify_enabled()
+                or work.failed or (work.deadline is not None and self.model_clock() >= work.deadline)
+                or key in self.analysis_cache or key in self.analysis_in_flight):
+            return
+        try:
+            self.analysis_jobs.put_nowait((work, item))
+        except queue.Full:
+            return
+        self.analysis_in_flight.add(key)
+        self.cv.notify_all()
+
     def _classify_worker(self):
+        # Reconsider priority at every HTTP batch boundary. In-flight HTTP is
+        # not preemptible. Queue/results/work references all remain bounded.
         while True:
             with self.cv:
-                while not self.stopping and self.classify_jobs.empty():
+                while not self.stopping and self.classify_jobs.empty() and self.analysis_jobs.empty():
                     self.cv.wait()
                 if self.stopping:
                     return
-                rid, item = self.classify_jobs.get_nowait()
+                jobs = self.classify_jobs if not self.classify_jobs.empty() else self.analysis_jobs
+                analyzing = jobs is self.analysis_jobs
+                work, item = jobs.get_nowait()
                 batch = [item]
-                # Admission holds cv for the entire round. Take only that
-                # round, preserving a separate budget for later rounds.
-                while not self.classify_jobs.empty():
-                    with self.classify_jobs.mutex:
-                        next_rid = self.classify_jobs.queue[0][0]
-                    if next_rid != rid:
+                chars = len(item[1]) + len(item[2])
+                while not jobs.empty() and len(batch) < MAX_ITEMS:
+                    with jobs.mutex:
+                        next_work, next_item = jobs.queue[0]
+                    size = len(next_item[1]) + len(next_item[2])
+                    if next_work is not work or chars + size > MAX_CHARS:
                         break
-                    batch.append(self.classify_jobs.get_nowait()[1])
-            remaining = {key for key, _, _ in batch}
-            try:
-                for categories in self.classifier.classify_round(batch):
-                    if not self._submit_classification(ClassifyResult(dict(categories), round_id=rid)):
-                        return
-                    remaining.difference_update(categories)
-                    with self.cv:
-                        if self.stopping:
-                            return
-            except Exception:
-                # Do not expose classifier exception text, which may hold key
-                # material. A completion still releases failed in-flight keys.
-                self.log("classify: worker failed")
-            if not self._submit_classification(ClassifyResult(finished=tuple(remaining), round_id=rid)):
+                    batch.append(jobs.get_nowait()[1])
+                    chars += size
+                if work.deadline is None:
+                    work.deadline = self.model_clock() + self.model_budget
+                allowed = self._classify_enabled() and not work.failed and self.model_clock() < work.deadline
+            result = None
+            if allowed:
+                try:
+                    result = self.analyzer.analyze(batch) if analyzing else self.classifier.classify(batch)
+                except Exception:
+                    self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
+            with self.cv:
+                if result is None:
+                    work.failed = True
+            keys = tuple(key for key, _, _ in batch)
+            if analyzing:
+                candidate = AnalysisResult(result or {}, keys, work.round_id)
+            else:
+                candidate = ClassifyResult(result or {}, keys, work.round_id, tuple(batch), work)
+            if not self._submit_classification(candidate):
                 return
 
     def _decorate(self, packet):
@@ -223,16 +275,40 @@ class Scheduler:
         packet = deepcopy(packet)
         body = packet["body"]
         for item in body["items"]:
-            item["category"] = self.classify_cache.get(dedup_key(item["link"]), "")
+            key = dedup_key(item["link"])
+            item["category"] = self.classify_cache.get(key, "")
+            item["analysis"] = (deepcopy(self.analysis_cache.get(key))
+                                if self._classify_enabled() and item["category"] in ANALYSIS_CATEGORIES else None)
         enabled = self._classify_enabled()
         body["classify"] = {"enabled": enabled,
                             "pending": sum(not i["category"] for i in body["items"]) if enabled else 0}
+        body["analysis"] = {"pending": sum(i["category"] in ANALYSIS_CATEGORIES
+                              and i["analysis"] is None for i in body["items"]) if enabled else 0}
         return packet
+
+    def _model_resend(self, accepted):
+        if not self.active and self.last_list is not None:
+            body = self.last_list["body"]
+            visible = {dedup_key(item["link"]) for item in body["items"]}
+            if accepted & visible or body["classify"]["enabled"] != self._classify_enabled():
+                return self._decorate(self.last_list)
+        return None
 
     def _accept(self, candidate):
         # Called only under cv by the coordinator. A worker produces exactly
         # one candidate per job; the generation check is the ownership guard.
         self.processed_results += 1
+        if isinstance(candidate, AnalysisResult):
+            self.analysis_in_flight.difference_update(candidate.finished)
+            self.analysis_in_flight.difference_update(candidate.analyses)
+            accepted = set()
+            for key, analysis in candidate.analyses.items():
+                if valid_analysis(analysis):
+                    self.analysis_cache[key] = deepcopy(analysis)
+                    accepted.add(key)
+                    if len(self.analysis_cache) > 4000:
+                        self.analysis_cache.popitem(last=False)
+            return self._model_resend(accepted)
         if isinstance(candidate, ClassifyResult):
             self.in_flight.difference_update(candidate.finished)
             self.in_flight.difference_update(candidate.categories)
@@ -243,13 +319,12 @@ class Scheduler:
                     accepted.add(key)
                     if len(self.classify_cache) > 4000:
                         self.classify_cache.popitem(last=False)
-            # Classification belongs to a key, regardless of fetch generation.
-            if not self.active and self.last_list is not None:
-                body = self.last_list["body"]
-                visible = {dedup_key(item["link"]) for item in body["items"]}
-                if accepted & visible or body["classify"]["enabled"] != self._classify_enabled():
-                    return self._decorate(self.last_list)
-            return None
+            if candidate.work is not None:
+                for item in candidate.items:
+                    if item[0] in accepted:
+                        self._enqueue_analysis(candidate.work, item)
+            # Model results belong to keys, never fetch generations.
+            return self._model_resend(accepted)
         if candidate.round_id != self.round_id:
             self.dropped_results += 1
             return
