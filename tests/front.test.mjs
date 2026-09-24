@@ -872,3 +872,185 @@ test('expanded reports retain text and URL defenses, muted styling and remove de
   assert.equal(reports.hidden, false);
   assert.equal(h.container.childNodes.length, 0);
 });
+
+const worldAnalysis = (overrides = {}) => ({kind: 'world', trend: 'escalation', region: 'asia_pacific', ...overrides});
+const worldArticle = (overrides = {}) => article({category: 'world', analysis: worldAnalysis(), ...overrides});
+const worldPanel = h => h.container.querySelector('[aria-label=國際局勢分析]');
+const regionButtons = h => [...h.container.querySelectorAll('[aria-label=地區排行] button')];
+const regionButton = (h, id) => regionButtons(h).find(b => b.dataset.topic === `region:${id}`);
+
+test('world panel replaces finance panel only for world and restores finance presentation', t => {
+  const h = setup(t);
+  h.message(listing([worldArticle(), financeArticle()]));
+  const surface = h.container.querySelector('.nw-panel');
+  for (const category of ['', 'politics', 'life', 'society']) {
+    choose(h, h.categories, category);
+    assert.equal(surface.hidden, true);
+    assert.equal(worldPanel(h), null);
+  }
+  choose(h, h.categories, 'world');
+  assert.equal(worldPanel(h), surface);
+  assert.equal(surface.hidden, false);
+  assert.equal(surface.previousElementSibling.className, 'nw-toolbar');
+  assert.equal(surface.querySelector('.nw-heading').textContent, '局勢走向');
+  assert.equal(surface.querySelector('.nw-macro').hidden, true);
+  assert.equal(surface.querySelector('.nw-ranking-heading').textContent, '地區（點選篩選）');
+  assert.equal(surface.querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
+  choose(h, h.categories, 'finance');
+  assert.equal(panel(h), surface);
+  assert.equal(surface.querySelector('.nw-heading').textContent, '股市訊號');
+  assert.equal(surface.querySelector('.nw-macro').hidden, false);
+  assert.deepEqual([...surface.querySelector('.nw-market-bar').children].map(p => p.className),
+    ['nw-segment nw-positive', 'nw-segment nw-mixed', 'nw-segment nw-idle', 'nw-segment nw-negative']);
+});
+
+test('world bar uses ordered escalation stalemate deescalation idle event counts and semantic tokens', t => {
+  const h = setup(t);
+  const shared = {event: 'aaaaaaaaaaaa', event_size: 2};
+  const items = [worldArticle({...shared, analysis: null, published: '2026-09-24T01:00:00Z'}),
+    worldArticle({...shared, published: '2026-09-24T02:00:00Z'}),
+    ...['escalation', 'stalemate', 'deescalation', 'not_conflict', 'other'].map(trend => worldArticle({analysis: worldAnalysis({trend})})),
+    worldArticle({analysis: null}), worldArticle({analysis: worldAnalysis({trend: 'deescalation'})}),
+    financeArticle()];
+  h.message({...listing(items), events: {pending: 7}});
+  choose(h, h.categories, 'world');
+  const surface = worldPanel(h);
+  assert.equal(surface.querySelector('.nw-sample-count').textContent, '8 個事件（9 則報導），1 個來源');
+  assert.equal(surface.querySelector('.nw-pending').textContent, '分析中 1');
+  assert.equal(surface.querySelector('.nw-merging').textContent, '・合併中 7');
+  const bar = surface.querySelector('.nw-market-bar');
+  assert.equal(bar.getAttribute('aria-label'), '升級 2、僵持 1、緩和 2、無關 3');
+  assert.deepEqual([...bar.children].map(p => p.style.width), ['25%', '12.5%', '25%', '37.5%']);
+  assert.deepEqual([...bar.children].map(p => p.className),
+    ['nw-segment nw-escalation', 'nw-segment nw-mixed', 'nw-segment nw-deescalation', 'nw-segment nw-idle']);
+  assert.deepEqual([...surface.querySelectorAll('.nw-value')].map(p => p.textContent), ['2', '1', '2', '3']);
+  const rules = [...h.container.querySelector('style').sheet.cssRules];
+  const base = rules.find(rule => rule.selectorText === '.nw').style;
+  assert.equal(base.getPropertyValue('--nw-danger'), 'var(--md-danger, light-dark(#b42318, #ff8b82))');
+  for (const [selector, token] of [['.nw .nw-escalation', '--nw-danger'], ['.nw .nw-mixed', '--nw-mixed'],
+    ['.nw .nw-deescalation', '--nw-accent'], ['.nw .nw-idle', '--nw-idle']]) {
+    assert.equal(rules.find(rule => rule.selectorText === selector).style.background, `var(${token})`);
+  }
+  h.message(listing([]));
+  assert.equal(bar.dataset.empty, 'true');
+  assert.deepEqual([...bar.children].map(p => p.style.width), ['0%', '0%', '0%', '0%']);
+});
+
+test('regions rank by event count then fixed order, include other, hide zeros and segment mini-bars', t => {
+  const h = setup(t);
+  const regions = [['us_china', '美中'], ['asia_pacific', '亞太'], ['middle_east', '中東'],
+    ['europe_russia', '歐洲／俄烏'], ['americas', '美洲'], ['other', '其他']];
+  h.message(listing([...regions].reverse().map(([region]) => worldArticle({analysis: worldAnalysis({region})})).concat([
+    worldArticle({analysis: worldAnalysis({trend: 'deescalation'})}),
+    worldArticle({analysis: worldAnalysis({trend: 'stalemate'})}),
+  ])));
+  choose(h, h.categories, 'world');
+  assert.deepEqual(regionButtons(h).map(b => b.dataset.topic),
+    ['region:asia_pacific', 'region:us_china', 'region:middle_east', 'region:europe_russia', 'region:americas', 'region:other']);
+  const asia = regionButton(h, 'asia_pacific');
+  assert.equal(asia.getAttribute('aria-label'), '亞太 3（升級 1 緩和 1）');
+  const bar = asia.querySelector('.nw-theme-bar');
+  assert.equal(bar.style.width, '100%');
+  assert.deepEqual([...bar.children].map(p => p.className), ['nw-segment nw-escalation', 'nw-segment nw-deescalation', 'nw-segment nw-idle']);
+  for (const part of bar.children) assert.ok(Math.abs(parseFloat(part.style.width) - 100/3) < .0001);
+  assert.ok(Math.abs(parseFloat(regionButton(h, 'us_china').querySelector('.nw-theme-bar').style.width) - 100/3) < .0001);
+  h.message(listing(regions.map(([region]) => worldArticle({analysis: worldAnalysis({region})}))));
+  assert.deepEqual(regionButtons(h).map(b => b.querySelector('.nw-theme-name').textContent), regions.map(([, name]) => name));
+  h.message(listing([worldArticle()]));
+  assert.deepEqual(regionButtons(h).map(b => b.dataset.topic), ['region:asia_pacific']);
+  h.message(listing([]));
+  assert.equal(worldPanel(h).querySelector('.nw-ranking').textContent, '地區：尚無');
+});
+
+test('region filter acts before event folding, preserves scope and selections on resend, and clears across kinds', t => {
+  const h = setup(t);
+  const id = 'bbbbbbbbbbbb';
+  const items = [worldArticle({title: '早美中', event: id, event_size: 2, published: '2026-09-24T01:00:00Z', analysis: worldAnalysis({region: 'us_china'})}),
+    worldArticle({title: '晚亞太', event: id, event_size: 2, published: '2026-09-24T02:00:00Z'}),
+    worldArticle({title: '獨立亞太'}), worldArticle({title: '乙亞太', source: '乙'}), financeArticle()];
+  h.message(listing(items));
+  choose(h, h.categories, 'world');
+  choose(h, h.select, '甲');
+  const before = worldPanel(h).textContent;
+  regionButton(h, 'asia_pacific').querySelector('.nw-theme-name').click();
+  assert.deepEqual(mainTitles(h), ['晚亞太', '獨立亞太']);
+  assert.equal(worldPanel(h).textContent, before);
+  assert.equal(regionButton(h, 'asia_pacific').getAttribute('aria-pressed'), 'true');
+  assert.equal(h.container.querySelector('.nw-filter').textContent, '已篩選：亞太清除');
+  h.message(listing([...items, worldArticle({title: '新增亞太'})]));
+  assert.equal(h.select.value, '甲');
+  assert.equal(h.categories.value, 'world');
+  assert.deepEqual(mainTitles(h), ['晚亞太', '獨立亞太', '新增亞太']);
+  h.container.querySelector('[aria-label=取消地區篩選]').click();
+  assert.ok(mainTitles(h).includes('早美中'));
+  regionButton(h, 'asia_pacific').click();
+  regionButton(h, 'asia_pacific').click();
+  assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  regionButton(h, 'asia_pacific').click();
+  choose(h, h.categories, 'finance');
+  assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  assert.equal(mainRows(h).length, 1);
+  themeButton(h, 'memory').click();
+  choose(h, h.categories, 'world');
+  assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  assert.ok(mainTitles(h).includes('早美中'));
+});
+
+test('world tags show region and only escalation or deescalation words with correct text colors', t => {
+  const h = setup(t);
+  h.message(listing(['escalation', 'deescalation', 'stalemate', 'not_conflict', 'other'].map(trend =>
+    worldArticle({analysis: worldAnalysis({trend, region: 'middle_east'})}))));
+  assert.deepEqual(mainRows(h).map(row => row.querySelector('.nw-tag').textContent), ['中東 升級', '中東 緩和', '中東', '中東', '中東']);
+  assert.equal(mainRows(h)[0].querySelector('.nw-danger-text').textContent, ' 升級');
+  assert.equal(mainRows(h)[1].querySelector('.nw-calm-text').textContent, ' 緩和');
+  assert.equal(h.container.querySelectorAll('.nw-tag .nw-up, .nw-tag .nw-down').length, 0);
+  const rules = [...h.container.querySelector('style').sheet.cssRules];
+  assert.equal(rules.find(rule => rule.selectorText === '.nw .nw-danger-text').style.color, 'var(--nw-danger)');
+  assert.equal(rules.find(rule => rule.selectorText === '.nw .nw-calm-text').style.color, 'var(--nw-accent)');
+});
+
+test('legacy finance stays supported but invalid kinds or mismatched categories are unanalysed', t => {
+  const h = setup(t);
+  const invalid = [null, undefined, '', 'other', {}, [], true, 1, {toString() { throw Error('do not coerce'); }}];
+  h.message(listing([financeArticle(), financeArticle({analysis: analysis({kind: 'finance'})}),
+    ...invalid.map(kind => financeArticle({analysis: analysis({kind})})),
+    financeArticle({analysis: worldAnalysis()}), worldArticle({analysis: analysis()}),
+    worldArticle({analysis: analysis({kind: 'finance'})})]));
+  const rows = mainRows(h);
+  assert.equal(rows[0].querySelector('.nw-tag').textContent, '記憶體 ▲');
+  assert.equal(rows[1].querySelector('.nw-tag').textContent, '記憶體 ▲');
+  assert.ok(rows.slice(2).every(row => row.querySelector('.nw-tag') === null));
+});
+
+test('invalid world analysis and hostile fields stay text-only and count as unanalysed', t => {
+  const h = setup(t);
+  const evil = '<img src=x onerror=alert(1)>';
+  const values = [undefined, null, [], 1, true, 'bad', {},
+    ...['trend', 'region'].flatMap(field => [undefined, null, [], {}, 1, true, evil, 'constructor', '__proto__']
+      .map(value => worldAnalysis({[field]: value})))];
+  assert.doesNotThrow(() => h.message(listing(values.map(analysis => worldArticle({analysis, title: evil, summary: evil})))));
+  choose(h, h.categories, 'world');
+  assert.equal(mainRows(h).length, values.length);
+  assert.equal(h.container.querySelectorAll('.nw-tag').length, 0);
+  assert.equal(regionButtons(h).length, 0);
+  assert.equal(worldPanel(h).querySelector('.nw-pending').textContent, `分析中 ${values.length}`);
+  assert.equal(worldPanel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), `升級 0、僵持 0、緩和 0、無關 ${values.length}`);
+  assert.equal(h.container.querySelectorAll('img,script').length, 0);
+  assert.equal(h.container.querySelector('.nw-title').textContent, evil);
+  assert.equal(h.container.querySelector('.nw-title').title, evil);
+});
+
+test('world region controls are inert after unmount', t => {
+  const h = setup(t);
+  h.message(listing([worldArticle(), worldArticle({analysis: worldAnalysis({region: 'other'})})]));
+  choose(h, h.categories, 'world');
+  regionButton(h, 'asia_pacific').click();
+  const button = regionButton(h, 'other');
+  const clear = h.container.querySelector('[aria-label=取消地區篩選]');
+  const list = h.container.querySelector('.nw-list');
+  h.handle.unmount();
+  button.click();
+  clear.click();
+  assert.equal(list.children.length, 1);
+  assert.equal(h.container.childNodes.length, 0);
+});

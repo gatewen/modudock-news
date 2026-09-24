@@ -14,18 +14,34 @@ const themeNames = new Map([
   ["transport", "航運航空"], ["consumer_elec", "消費電子"], ["petrochem", "原物料傳產"],
   ["software", "軟體網路"], ["industrial", "工業電腦"], ["macro", "大盤／總經"], ["other", "其他"],
 ]);
+const regionNames = new Map([
+  ["us_china", "美中"], ["asia_pacific", "亞太"], ["middle_east", "中東"],
+  ["europe_russia", "歐洲／俄烏"], ["americas", "美洲"], ["other", "其他"],
+]);
+const regionTopics = new Map([...regionNames].map(([id, name]) => [`region:${id}`, name]));
+const topicNames = new Map([...themeNames, ...regionTopics]);
+const trendIds = new Set(["escalation", "stalemate", "deescalation", "not_conflict", "other"]);
 const marketIds = new Set(["positive", "negative", "mixed", "not_market", "other"]);
 const directionIds = new Set(["bull", "bear", "mixed", "neutral"]);
 const financial = category => category === "finance" || category === "tech";
 function validAnalysis(item) {
   const value = item.analysis;
-  if (!financial(item.category) || !value || typeof value !== "object" || Array.isArray(value)
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const kind = Object.hasOwn(value, "kind") ? value.kind : "finance";
+  if (kind === "world") {
+    return item.category === "world" && typeof value.trend === "string" && trendIds.has(value.trend)
+      && typeof value.region === "string" && regionNames.has(value.region) ? value : null;
+  }
+  if (kind !== "finance" || !financial(item.category)
       || typeof value.market !== "string" || !marketIds.has(value.market)
       || typeof value.theme !== "string" || !themeNames.has(value.theme)
       || typeof value.dir !== "string" || !directionIds.has(value.dir)
       || typeof value.dir_p !== "number" || !Number.isFinite(value.dir_p)
       || value.dir_p < 0 || value.dir_p > 1) return null;
   return value;
+}
+function topicOf(analysis) {
+  return analysis?.kind === "world" ? `region:${analysis.region}` : analysis?.theme;
 }
 function arrow(analysis) {
   if (!analysis || analysis.dir_p < 0.6) return "";
@@ -46,6 +62,7 @@ const css = `
   --nw-surface: var(--md-surface, #f3f3f3);
   --nw-accent: var(--md-accent, #005fb8);
   --nw-focus: var(--md-focus, #005fb8);
+  --nw-danger: var(--md-danger, light-dark(#b42318, #ff8b82));
   --nw-up: light-dark(#c8102e, #ff6b6b);
   --nw-down: light-dark(#0f7b3f, #4fd18b);
   --nw-mixed: light-dark(#b7791f, #f0b429);
@@ -88,6 +105,10 @@ const css = `
 .nw .nw-negative, .nw .nw-bear { background: var(--nw-down); }
 .nw .nw-mixed { background: var(--nw-mixed); }
 .nw .nw-idle { background: var(--nw-idle); }
+.nw .nw-escalation { background: var(--nw-danger); }
+.nw .nw-deescalation { background: var(--nw-accent); }
+.nw .nw-danger-text { color: var(--nw-danger); }
+.nw .nw-calm-text { color: var(--nw-accent); }
 .nw .nw-legend { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 8px 0 18px; }
 .nw .nw-legend-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; color: var(--nw-muted); font-size: 12px; }
 .nw .nw-dot { width: 6px; height: 6px; border-radius: 50%; align-self: center; flex: 0 0 auto; }
@@ -214,15 +235,18 @@ export default function mount(ctx) {
     const dot = make("span", `nw-dot nw-${id}`);
     dot.setAttribute("aria-hidden", "true");
     const value = make("span", "nw-value");
-    entry.append(dot, value, make("span", "", name));
+    const label = make("span", "", name);
+    entry.append(dot, value, label);
     legend.append(entry);
-    return {segment, value, name};
+    return {segment, value, name, dot, label};
   });
-  market.append(make("h3", "nw-heading", "股市訊號"), marketBar, legend);
+  const signalHeading = make("h3", "nw-heading", "股市訊號");
+  market.append(signalHeading, marketBar, legend);
   const macro = make("p", "nw-macro");
   const rankingSection = make("div", "");
   const rankingHeading = make("div", "nw-ranking-heading");
-  rankingHeading.append(make("span", "", "題材"), make("span", "nw-hint", "（點選篩選）"));
+  const rankingTitle = make("span", "", "題材");
+  rankingHeading.append(rankingTitle, make("span", "nw-hint", "（點選篩選）"));
   const ranking = make("div", "nw-ranking");
   ranking.setAttribute("aria-label", "題材排行");
   rankingSection.append(rankingHeading, ranking);
@@ -295,12 +319,28 @@ export default function mount(ctx) {
     button.closest(".nw-row").querySelector(".nw-reports").hidden = !expanded.has(id);
   }
   function drawPanel(scoped) {
-    panel.hidden = !financial(categories.value);
+    const world = categories.value === "world";
+    panel.hidden = !world && !financial(categories.value);
+    panel.setAttribute("aria-label", world ? "國際局勢分析" : "財經分析");
+    clearTheme.setAttribute("aria-label", world ? "取消地區篩選" : "取消題材篩選");
     themeFilter.hidden = panel.hidden || !selectedTheme;
-    themeLabel.textContent = selectedTheme ? `已篩選：${themeNames.get(selectedTheme)}` : "";
+    themeLabel.textContent = selectedTheme ? `已篩選：${topicNames.get(selectedTheme)}` : "";
     if (panel.hidden) return;
-    const counts = {positive: 0, negative: 0, mixed: 0, not_market: 0, other: 0};
-    const themes = new Map([...themeNames.keys()].map(id => [id, {count: 0, bull: 0, bear: 0}]));
+    signalHeading.textContent = world ? "局勢走向" : "股市訊號";
+    rankingTitle.textContent = world ? "地區" : "題材";
+    ranking.setAttribute("aria-label", world ? "地區排行" : "題材排行");
+    macro.hidden = world;
+    const names = world ? regionTopics : themeNames;
+    const parts = world ? [["escalation", "升級"], ["mixed", "僵持"], ["deescalation", "緩和"], ["idle", "無關"]]
+      : [["positive", "正面"], ["mixed", "正反"], ["idle", "無關"], ["negative", "負面"]];
+    marketParts.forEach((part, i) => {
+      part.name = parts[i][1];
+      part.label.textContent = part.name;
+      part.segment.className = `nw-segment nw-${parts[i][0]}`;
+      part.dot.className = `nw-dot nw-${parts[i][0]}`;
+    });
+    const counts = {escalation: 0, stalemate: 0, deescalation: 0, not_conflict: 0, positive: 0, negative: 0, mixed: 0, not_market: 0, other: 0};
+    const themes = new Map([...names.keys()].map(id => [id, {count: 0, bull: 0, bear: 0}]));
     let pending = 0;
     const groups = groupItems(scoped);
     for (const group of groups) {
@@ -310,12 +350,12 @@ export default function mount(ctx) {
         if (analysisEnabled) pending++;
         continue;
       }
-      counts[analysis.market]++;
-      const theme = themes.get(analysis.theme);
+      counts[world ? analysis.trend : analysis.market]++;
+      const theme = themes.get(topicOf(analysis));
       theme.count++;
       const direction = arrow(analysis);
-      if (direction === "▲") theme.bull++;
-      if (direction === "▼") theme.bear++;
+      if (world ? analysis.trend === "escalation" : direction === "▲") theme.bull++;
+      if (world ? analysis.trend === "deescalation" : direction === "▼") theme.bear++;
     }
     const sourceCount = new Set(scoped.map(item => text(item.source)).filter(Boolean)).size;
     sampleCount.textContent = `${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源`;
@@ -323,15 +363,16 @@ export default function mount(ctx) {
     merging.hidden = eventsPending === 0;
     merging.textContent = eventsPending > 0 ? `・合併中 ${eventsPending}` : "";
     warning.hidden = groups.length >= 10;
-    const values = [counts.positive, counts.mixed, counts.not_market + counts.other, counts.negative];
+    const values = world ? [counts.escalation, counts.stalemate, counts.deescalation, counts.not_conflict + counts.other]
+      : [counts.positive, counts.mixed, counts.not_market + counts.other, counts.negative];
     marketBar.dataset.empty = String(groups.length === 0);
     marketBar.setAttribute("aria-label", marketParts.map((part, i) => `${part.name} ${values[i]}`).join("、"));
-    market.title = `無關 ${counts.not_market}、未明 ${counts.other}`;
+    market.title = `無關 ${world ? counts.not_conflict : counts.not_market}、未明 ${counts.other}`;
     marketParts.forEach((part, i) => {
       part.segment.style.width = `${groups.length ? values[i] / groups.length * 100 : 0}%`;
       part.value.textContent = String(values[i]);
     });
-    const total = themes.get("macro");
+    const total = themes.get("macro") || {count: 0, bull: 0, bear: 0};
     macro.replaceChildren(make("span", "", `大盤／總經  ${total.count} 個事件`),
       make("span", "nw-up", `利多 ${total.bull}`), make("span", "nw-down", `利空 ${total.bear}`));
     // Stable sorting preserves the fixed table order for equal counts.
@@ -342,7 +383,7 @@ export default function mount(ctx) {
     for (const child of [...ranking.children]) {
       if (!rankedIds.has(child.dataset.topic)) child.remove();
     }
-    if (!ranked.length) ranking.replaceChildren(make("span", "nw-hint", "題材：尚無"));
+    if (!ranked.length) ranking.replaceChildren(make("span", "nw-hint", world ? "地區：尚無" : "題材：尚無"));
     for (const [id, count] of ranked) {
       let button = existing.get(id);
       if (!button) {
@@ -352,13 +393,13 @@ export default function mount(ctx) {
         const track = make("span", "nw-theme-track");
         track.setAttribute("aria-hidden", "true");
         const bar = make("span", "nw-bar nw-theme-bar");
-        for (const direction of ["bull", "bear", "idle"]) bar.append(make("span", `nw-segment nw-${direction}`));
+        for (const direction of (world ? ["escalation", "deescalation", "idle"] : ["bull", "bear", "idle"])) bar.append(make("span", `nw-segment nw-${direction}`));
         track.append(bar);
-        button.append(make("span", "nw-theme-name", themeNames.get(id)), track, make("span", "nw-theme-count"));
+        button.append(make("span", "nw-theme-name", names.get(id)), track, make("span", "nw-theme-count"));
       }
       button.setAttribute("aria-pressed", String(selectedTheme === id));
-      const directions = [count.bull ? `▲${count.bull}` : "", count.bear ? `▼${count.bear}` : ""].filter(Boolean).join(" ");
-      const description = `${themeNames.get(id)} ${count.count}` + (directions ? `（${directions}）` : "");
+      const directions = [count.bull ? `${world ? "升級 " : "▲"}${count.bull}` : "", count.bear ? `${world ? "緩和 " : "▼"}${count.bear}` : ""].filter(Boolean).join(" ");
+      const description = `${names.get(id)} ${count.count}` + (directions ? `（${directions}）` : "");
       button.setAttribute("aria-label", description);
       button.title = description;
       button.querySelector(".nw-theme-count").textContent = String(count.count);
@@ -373,7 +414,7 @@ export default function mount(ctx) {
 
   function onTheme(event) {
     const button = event.target?.closest?.("button[data-topic]");
-    if (!button || !ranking.contains(button) || !themeNames.has(button.dataset.topic)) return;
+    if (!button || !ranking.contains(button) || !topicNames.has(button.dataset.topic)) return;
     selectedTheme = selectedTheme === button.dataset.topic ? "" : button.dataset.topic;
     drawItems();
   }
@@ -382,20 +423,28 @@ export default function mount(ctx) {
     drawItems();
   }
   function drawItems() {
-    if (!financial(categories.value)) selectedTheme = "";
+    if ((!financial(categories.value) && categories.value !== "world")
+        || (selectedTheme && selectedTheme.startsWith("region:") !== (categories.value === "world"))) selectedTheme = "";
     const scoped = items.filter(item => item && typeof item === "object"
       && (!sources.value || text(item.source) === sources.value)
       && (!categories.value || text(item.category) === categories.value));
     drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
     list.replaceChildren();
-    const filtered = scoped.filter(item => !selectedTheme || validAnalysis(item)?.theme === selectedTheme);
+    const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
     for (const group of groupItems(filtered)) {
       const item = group.reports[0];
       const category = text(item.category);
       const analysis = validAnalysis(item);
       const row = make("li", "nw-row");
       const meta = make("div", "nw-meta");
-      if (analysis && analysis.theme !== "other") {
+      if (analysis?.kind === "world") {
+        const tag = make("span", "nw-tag", regionNames.get(analysis.region));
+        if (analysis.trend === "escalation" || analysis.trend === "deescalation") {
+          const escalating = analysis.trend === "escalation";
+          tag.append(make("span", escalating ? "nw-danger-text" : "nw-calm-text", escalating ? " 升級" : " 緩和"));
+        }
+        meta.append(tag);
+      } else if (analysis && analysis.theme !== "other") {
         const direction = arrow(analysis);
         const name = analysis.theme === "macro" ? "大盤" : themeNames.get(analysis.theme);
         meta.append(make("span", `nw-tag${direction === "▲" ? " nw-up" : direction === "▼" ? " nw-down" : ""}`,
