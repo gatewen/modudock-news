@@ -4,7 +4,7 @@ No network, clock reads, or mutation of caller-owned state. Dates without a
 timezone are interpreted as UTC. first_seen uses oldest-insertion eviction
 (SPEC §5.5), not access-order eviction. Limits use KiB/MiB, as the Outbox does.
 """
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -252,12 +252,17 @@ def fit_packet(packet):
             body["analysis"]["pending"] = (sum(item.get("category") in ANALYSIS_CATEGORIES
                 and item.get("analysis") is None for item in items)
                 if body.get("classify", {}).get("enabled", False) else 0)
+        event_sizes = Counter(item["event"] for item in items if "event" in item)
+        for item in items:
+            if "event" in item:
+                item["event_size"] = event_sizes[item["event"]]
         if "count" in body:
             body["count"] = len(items)
         reserved = sum(CATEGORY_RESERVE for item in items if item.get("category") == "")
         reserved += sum(ANALYSIS_RESERVE for item in items
                         if "analysis" in item and item["analysis"] is None
                         and item.get("category") in ANALYSIS_CATEGORIES | {""})
+        reserved += sum(3 - len(str(item["event_size"])) for item in items if "event_size" in item)
         if len(packet_bytes(result)) + reserved <= MAX_PACKET:
             return result
         if not items:

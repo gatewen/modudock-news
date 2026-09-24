@@ -17,10 +17,12 @@ if __package__:
     from .feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis
+    from .events import candidate_pairs, group_events, _fits as pairs_fit
 else:
     from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from classify import CRITERIA, MAX_ITEMS, MAX_CHARS
     from analyze import ANALYSIS_CATEGORIES, valid_analysis
+    from events import candidate_pairs, group_events, _fits as pairs_fit
 
 
 @dataclass
@@ -48,6 +50,13 @@ class ModelRound:
 
 
 @dataclass
+class EventResult:
+    matches: dict = field(default_factory=dict)
+    finished: tuple = ()
+    round_id: int = 0
+
+
+@dataclass
 class AnalysisResult:
     analyses: dict = field(default_factory=dict)
     finished: tuple = ()
@@ -66,7 +75,7 @@ class ClassifyResult:
 class Scheduler:
     def __init__(self, feeds, fetcher, outbox, seq, *, interval=600,
                  source_timeout=30, round_timeout=60, clock=time.monotonic,
-                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None):
+                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None):
         if not 1 <= len(feeds) <= 32 or min(interval, source_timeout, round_timeout) <= 0:
             raise ValueError("invalid scheduler limits")
         self.feeds, self.fetcher, self.outbox, self.seq = deepcopy(feeds), fetcher, outbox, seq
@@ -77,6 +86,10 @@ class Scheduler:
         self.jobs = queue.Queue(maxsize=32)
         self.classifier = classifier
         self.analyzer = analyzer
+        self.matcher = matcher
+        self.event_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST * 2)
+        self.event_cache = OrderedDict()
+        self.event_in_flight = set()
         self.model_clock = getattr(classifier, "clock", clock)
         self.model_budget = getattr(classifier, "budget", 60)
         self.analysis_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
@@ -180,6 +193,10 @@ class Scheduler:
                 self.cv.notify_all()
 
     def _classify_enabled(self):
+        clients = [client for client in (self.classifier, self.analyzer, self.matcher) if client is not None]
+        if any(not client.enabled for client in clients):
+            for client in clients:
+                client.enabled = False
         return self.classifier is not None and self.classifier.enabled
 
     def _enqueue_classification(self, packet):
@@ -199,6 +216,15 @@ class Scheduler:
                 except queue.Full:
                     continue
                 self.in_flight.add(key)
+            if self.matcher is not None:
+                for pair in candidate_pairs(packet["body"]["items"]):
+                    if pair.automatic or pair.key in self.event_cache or pair.key in self.event_in_flight:
+                        continue
+                    try:
+                        self.event_jobs.put_nowait((work, pair))
+                    except queue.Full:
+                        continue
+                    self.event_in_flight.add(pair.key)
             self.cv.notify_all()
 
     def _submit_classification(self, result):
@@ -233,20 +259,26 @@ class Scheduler:
         # not preemptible. Queue/results/work references all remain bounded.
         while True:
             with self.cv:
-                while not self.stopping and self.classify_jobs.empty() and self.analysis_jobs.empty():
+                while not self.stopping and (
+                    (self.classify_jobs.empty() and self.analysis_jobs.empty() and self.event_jobs.empty())
+                    or any(isinstance(result, ClassifyResult) for result in self.results)
+                ):
                     self.cv.wait()
                 if self.stopping:
                     return
-                jobs = self.classify_jobs if not self.classify_jobs.empty() else self.analysis_jobs
+                jobs = (self.classify_jobs if not self.classify_jobs.empty() else
+                        self.analysis_jobs if not self.analysis_jobs.empty() else self.event_jobs)
+                matching = jobs is self.event_jobs
                 analyzing = jobs is self.analysis_jobs
                 work, item = jobs.get_nowait()
                 batch = [item]
-                chars = len(item[1]) + len(item[2])
-                while not jobs.empty() and len(batch) < MAX_ITEMS:
+                chars = 0 if matching else len(item[1]) + len(item[2])
+                while not jobs.empty() and (matching or len(batch) < MAX_ITEMS):
                     with jobs.mutex:
                         next_work, next_item = jobs.queue[0]
-                    size = len(next_item[1]) + len(next_item[2])
-                    if next_work is not work or chars + size > MAX_CHARS:
+                    size = 0 if matching else len(next_item[1]) + len(next_item[2])
+                    if (next_work is not work or (matching and not pairs_fit(batch + [next_item]))
+                            or chars + size > MAX_CHARS):
                         break
                     batch.append(jobs.get_nowait()[1])
                     chars += size
@@ -256,14 +288,17 @@ class Scheduler:
             result = None
             if allowed:
                 try:
-                    result = self.analyzer.analyze(batch) if analyzing else self.classifier.classify(batch)
+                    result = (self.matcher.match(batch) if matching else
+                              self.analyzer.analyze(batch) if analyzing else self.classifier.classify(batch))
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
             with self.cv:
                 if result is None:
                     work.failed = True
-            keys = tuple(key for key, _, _ in batch)
-            if analyzing:
+            keys = tuple(pair.key for pair in batch) if matching else tuple(key for key, _, _ in batch)
+            if matching:
+                candidate = EventResult(result or {}, keys, work.round_id)
+            elif analyzing:
                 candidate = AnalysisResult(result or {}, keys, work.round_id)
             else:
                 candidate = ClassifyResult(result or {}, keys, work.round_id, tuple(batch), work)
@@ -284,6 +319,28 @@ class Scheduler:
                             "pending": sum(not i["category"] for i in body["items"]) if enabled else 0}
         body["analysis"] = {"pending": sum(i["category"] in ANALYSIS_CATEGORIES
                               and i["analysis"] is None for i in body["items"]) if enabled else 0}
+        return self._decorate_events(packet)
+
+    def _cache_events(self, matches):
+        # Coordinator only, under cv. False is a successful answer too.
+        for key, same in matches.items():
+            if isinstance(key, frozenset) and len(key) == 2 and type(same) is bool:
+                self.event_cache[key] = same
+                if len(self.event_cache) > 20000:
+                    self.event_cache.popitem(last=False)
+
+    def _decorate_events(self, packet):
+        body = packet["body"]
+        pairs = candidate_pairs(body["items"])
+        # Automatic edges may outnumber the FIFO capacity; derive evicted ones
+        # locally as well so they never become pending work or lose grouping.
+        matches = {pair.key: True for pair in pairs if pair.automatic}
+        matches.update(self.event_cache)
+        groups = group_events(body["items"], matches, [feed["name"] for feed in self.feeds])
+        for item in body["items"]:
+            item.update(groups[dedup_key(item["link"])])
+        body["events"] = {"pending": sum(not pair.automatic and pair.key not in self.event_cache for pair in pairs)
+                          if self._classify_enabled() and self.matcher is not None else 0}
         return packet
 
     def _model_resend(self, accepted):
@@ -298,6 +355,21 @@ class Scheduler:
         # Called only under cv by the coordinator. A worker produces exactly
         # one candidate per job; the generation check is the ownership guard.
         self.processed_results += 1
+        if isinstance(candidate, EventResult):
+            self.event_in_flight.difference_update(candidate.finished)
+            self.event_in_flight.difference_update(candidate.matches)
+            self._cache_events(candidate.matches)
+            if not self.active and self.last_list is not None:
+                packet = self._decorate(self.last_list)
+                old = [(i["event"], i["event_size"]) for i in self.last_list["body"]["items"]]
+                new = [(i["event"], i["event_size"]) for i in packet["body"]["items"]]
+                pending_cleared = (self.last_list["body"]["events"]["pending"] > 0
+                                   and packet["body"]["events"]["pending"] == 0)
+                if old != new or pending_cleared:
+                    return packet
+                # Authentication shutdown must still reach all model consumers.
+                return self._model_resend(set())
+            return None
         if isinstance(candidate, AnalysisResult):
             self.analysis_in_flight.difference_update(candidate.finished)
             self.analysis_in_flight.difference_update(candidate.analyses)
@@ -345,6 +417,11 @@ class Scheduler:
         try:
             item_count = len(packet["body"]["items"])
             packet = self.fit(packet)
+            with self.cv:
+                # Fit can remove a representative or whole pair; recount only
+                # the actually emitted items. IDs have fixed length and sizes
+                # were reserved to three digits during fitting.
+                packet = self._decorate_events(packet)
             if not publish and len(packet["body"]["items"]) < item_count:
                 self.log("classify: resend unexpectedly trimmed items")
             if self.outbox.put(packet):
@@ -364,6 +441,8 @@ class Scheduler:
             "op": "list", "items": merge_items([cache.items for cache in caches]),
             "sources": statuses, "at": self.now().isoformat()}}
         with self.cv:
+            self._cache_events({pair.key: True for pair in candidate_pairs(packet["body"]["items"])
+                                if pair.automatic and pair.key not in self.event_cache})
             packet = self._decorate(packet)
         return self._send_list(packet, publish=True)
 
@@ -379,7 +458,7 @@ class Scheduler:
                 while self.results:
                     packet = self._accept(self.results.popleft())
                     if packet is not None:
-                        resends.append(packet)
+                        resends[:] = [packet]
                 self.cv.notify_all()
                 if self.active:
                     now = self.clock()

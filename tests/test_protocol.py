@@ -309,6 +309,42 @@ class ProtocolTests(unittest.TestCase):
             self.assertNotIn(secret.encode(), self.stdout_seen)
             self.assertNotIn(secret.encode(), self.process.stderr.read())
 
+    def test_blocked_event_request_bye_exits_within_second_and_key_never_logged(self):
+        import threading
+        from tests.test_classify import server
+        from tests.test_event_scheduler import response, kind
+        entered = threading.Event()
+        def respond(payload, n, release):
+            if kind(payload) == 'events':
+                entered.set()
+                release.wait()
+            return response(payload)
+        secret = 'events-protocol-secret-' + secrets.token_hex(24)
+        data = (b'<rss><channel><item><title>abcdef</title><link>https://example.com/a</link></item>'
+                b'<item><title>abghij</title><link>https://example.com/b</link></item></channel></rss>')
+        wrapper = ("from back import news; from back.fetch import Result; import sys; "
+                   f"news.Fetcher.fetch = lambda *args: Result('ok', {data!r}, 'https://example.com/feed'); "
+                   "sys.exit(news.main())")
+        with server(respond) as (url, received):
+            self.start(wrapper=wrapper, extra_env={'TYPESAFE_API_KEY': secret, 'NEWS_TEST_JEV_URL': url})
+            self.hello()
+            self.send('up')
+            initial, publish = self.packet(), self.packet()
+            self.assertEqual(initial['body']['events']['pending'], 1)
+            self.assertTrue(all(len(i['event']) == 12 and i['event_size'] == 1 for i in initial['body']['items']))
+            self.assertEqual(publish['t'], 'publish')
+            self.assertTrue(entered.wait(2))
+            self.assertEqual([kind(p) for _, _, p in received], ['classify', 'analysis', 'events'])
+            # Drain ordinary classification/analysis updates before bye.
+            self.packet()
+            self.packet()
+            started = time.monotonic()
+            self.send('bye')
+            self.exited(started)
+            self.assertEqual(self.tail(), [{'t': 'done', 'seq': self.seq}])
+            self.assertNotIn(secret.encode(), self.stdout_seen)
+            self.assertNotIn(secret.encode(), self.process.stderr.read())
+
     def test_no_key_logs_disabled_once_for_both_clients(self):
         from tests.test_scheduler import feed_server
         with feed_server() as (url, _, _):
