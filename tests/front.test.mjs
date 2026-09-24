@@ -262,7 +262,7 @@ test('analysis panel appears only for finance or tech between toolbar and list',
   assert.equal(panel(h).nextElementSibling.nextElementSibling, h.container.querySelector('ul'));
   assert.equal(panel(h).previousElementSibling.contains(h.categories), true);
   assert.equal(panel(h).children.length, 5);
-  assert.equal(panel(h).querySelector('small').textContent, '篇數是報導數，同一事件多家報導會重複計算。');
+  assert.equal(panel(h).querySelector('small').textContent, '同一事件多家報導只算一次。');
 });
 
 test('panel counts scope, unknowns, pending and macro direction using validated analysis', t => {
@@ -285,13 +285,13 @@ test('panel counts scope, unknowns, pending and macro direction using validated 
     panel(h).querySelector('.nw-market').title,
     panel(h).querySelector('.nw-macro').textContent];
   assert.deepEqual(lines(), [
-    '8 則，2 個來源', '分析中 2',
+    '8 個事件（8 則報導），2 個來源', '分析中 2',
     '正面 2、正反 1、無關 4、負面 1', '無關 1、未明 3',
-    '大盤／總經  2 則利多 0利空 1',
+    '大盤／總經  2 個事件利多 0利空 1',
   ]);
   assert.deepEqual(themeButtons(h).map(b => b.getAttribute('aria-label')), ['記憶體 2（▲1）', '光通訊 1（▲1）', '能源 1']);
   choose(h, h.select, '甲');
-  assert.equal(lines()[0], '7 則，1 個來源');
+  assert.equal(lines()[0], '7 個事件（7 則報導），1 個來源');
   assert.equal(lines()[1], '分析中 2');
   assert.equal(lines()[2], '正面 1、正反 1、無關 4、負面 1');
   assert.equal(lines()[3], '無關 1、未明 3');
@@ -675,4 +675,200 @@ test('content shares panel inline insets and theme button insets cancel without 
     assert.equal(style.maxWidth, 'none'); // Allow the grid button to extend into both negative margins.
     assert.equal(button.getAttribute('aria-pressed'), String(selected));
   }
+});
+
+const eventStory = (id, title, hour, overrides = {}) => financeArticle({event: id,
+  event_size: 3, title, published: `2026-09-24T${String(hour).padStart(2, '0')}:00:00Z`, ...overrides});
+const mainRows = h => [...h.container.querySelectorAll('.nw-list > .nw-row')];
+const mainTitles = h => mainRows(h).map(row => row.querySelector('.nw-title').textContent);
+
+test('events collapse to earliest report and toggle accessible other reports with correct count', t => {
+  const h = setup(t);
+  const id = 'abcdef012345';
+  h.message(listing([eventStory(id, '最新', 12), eventStory(id, '最早', 8),
+    eventStory(id, '中間', 10, {source: '乙'}), eventStory('111111111111', '單則', 9, {event_size: 1})]));
+  assert.deepEqual(mainTitles(h), ['最早', '單則']);
+  const row = mainRows(h)[0];
+  const button = row.querySelector('.nw-expand');
+  assert.equal(button.parentElement.className, 'nw-meta');
+  assert.equal(button.parentElement.lastElementChild, button);
+  assert.equal(button.textContent, '另 2 則報導');
+  assert.equal(button.getAttribute('aria-expanded'), 'false');
+  const reports = row.querySelector('.nw-reports');
+  assert.equal(reports.hidden, true);
+  assert.equal(h.window.getComputedStyle(reports).display, 'none');
+  assert.equal(mainRows(h)[1].querySelector('button'), null);
+  button.click();
+  assert.equal(button.getAttribute('aria-expanded'), 'true');
+  assert.equal(reports.hidden, false);
+  assert.deepEqual([...reports.querySelectorAll('.nw-report-title')].map(a => a.textContent), ['中間', '最新']);
+  assert.deepEqual([...reports.querySelectorAll('.nw-source')].map(a => a.textContent), ['乙', '甲']);
+  assert.ok([...reports.querySelectorAll('.nw-time')].every(time => /^\d{2}:\d{2}$/.test(time.textContent)));
+  for (const a of reports.querySelectorAll('a')) {
+    assert.equal(a.target, '_blank');
+    assert.equal(a.rel, 'noopener noreferrer');
+    assert.equal(a.title, '摘要');
+  }
+  button.click();
+  assert.equal(button.getAttribute('aria-expanded'), 'false');
+  assert.equal(reports.hidden, true);
+});
+
+test('source category and topic filter individual reports before selecting representative and N', t => {
+  const h = setup(t);
+  const id = '000000000001';
+  h.message(listing([
+    eventStory(id, '社會最早', 6, {category: 'society', event_size: 5}),
+    eventStory(id, '甲代工', 7, {event_size: 5, analysis: analysis({theme: 'foundry'})}),
+    eventStory(id, '乙記憶體', 8, {event_size: 5, source: '乙'}),
+    eventStory(id, '甲記憶體', 9, {event_size: 5}),
+    eventStory(id, '甲科技', 10, {event_size: 5, category: 'tech'}),
+  ]));
+  assert.deepEqual(mainTitles(h), ['社會最早']);
+  assert.equal(h.container.querySelector('.nw-expand').textContent, '另 4 則報導');
+  choose(h, h.categories, 'finance');
+  assert.deepEqual(mainTitles(h), ['甲代工']);
+  assert.equal(h.container.querySelector('.nw-expand').textContent, '另 2 則報導');
+  choose(h, h.select, '乙');
+  assert.deepEqual(mainTitles(h), ['乙記憶體']);
+  assert.equal(h.container.querySelector('.nw-expand'), null);
+  choose(h, h.select, '甲');
+  // Another event supplies the memory button: event 1's panel analysis is foundry.
+  const existing = [eventStory(id, '甲代工', 7, {analysis: analysis({theme: 'foundry'})}), eventStory(id, '甲記憶體', 9),
+    eventStory('000000000002', '獨立記憶體', 10, {event_size: 1})];
+  h.message(listing(existing));
+  const before = panel(h).textContent;
+  themeButton(h, 'memory').click();
+  assert.deepEqual(mainTitles(h), ['甲記憶體', '獨立記憶體']);
+  assert.equal(h.container.querySelector('.nw-expand'), null);
+  assert.equal(panel(h).textContent, before);
+});
+
+test('expanded event survives same-at replacement, representative change and filters', t => {
+  const h = setup(t);
+  const id = '000000000003';
+  const items = [eventStory(id, '晚', 12), eventStory(id, '早', 8)];
+  h.message(listing(items));
+  choose(h, h.select, '甲');
+  choose(h, h.categories, 'finance');
+  themeButton(h, 'memory').click();
+  h.container.querySelector('.nw-expand').click();
+  h.message(listing([...items, eventStory(id, '更早', 6)]));
+  assert.equal(h.select.value, '甲');
+  assert.equal(h.categories.value, 'finance');
+  assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(mainTitles(h), ['更早']);
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'), 'true');
+  assert.equal(h.container.querySelector('.nw-expand').textContent, '另 2 則報導');
+  assert.equal(h.container.querySelector('.nw-reports').hidden, false);
+  choose(h, h.select, '乙');
+  assert.equal(mainRows(h).length, 0);
+  choose(h, h.select, '甲');
+  assert.equal(h.container.querySelector('.nw-reports').hidden, false);
+  h.message(listing(items.map(item => ({...item, event: '000000000004'}))));
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'), 'false');
+});
+
+test('panel counts events and takes earliest valid analysis while retaining report and source counts', t => {
+  const h = setup(t);
+  const items = [
+    eventStory('aaaaaaaaaaaa', '無分析', 6, {analysis: null, event_size: 4}),
+    eventStory('aaaaaaaaaaaa', '先分析負面', 8, {source: '乙', event_size: 4, analysis: analysis({market: 'negative', dir: 'bear'})}),
+    ...[10, 12].map(hour => eventStory('aaaaaaaaaaaa', '後分析正面', hour, {event_size: 4})),
+    ...[7, 9, 11].map(hour => eventStory('bbbbbbbbbbbb', '大盤', hour, {analysis: analysis({market: 'mixed', theme: 'macro'})})),
+    ...[7, 9, 11].map(hour => eventStory('cccccccccccc', '未分析', hour, {analysis: null})),
+  ];
+  h.message(listing([...items].reverse()));
+  choose(h, h.categories, 'finance');
+  assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（10 則報導），2 個來源');
+  assert.equal(panel(h).querySelector('.nw-pending').textContent, '分析中 1');
+  assert.equal(panel(h).querySelector('.nw-warning').hidden, false); // 10 reports but only 3 events.
+  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '正面 0、正反 1、無關 1、負面 1');
+  assert.equal(panel(h).querySelector('.nw-macro').textContent, '大盤／總經  1 個事件利多 1利空 0');
+  assert.equal(themeButton(h, 'memory').getAttribute('aria-label'), '記憶體 1（▼1）');
+  assert.equal(panel(h).querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
+  choose(h, h.select, '甲');
+  assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（9 則報導），1 個來源');
+  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '正面 1、正反 1、無關 1、負面 0');
+  assert.equal(themeButton(h, 'memory').getAttribute('aria-label'), '記憶體 1（▲1）');
+});
+
+test('representative compares actual timestamps and uses source order on equal dates', t => {
+  const h = setup(t);
+  const id = 'dddddddddddd';
+  h.message(listing([
+    eventStory(id, '晚但字面早', 1, {published: '2026-09-24T01:00:00-08:00'}),
+    eventStory(id, '乙同時', 8, {source: '乙'}), eventStory(id, '甲同時', 8),
+  ]));
+  assert.deepEqual(mainTitles(h), ['甲同時']);
+  h.message(listing([eventStory(id, '壞日期', 1, {published: {}}), eventStory(id, '有效日期', 8)]));
+  assert.deepEqual(mainTitles(h), ['有效日期']);
+});
+
+test('malformed event metadata always stays in separate singleton groups without coercion', t => {
+  const h = setup(t);
+  const throwing = {toString() { throw new Error('do not stringify'); }};
+  const bad = [
+    ...['', 'abc', 'gggggggggggg', '0000000000000', 'aaaaaaaaaaaa\n', '<img src=x>', null, undefined, 1, {}, [], throwing]
+      .map(event => ({event, event_size: 2})),
+    ...[undefined, null, 0, -1, .5, '2', true, NaN, Infinity, {}, [], throwing]
+      .map(event_size => ({event: 'aaaaaaaaaaaa', event_size})),
+  ];
+  assert.doesNotThrow(() => h.message(listing(bad.map(overrides => financeArticle(overrides)))));
+  assert.equal(mainRows(h).length, bad.length);
+  assert.equal(h.container.querySelector('.nw-expand'), null);
+  choose(h, h.categories, 'finance');
+  assert.equal(themeButton(h, 'memory').querySelector('.nw-theme-count').textContent, String(bad.length));
+  assert.equal(h.container.querySelector('img'), null);
+  // Uppercase is still valid hex, and the supplied size never fabricates reports.
+  h.message(listing([eventStory('ABCDEFABCDEF', '大寫', 8, {event_size: 999}),
+    eventStory('abcdefabcdef', '小寫', 9, {event_size: 999})]));
+  assert.equal(mainRows(h).length, 1);
+  assert.equal(h.container.querySelector('.nw-expand').textContent, '另 1 則報導');
+});
+
+test('merging status shows only a positive integer and updates to zero safely', t => {
+  const h = setup(t);
+  choose(h, h.categories, 'finance');
+  const merging = h.container.querySelector('.nw-merging');
+  h.message({...listing([financeArticle()]), events: {pending: 17}});
+  assert.equal(merging.hidden, false);
+  assert.equal(merging.textContent, '・合併中 17');
+  for (const pending of [0, -1, .5, '17', null, undefined, true, {}, [], NaN, Infinity]) {
+    h.message({...listing([financeArticle()]), events: {pending}});
+    assert.equal(merging.hidden, true);
+    assert.equal(merging.textContent, '');
+  }
+  for (const events of [null, undefined, 'bad', false, []]) {
+    assert.doesNotThrow(() => h.message({...listing([]), events}));
+    assert.equal(merging.hidden, true);
+  }
+});
+
+test('expanded reports retain text and URL defenses, muted styling and remove delegation on unmount', t => {
+  const h = setup(t);
+  const evil = '<img src=x onerror=alert(1)>';
+  const id = 'eeeeeeeeeeee';
+  h.message(listing([eventStory(id, '代表', 6),
+    eventStory(id, evil, 8, {summary: evil, source: evil, link: 'javascript:alert(1)'}),
+    eventStory(id, '安全連結', 9)]));
+  const button = h.container.querySelector('.nw-expand');
+  button.click();
+  const reports = h.container.querySelector('.nw-reports');
+  assert.equal(reports.querySelector('span.nw-report-title').textContent, evil);
+  assert.equal(reports.querySelector('span.nw-report-title').title, evil);
+  assert.equal(reports.querySelector('.nw-source').textContent, evil);
+  assert.equal(reports.querySelectorAll('a').length, 1);
+  assert.equal(h.container.querySelectorAll('img,script').length, 0);
+  const rules = [...h.container.querySelector('style').sheet.cssRules];
+  for (const selector of ['.nw .nw-report', '.nw .nw-report-title']) {
+    const style = rules.find(rule => rule.selectorText === selector).style;
+    assert.equal(style.fontSize, '12px');
+    assert.equal(style.color, 'var(--nw-muted)');
+  }
+  h.handle.unmount();
+  button.click();
+  assert.equal(button.getAttribute('aria-expanded'), 'true');
+  assert.equal(reports.hidden, false);
+  assert.equal(h.container.childNodes.length, 0);
 });

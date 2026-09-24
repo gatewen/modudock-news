@@ -32,6 +32,11 @@ function arrow(analysis) {
   return analysis.dir === "bull" ? "▲" : analysis.dir === "bear" ? "▼" : "";
 }
 
+function eventId(item) {
+  return typeof item.event === "string" && item.event.length === 12 && /^[0-9a-f]{12}$/i.test(item.event)
+    && Number.isInteger(item.event_size) && item.event_size > 0 ? item.event.toLowerCase() : null;
+}
+
 const css = `
 .nw {
   --nw-bg: var(--md-bg, #ffffff);
@@ -115,6 +120,12 @@ const css = `
 .nw .nw-title { display: block; font-size: 15px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; color: var(--nw-fg); text-decoration: none; }
 .nw a.nw-title:hover { color: var(--nw-accent); text-decoration: underline; }
 .nw .nw-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--nw-muted); }
+.nw .nw-expand { color: var(--nw-muted); background: transparent; padding: 0 5px; font-size: 12px; }
+.nw .nw-reports { list-style: none; margin: 10px 0 0; padding: 0 0 0 16px; border-left: 1px solid var(--nw-line); }
+.nw .nw-report { padding: 6px 0; font-size: 12px; color: var(--nw-muted); }
+.nw .nw-report-title { color: var(--nw-muted); font-size: 12px; text-decoration: none; overflow-wrap: anywhere; }
+.nw a.nw-report-title:hover { color: var(--nw-accent); text-decoration: underline; }
+.nw .nw-report-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .nw .nw-empty { padding: 32px 0; text-align: center; color: var(--nw-muted); }
 .nw .nw-empty button { display: block; margin: 12px auto 0; }
 .nw .nw-toolbar, .nw .nw-filter, .nw .nw-row { padding-inline: 16px; }
@@ -188,7 +199,9 @@ export default function mount(ctx) {
   const sampleCount = make("span", "nw-sample-count");
   const pendingCount = make("span", "nw-pending");
   const warning = make("span", "nw-warning", "樣本少，僅供參考");
-  sample.append(sampleCount, pendingCount, warning);
+  const merging = make("span", "nw-merging");
+  merging.hidden = true;
+  sample.append(sampleCount, pendingCount, merging, warning);
   const market = make("div", "nw-market");
   const marketBar = make("div", "nw-bar nw-market-bar");
   marketBar.setAttribute("role", "img");
@@ -213,7 +226,7 @@ export default function mount(ctx) {
   const ranking = make("div", "nw-ranking");
   ranking.setAttribute("aria-label", "題材排行");
   rankingSection.append(rankingHeading, ranking);
-  const note = make("small", "nw-note", "篇數是報導數，同一事件多家報導會重複計算。");
+  const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(sample, market, macro, rankingSection, note);
   toolbar.append(refresh, sources, categories, status);
   root.append(toolbar, panel, themeFilter, list, empty);
@@ -225,6 +238,9 @@ export default function mount(ctx) {
   let received = false;
   let selectedTheme = "";
   let analysisEnabled = true;
+  let eventsPending = 0;
+  const expanded = new Set();
+  let sourceOrder = new Map();
   const text = (value) => typeof value === "string" ? value : "";
   const localTime = (value) => {
     if (!text(value)) return "";
@@ -236,6 +252,48 @@ export default function mount(ctx) {
   function onRefresh() {
     if (up && !disposed) ctx.channel.send({ op: "refresh" });
   }
+  function groupItems(scoped) {
+    const groups = new Map();
+    for (const item of scoped) {
+      const id = eventId(item);
+      const key = id || Symbol(); // Invalid metadata must never merge two reports.
+      if (!groups.has(key)) groups.set(key, {id, reports: []});
+      groups.get(key).reports.push(item);
+    }
+    const timestamp = item => {
+      const value = Date.parse(text(item.published));
+      return Number.isFinite(value) ? value : Infinity;
+    };
+    for (const group of groups.values()) {
+      group.reports.sort((a, b) => (timestamp(a) - timestamp(b))
+        || ((sourceOrder.get(text(a.source)) ?? Infinity) - (sourceOrder.get(text(b.source)) ?? Infinity)) || 0);
+    }
+    return [...groups.values()];
+  }
+  function newsTitle(item, className) {
+    let safeURL = null;
+    try {
+      const url = new URL(text(item.link));
+      if (url.protocol === "http:" || url.protocol === "https:") safeURL = url.href;
+    } catch { /* Invalid and relative links stay plain text. */ }
+    const title = make(safeURL ? "a" : "span", className, text(item.title));
+    title.title = text(item.summary);
+    if (safeURL) {
+      title.href = safeURL;
+      title.target = "_blank";
+      title.rel = "noopener noreferrer";
+    }
+    return title;
+  }
+  function onExpand(event) {
+    const button = event.target?.closest?.("button[data-event]");
+    if (!button || !list.contains(button)) return;
+    const id = button.dataset.event;
+    if (expanded.has(id)) expanded.delete(id);
+    else expanded.add(id);
+    button.setAttribute("aria-expanded", String(expanded.has(id)));
+    button.closest(".nw-row").querySelector(".nw-reports").hidden = !expanded.has(id);
+  }
   function drawPanel(scoped) {
     panel.hidden = !financial(categories.value);
     themeFilter.hidden = panel.hidden || !selectedTheme;
@@ -244,8 +302,9 @@ export default function mount(ctx) {
     const counts = {positive: 0, negative: 0, mixed: 0, not_market: 0, other: 0};
     const themes = new Map([...themeNames.keys()].map(id => [id, {count: 0, bull: 0, bear: 0}]));
     let pending = 0;
-    for (const item of scoped) {
-      const analysis = validAnalysis(item);
+    const groups = groupItems(scoped);
+    for (const group of groups) {
+      const analysis = group.reports.map(validAnalysis).find(Boolean);
       if (!analysis) {
         counts.other++;
         if (analysisEnabled) pending++;
@@ -259,19 +318,21 @@ export default function mount(ctx) {
       if (direction === "▼") theme.bear++;
     }
     const sourceCount = new Set(scoped.map(item => text(item.source)).filter(Boolean)).size;
-    sampleCount.textContent = `${scoped.length} 則，${sourceCount} 個來源`;
+    sampleCount.textContent = `${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源`;
     pendingCount.textContent = `分析中 ${pending}`;
-    warning.hidden = scoped.length >= 10;
+    merging.hidden = eventsPending === 0;
+    merging.textContent = eventsPending > 0 ? `・合併中 ${eventsPending}` : "";
+    warning.hidden = groups.length >= 10;
     const values = [counts.positive, counts.mixed, counts.not_market + counts.other, counts.negative];
-    marketBar.dataset.empty = String(scoped.length === 0);
+    marketBar.dataset.empty = String(groups.length === 0);
     marketBar.setAttribute("aria-label", marketParts.map((part, i) => `${part.name} ${values[i]}`).join("、"));
     market.title = `無關 ${counts.not_market}、未明 ${counts.other}`;
     marketParts.forEach((part, i) => {
-      part.segment.style.width = `${scoped.length ? values[i] / scoped.length * 100 : 0}%`;
+      part.segment.style.width = `${groups.length ? values[i] / groups.length * 100 : 0}%`;
       part.value.textContent = String(values[i]);
     });
     const total = themes.get("macro");
-    macro.replaceChildren(make("span", "", `大盤／總經  ${total.count} 則`),
+    macro.replaceChildren(make("span", "", `大盤／總經  ${total.count} 個事件`),
       make("span", "nw-up", `利多 ${total.bull}`), make("span", "nw-down", `利空 ${total.bear}`));
     // Stable sorting preserves the fixed table order for equal counts.
     const ranked = [...themes].filter(([id, count]) => id !== "macro" && id !== "other" && count.count)
@@ -327,10 +388,11 @@ export default function mount(ctx) {
       && (!categories.value || text(item.category) === categories.value));
     drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
     list.replaceChildren();
-    for (const item of scoped) {
+    const filtered = scoped.filter(item => !selectedTheme || validAnalysis(item)?.theme === selectedTheme);
+    for (const group of groupItems(filtered)) {
+      const item = group.reports[0];
       const category = text(item.category);
       const analysis = validAnalysis(item);
-      if (selectedTheme && analysis?.theme !== selectedTheme) continue;
       const row = make("li", "nw-row");
       const meta = make("div", "nw-meta");
       if (analysis && analysis.theme !== "other") {
@@ -341,21 +403,25 @@ export default function mount(ctx) {
       }
       meta.append(make("span", "nw-category", categoryNames.get(category) || "未分類"),
         make("span", "nw-source", text(item.source)), make("span", "nw-time", localTime(item.published)));
-      let safeURL = null;
-      try {
-        const url = new URL(text(item.link));
-        if (url.protocol === "http:" || url.protocol === "https:") safeURL = url.href;
-      } catch { /* Invalid and relative links stay plain text. */ }
-      const title = document.createElement(safeURL ? "a" : "span");
-      title.className = "nw-title";
-      title.textContent = text(item.title);
-      title.title = text(item.summary);
-      if (safeURL) {
-        title.href = safeURL;
-        title.target = "_blank";
-        title.rel = "noopener noreferrer";
+      row.append(newsTitle(item, "nw-title"), meta);
+      if (group.reports.length > 1) {
+        const toggle = make("button", "nw-expand", `另 ${group.reports.length - 1} 則報導`);
+        toggle.type = "button";
+        toggle.dataset.event = group.id;
+        toggle.setAttribute("aria-expanded", String(expanded.has(group.id)));
+        meta.append(toggle);
+        const reports = make("ul", "nw-reports");
+        reports.setAttribute("aria-label", "同事件其他報導");
+        reports.hidden = !expanded.has(group.id);
+        for (const report of group.reports.slice(1)) {
+          const entry = make("li", "nw-report");
+          const details = make("div", "nw-report-meta");
+          details.append(make("span", "nw-source", text(report.source)), make("span", "nw-time", localTime(report.published)));
+          entry.append(newsTitle(report, "nw-report-title"), details);
+          reports.append(entry);
+        }
+        row.append(reports);
       }
-      row.append(title, meta);
       list.append(row);
     }
     empty.hidden = list.children.length > 0;
@@ -371,6 +437,10 @@ export default function mount(ctx) {
   function renderList(body) {
     received = true;
     items = Array.isArray(body.items) ? body.items : [];
+    const presentEvents = new Set(items.filter(item => item && typeof item === "object").map(eventId).filter(Boolean));
+    for (const id of expanded) if (!presentEvents.has(id)) expanded.delete(id);
+    const events = body.events && typeof body.events === "object" ? body.events : {};
+    eventsPending = Number.isInteger(events.pending) && events.pending > 0 ? events.pending : 0;
     const previous = sources.value;
     const records = Array.isArray(body.sources) ? body.sources : [];
     sources.replaceChildren(all);
@@ -384,6 +454,7 @@ export default function mount(ctx) {
       option.textContent = name;
       sources.append(option);
     }
+    sourceOrder = new Map([...names].map((name, i) => [name, i]));
     sources.value = names.has(previous) ? previous : "";
     const failed = records.filter(source => source?.ok === false).length;
     const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
@@ -394,6 +465,7 @@ export default function mount(ctx) {
     status.textContent = [updated ? `${updated} 更新` : "", failed > 0 ? `失敗來源：${failed}` : "", classification].filter(Boolean).join(" · ");
     drawItems();
   }
+  list.addEventListener("click", onExpand);
   clearAll.addEventListener("click", onClearAll);
   ranking.addEventListener("click", onTheme);
   clearTheme.addEventListener("click", onClearTheme);
@@ -418,6 +490,9 @@ export default function mount(ctx) {
       refresh.removeEventListener("click", onRefresh);
       sources.removeEventListener("change", drawItems);
       categories.removeEventListener("change", drawItems);
+      list.removeEventListener("click", onExpand);
+      expanded.clear();
+      sourceOrder.clear();
       clearAll.removeEventListener("click", onClearAll);
       ranking.removeEventListener("click", onTheme);
       clearTheme.removeEventListener("click", onClearTheme);
