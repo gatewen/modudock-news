@@ -16,16 +16,20 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.parsers import expat
 
 if __package__:
-    from .analyze import ANALYSIS_CATEGORIES, QUESTIONS
+    from .analyze import ANALYSIS_CATEGORIES, QUESTIONS, WORLD_QUESTIONS
     from .classify import CRITERIA
 else:
-    from analyze import ANALYSIS_CATEGORIES, QUESTIONS
+    from analyze import ANALYSIS_CATEGORIES, QUESTIONS, WORLD_QUESTIONS
     from classify import CRITERIA
 
 LONGEST_CATEGORY = max(CRITERIA, key=len)
 CATEGORY_RESERVE = len(json.dumps(LONGEST_CATEGORY)) - len(json.dumps(""))
 MAX_ANALYSIS = {name: max(criteria, key=len) for name, (_, criteria, _) in QUESTIONS.items()}
 MAX_ANALYSIS["dir_p"] = 0.99
+MAX_ANALYSIS["kind"] = "finance"
+MAX_WORLD_ANALYSIS = {name: max(criteria, key=len) for name, (_, criteria, _) in WORLD_QUESTIONS.items()}
+MAX_WORLD_ANALYSIS["kind"] = "world"
+MAX_ANALYSIS = max((MAX_ANALYSIS, MAX_WORLD_ANALYSIS), key=lambda value: len(json.dumps(value)))
 ANALYSIS_RESERVE = len(json.dumps(MAX_ANALYSIS)) - len(json.dumps(None))
 MAX_ITEMS_LIST = 300
 MAX_PACKET = 900 * 1024

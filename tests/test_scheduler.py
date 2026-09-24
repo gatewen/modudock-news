@@ -820,7 +820,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             self.assertEqual([i["link"] for i in final["items"]], [i["link"] for i in initial["items"]])
             for item in final["items"]:
                 if item["category"] in {'finance', 'tech'}:
-                    self.assertEqual(item["analysis"], {"market": "positive", "theme": "memory", "dir": "bull", "dir_p": 0.8})
+                    self.assertEqual(item["analysis"], {"kind": "finance", "market": "positive", "theme": "memory", "dir": "bull", "dir_p": 0.8})
                 else:
                     self.assertIsNone(item["analysis"])
             self.assertEqual([model_kind(p) for _, _, p in received], ['classification', 'analysis'])
@@ -1255,3 +1255,97 @@ class AnalysisSchedulerTests(unittest.TestCase):
                 self.assertEqual(sum(len(p['state']) for _, _, p in received if model_kind(p) == kind), expected)
             while not sink.packets.empty():
                 self.assertEqual(sink.packets.get_nowait()['t'], 'msg')  # No second publish.
+
+    def test_world_and_finance_analyze_separately_other_categories_never_analyzed(self):
+        from tests.test_classify import server
+        from tests.test_analyze import world_answers
+        labels = ['finance-a', 'world-b', 'tech-c', 'world-d', 'politics-e', 'society-f',
+                  'life-g', 'sports-h', 'entertainment-i', 'other-j']
+        def respond(payload, *_):
+            body = world_answers(len(payload['state'])) if 'trend_0' in payload['questions'] else model_answers(payload)
+            return 200, body, {}
+        with server(respond) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels), **self.clients(url))
+            scheduler.start()
+            initial = self.round(sink)
+            eventually(lambda: self.idle(scheduler) and scheduler.last_list['body']['classify']['pending'] == 0
+                       and scheduler.last_list['body']['analysis']['pending'] == 0)
+            with scheduler.cv:
+                final = deepcopy(scheduler.last_list['body'])
+            for item in final['items']:
+                if item['category'] == 'world':
+                    self.assertEqual(item['analysis'], {'kind': 'world', 'trend': 'escalation', 'region': 'asia_pacific'})
+                elif item['category'] in {'finance', 'tech'}:
+                    self.assertEqual(item['analysis']['kind'], 'finance')
+                else:
+                    self.assertIsNone(item['analysis'])
+            analyzed = []
+            for _, _, payload in received[1:]:
+                world = 'trend_0' in payload['questions']
+                titles = [i['title'] for i in payload['state'].values()]
+                self.assertTrue(all(title.split('-')[0] in ({'world'} if world else {'finance', 'tech'}) for title in titles))
+                analyzed.extend(titles)
+                self.assertFalse('trend_0' in payload['questions'] and 'market_0' in payload['questions'])
+            self.assertCountEqual(analyzed, labels[:4])
+            updates = []
+            while not sink.packets.empty():
+                packet = sink.packets.get_nowait()
+                self.assertEqual(packet['t'], 'msg')
+                self.assertEqual(packet['body']['at'], initial['at'])
+                updates.append(packet['body'])
+            self.assertTrue(any(body['analysis']['pending'] == 4 for body in updates))
+            self.assertTrue(any(any(i['category'] == 'world' and i['analysis'] for i in body['items']) for body in updates))
+
+    def test_cached_world_category_schedules_analysis_and_cache_hit_skips_http(self):
+        from tests.test_classify import server
+        from tests.test_analyze import world_answers
+        with server(lambda p, *_: (200, world_answers(len(p['state'])), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['world-a']), **self.clients(url))
+            scheduler.classify_cache['https://example.com/world-a'] = 'world'
+            scheduler.start()
+            initial = self.round(sink)
+            self.assertEqual(initial['analysis']['pending'], 1)
+            final = self.next_analysis(sink)
+            self.assertEqual(final['analysis']['pending'], 0)
+            self.assertEqual(final['items'][0]['analysis']['kind'], 'world')
+            eventually(lambda: self.idle(scheduler))
+            scheduler.refresh()
+            self.assertEqual(self.round(sink)['analysis']['pending'], 0)
+            self.assertEqual(len(received), 1)
+
+    def test_world_size_reserve_uses_larger_shape_and_preserves_resend_items(self):
+        from back.analyze import QUESTIONS, WORLD_QUESTIONS
+        from back.feedparse import ANALYSIS_RESERVE, MAX_PACKET, packet_bytes
+        from back.scheduler import Cache, AnalysisResult
+        from hashlib import sha1
+        longest_finance = {name: max(criteria, key=len) for name, (_, criteria, _) in QUESTIONS.items()}
+        longest_finance.update(kind='finance', dir_p=.99)
+        longest_world = {name: max(criteria, key=len) for name, (_, criteria, _) in WORLD_QUESTIONS.items()}
+        longest_world['kind'] = 'world'
+        self.assertEqual(ANALYSIS_RESERVE, max(len(json.dumps(longest_finance)), len(json.dumps(longest_world))) - len('null'))
+        scheduler, sink, logs = self.create(lambda *_: ok(), **self.clients('http://127.0.0.1:9'))
+        self.schedulers.remove(scheduler)  # No threads are started in this boundary test.
+        items = [dict(title=sha1(str(i).encode()).hexdigest(), summary='', link=f'https://example.com/{i}',
+                      source='0', published='2026-09-24T00:00:00Z') for i in range(MAX_ITEMS_LIST)]
+        with scheduler.cv:
+            scheduler.classify_cache.update({i['link']: 'world' for i in items})
+            packet = scheduler._decorate({'t': 'msg', 'seq': 891, 'body': {'op': 'list', 'items': items, 'sources': [], 'at': 'fixed'}})
+        allowance = MAX_PACKET - len(packet_bytes(packet)) - 1000
+        packet['body']['padding'] = 'x' * (allowance - len(', "padding": ""'))
+        self.assertLessEqual(len(packet_bytes(packet)), MAX_PACKET)
+        filled = deepcopy(packet)
+        for item in filled['body']['items']:
+            item['analysis'] = longest_world
+        self.assertGreater(len(packet_bytes(filled)), MAX_PACKET)
+        scheduler._send_list(packet, publish=True)
+        initial = self.round(sink)
+        self.assertLess(len(initial['items']), MAX_ITEMS_LIST)
+        self.assertEqual(initial['analysis']['pending'], len(initial['items']))
+        with scheduler.cv:
+            update = scheduler._accept(AnalysisResult({i['link']: longest_world for i in initial['items']}))
+        scheduler._send_list(update)
+        final = self.next_analysis(sink)
+        self.assertEqual([i['link'] for i in final['items']], [i['link'] for i in initial['items']])
+        self.assertEqual(final['analysis']['pending'], 0)
+        self.assertTrue(all(i['analysis'] == longest_world for i in final['items']))
+        self.assertEqual(logs, [])

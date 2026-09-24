@@ -41,7 +41,7 @@ class AnalyzeTests(unittest.TestCase):
         }
         with server(lambda p, *_: (200, answers(len(p["state"])), {})) as (url, received):
             result = self.client(url).analyze(items())
-        self.assertEqual(result, {f"private-key-{i}": {"market": "positive", "theme": "memory", "dir": "bull", "dir_p": 0.8} for i in range(2)})
+        self.assertEqual(result, {f"private-key-{i}": {"kind": "finance", "market": "positive", "theme": "memory", "dir": "bull", "dir_p": 0.8} for i in range(2)})
         _, headers, payload = received[0]
         headers = {k.lower(): v for k, v in headers.items()}
         self.assertEqual(headers["authorization"], "Bearer analysis-secret")
@@ -157,7 +157,7 @@ class AnalyzeTests(unittest.TestCase):
                 body["answers"][f"{name}_0"]["probabilities"] = {original: value}
                 with server(lambda *_: (200, body, {})) as (url, _):
                     result = self.client(url).analyze(items(1))["private-key-0"]
-                reference = {"market": "positive", "theme": "memory", "dir": "bull", "dir_p": 0.8}
+                reference = {"kind": "finance", "market": "positive", "theme": "memory", "dir": "bull", "dir_p": 0.8}
                 reference[name] = expected
                 if name == "dir":
                     reference["dir_p"] = value
@@ -281,3 +281,98 @@ class AnalyzeTests(unittest.TestCase):
             self.assertIsNone(client.analyze(items(1, "x" * 8001, "")))
             self.assertEqual(list(client.analyze_round(items(1, "x" * 8001, ""))), [])
             self.assertEqual(received, [])
+
+
+def world_answers(n=2, probability=0.8):
+    return {'answers': {f'{name}_{i}': {'choice': choice, 'probabilities': {choice: probability}}
+                        for i in range(n) for name, choice in
+                        (('trend', 'escalation'), ('region', 'asia_pacific'))}}
+
+
+class WorldAnalyzeTests(unittest.TestCase):
+    def client(self, url):
+        return Analyzer(endpoint=url, key='world-test-secret', log=lambda _: None)
+
+    def test_exact_spec_questions_criteria_named_state_and_kind(self):
+        spec = (Path(__file__).resolve().parents[1] / 'docs/SPEC.md').read_text()
+        section = spec.split('### 17.1', 1)[1].split('### 17.2', 1)[0]
+        expected = {}
+        for name in ['trend', 'region']:
+            part = section.split(f'- `{name}`：', 1)[1].split('\n- ', 1)[0]
+            expected[name] = {}
+            for line in part.splitlines():
+                if line.strip().startswith('| `'):
+                    cells = [c.strip() for c in line.strip().strip('|').split('|')]
+                    expected[name][cells[0].strip('`')] = cells[-1]
+        instructions = {'trend': '這則報導描述的國際衝突或緊張情勢，走向是什麼？',
+                        'region': '這則報導主要涉及哪個地區？'}
+        with server(lambda p, *_: (200, world_answers(len(p['state'])), {})) as (url, received):
+            result = self.client(url).analyze(items(), kind='world')
+        self.assertEqual(result, {f'private-key-{i}': {'kind': 'world', 'trend': 'escalation', 'region': 'asia_pacific'} for i in range(2)})
+        payload = received[0][2]
+        self.assertEqual(payload['model'], 'jev-1.13.0')
+        self.assertEqual(payload['state'], {f'news_{i}': {'title': '標題', 'summary': '摘要'} for i in range(2)})
+        self.assertEqual(set(payload['questions']), {'trend_0', 'region_0', 'trend_1', 'region_1'})
+        self.assertEqual(len(expected['trend']), 5)
+        self.assertEqual(len(expected['region']), 6)
+        for i in range(2):
+            for name, instruction in instructions.items():
+                self.assertEqual(payload['questions'][f'{name}_{i}'], {
+                    'type': 'choice', 'instructions': f'news_{i} {instruction}', 'criteria': expected[name]})
+        self.assertEqual(len({q['instructions'] for q in payload['questions'].values()}), 4)
+        self.assertNotIn('private-key', json.dumps(payload))
+
+    def test_both_questions_threshold_034_035(self):
+        for name in ['trend', 'region']:
+            for probability in [.34, .35]:
+                with self.subTest(name=name, probability=probability):
+                    body = world_answers()
+                    original = body['answers'][f'{name}_0']['choice']
+                    body['answers'][f'{name}_0']['probabilities'] = {original: probability}
+                    with server(lambda *_: (200, body, {})) as (url, _):
+                        result = self.client(url).analyze(items(), kind='world')
+                    self.assertEqual(result['private-key-0'][name], 'other' if probability < .35 else original)
+                    self.assertEqual(result['private-key-0']['kind'], 'world')
+
+    def test_world_twenty_items_forty_questions_and_character_batching(self):
+        with server(lambda p, *_: (200, world_answers(len(p['state'])), {})) as (url, received):
+            client = self.client(url)
+            self.assertEqual([len(r) for r in client.analyze_round(items(21), kind='world')], [20, 1])
+            self.assertEqual([len(p['questions']) for _, _, p in received], [40, 2])
+            self.assertEqual(set(received[1][2]['state']), {'news_0'})
+            received.clear()
+            self.assertEqual([len(r) for r in client.analyze_round(items(3, '中'*2000, '文'*2000), kind='world')], [2, 1])
+            self.assertEqual([sum(len(i['title'])+len(i['summary']) for i in p['state'].values()) for _, _, p in received], [8000, 4000])
+
+    def test_finance_world_requests_stay_separate_and_default_resets(self):
+        def response(payload, *_):
+            return 200, world_answers(len(payload['state'])) if 'trend_0' in payload['questions'] else answers(len(payload['state'])), {}
+        with server(response) as (url, received):
+            client = self.client(url)
+            world = client.analyze(items(1, 'world'), kind='world')
+            finance = client.analyze(items(1, 'finance'))
+        self.assertEqual(world['private-key-0']['kind'], 'world')
+        self.assertEqual(finance['private-key-0']['kind'], 'finance')
+        self.assertEqual([set(p['questions']) for _, _, p in received], [{'trend_0', 'region_0'}, {'market_0', 'theme_0', 'dir_0'}])
+        self.assertEqual([p['state']['news_0']['title'] for _, _, p in received], ['world', 'finance'])
+
+    def test_invalid_world_answer_rejects_entire_batch(self):
+        for name in ['trend', 'region']:
+            for invalid in [None, {}, {'choice': 'finance', 'probabilities': {'finance': 1}},
+                            {'choice': 'other', 'probabilities': {}}, {'choice': 'other', 'probabilities': {'other': True}}]:
+                with self.subTest(name=name, invalid=invalid):
+                    body = world_answers()
+                    body['answers'][f'{name}_1'] = invalid
+                    with server(lambda *_: (200, body, {})) as (url, _):
+                        self.assertIsNone(self.client(url).analyze(items(), kind='world'))
+
+    def test_tagged_validation_and_legacy_finance(self):
+        from back.analyze import valid_analysis
+        world = {'kind': 'world', 'trend': 'not_conflict', 'region': 'other'}
+        finance = {'market': 'positive', 'theme': 'memory', 'dir': 'bull', 'dir_p': .8}
+        self.assertTrue(valid_analysis(world))
+        self.assertTrue(valid_analysis(finance))
+        self.assertTrue(valid_analysis(dict(finance, kind='finance')))
+        for invalid in [dict(world, kind='finance'), dict(finance, kind='world'), dict(world, kind=[]),
+                        dict(world, region='zzz'), dict(world, trend={}), dict(world, kind='zzz'), None]:
+            self.assertFalse(valid_analysis(invalid))

@@ -1,4 +1,4 @@
-"""Three fixed finance questions, sharing the classifier's HTTP and limits.
+"""Fixed finance and world question sets, sharing the classifier's HTTP and limits.
 
 Inputs are (key, title, summary) tuples. Category eligibility, shared scheduling
 budget, threads and cache ownership belong to the coordinator, not this client.
@@ -10,7 +10,7 @@ if __package__:
 else:
     from classify import _ChoiceClient, _choice
 
-ANALYSIS_CATEGORIES = frozenset({"finance", "tech"})
+ANALYSIS_CATEGORIES = frozenset({"finance", "tech", "world"})
 
 MARKET_CRITERIA = {
     "positive": "對股市或個股前景呈現正向訊息：上漲、利多、成長、獲利",
@@ -56,27 +56,57 @@ QUESTIONS = {
 }
 
 
+WORLD_QUESTIONS = {
+    "trend": ("這則報導描述的國際衝突或緊張情勢，走向是什麼？", {
+        "escalation": "升級：衝突、對峙、制裁或威脅加劇",
+        "deescalation": "緩和：停火、談判進展、關係改善",
+        "stalemate": "僵持：持續對峙但沒有明顯變化",
+        "not_conflict": "內容不涉及衝突或緊張情勢",
+        "other": "以上皆非",
+    }, "other"),
+    "region": ("這則報導主要涉及哪個地區？", {
+        "us_china": "美中關係",
+        "asia_pacific": "亞太（不含美中雙邊）",
+        "middle_east": "中東",
+        "europe_russia": "歐洲與俄烏",
+        "americas": "美洲",
+        "other": "以上皆非",
+    }, "other"),
+}
+QUESTION_SETS = {"finance": QUESTIONS, "world": WORLD_QUESTIONS}
+
+
+def analysis_kind(category):
+    return "world" if category == "world" else "finance"
+
+
 class Analyzer(_ChoiceClient):
     _label = "analyze"
 
-    def analyze_round(self, items):
+    def analyze_round(self, items, *, kind="finance"):
         """Yield complete batches, stopping on failure or the admission budget."""
-        return self._run_round(items, self.analyze)
+        return self._run_round(items, lambda batch: self.analyze(batch, kind=kind))
 
-    def analyze(self, batch):
-        """Return key -> {market, theme, dir, dir_p}, or None for batch failure."""
-        return self._request(batch)
+    def analyze(self, batch, *, kind="finance"):
+        """One homogeneous kind per request; return keyed tagged analyses."""
+        if kind not in QUESTION_SETS:
+            raise ValueError("unknown analysis kind")
+        self._kind = kind
+        try:
+            return self._request(batch)
+        finally:
+            self._kind = "finance"
 
     def _questions(self, size):
         return {f"{name}_{i}": {"type": "choice", "instructions": f"news_{i} {instruction}",
                                 "criteria": criteria}
-                for i in range(size) for name, (instruction, criteria, _) in QUESTIONS.items()}
+                for i in range(size) for name, (instruction, criteria, _) in QUESTION_SETS[self._kind].items()}
 
     def _decode(self, batch, answers):
         result = {}
         for i, (key, _, _) in enumerate(batch):
-            analysis = {}
-            for name, (_, criteria, abstain) in QUESTIONS.items():
+            analysis = {"kind": self._kind}
+            for name, (_, criteria, abstain) in QUESTION_SETS[self._kind].items():
                 choice, p_max = _choice(answers.get(f"{name}_{i}"), criteria, abstain)
                 analysis[name] = choice
                 if name == "dir":
@@ -87,7 +117,12 @@ class Analyzer(_ChoiceClient):
 
 def valid_analysis(value):
     """Validate detached candidates before the coordinator caches them."""
-    return (isinstance(value, dict)
-            and all(isinstance(value.get(name), str) and value[name] in criteria
-                    for name, (_, criteria, _) in QUESTIONS.items())
-            and type(value.get("dir_p")) in (int, float) and 0 <= value["dir_p"] <= 1)
+    if not isinstance(value, dict):
+        return False
+    kind = value.get("kind", "finance")  # Accept legacy finance cache entries.
+    if not isinstance(kind, str) or kind not in QUESTION_SETS:
+        return False
+    return (all(isinstance(value.get(name), str) and value[name] in criteria
+                for name, (_, criteria, _) in QUESTION_SETS[kind].items())
+            and (kind == "world" or (type(value.get("dir_p")) in (int, float)
+                                    and 0 <= value["dir_p"] <= 1)))

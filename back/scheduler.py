@@ -16,12 +16,12 @@ import time
 if __package__:
     from .feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS
-    from .analyze import ANALYSIS_CATEGORIES, valid_analysis
+    from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from .events import candidate_pairs, group_events, _fits as pairs_fit
 else:
     from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from classify import CRITERIA, MAX_ITEMS, MAX_CHARS
-    from analyze import ANALYSIS_CATEGORIES, valid_analysis
+    from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from events import candidate_pairs, group_events, _fits as pairs_fit
 
 
@@ -271,13 +271,16 @@ class Scheduler:
                 matching = jobs is self.event_jobs
                 analyzing = jobs is self.analysis_jobs
                 work, item = jobs.get_nowait()
+                kind = analysis_kind(self.classify_cache.get(item[0], "")) if analyzing else None
                 batch = [item]
                 chars = 0 if matching else len(item[1]) + len(item[2])
                 while not jobs.empty() and (matching or len(batch) < MAX_ITEMS):
                     with jobs.mutex:
                         next_work, next_item = jobs.queue[0]
                     size = 0 if matching else len(next_item[1]) + len(next_item[2])
-                    if (next_work is not work or (matching and not pairs_fit(batch + [next_item]))
+                    if (next_work is not work
+                            or (analyzing and analysis_kind(self.classify_cache.get(next_item[0], "")) != kind)
+                            or (matching and not pairs_fit(batch + [next_item]))
                             or chars + size > MAX_CHARS):
                         break
                     batch.append(jobs.get_nowait()[1])
@@ -289,7 +292,7 @@ class Scheduler:
             if allowed:
                 try:
                     result = (self.matcher.match(batch) if matching else
-                              self.analyzer.analyze(batch) if analyzing else self.classifier.classify(batch))
+                              self.analyzer.analyze(batch, kind=kind) if analyzing else self.classifier.classify(batch))
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
             with self.cv:
