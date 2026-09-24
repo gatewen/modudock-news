@@ -534,3 +534,17 @@ feeds.json 追加四個（2026-09-23 以模組自己的 Fetcher＋parse_feed 實
 - 既有前半測試的行為斷言維持（可能要改選擇器，不能改語意）。
 - 新增：`<style>` 在根元素內且 unmount 後消失；所有 CSS 規則選擇器以 `.nw` 開頭（解析 CSS 字串檢查）；長條四段寬度比例與 aria-label；總數 0 的長條；題材列小長條寬度相對第一名；時間顯示 `HH:mm 更新`；失敗來源 0 時不顯示、> 0 時顯示；0 則時的空狀態與「清除篩選」會清三個篩選。
 - `modudock.json` version → `0.3.1`。
+
+---
+
+## 15. v0.3.2 主題判斷改用標準 CSS — 增補規格
+
+- 狀態：**已實作、已驗收**（2026-09-24；真殼 Chromium 量到淺 rgb(200,16,46)／深 rgb(255,107,107)，data-topic 點選篩選正常；依 claude-modudock 建議：殼承諾的只有九個 `--md-*` 代幣，`<html data-theme>` 是殼的內部實作、不是契約）
+- **覆寫 §14.2**：刪除 `:root[data-theme="dark"] .nw { … }` 那段；三個語意色改用標準 `light-dark()`，依殼設在 `:root` 的 `color-scheme` 自動切換：
+  - `--nw-up: light-dark(#c8102e, #ff6b6b)`
+  - `--nw-down: light-dark(#0f7b3f, #4fd18b)`
+  - `--nw-mixed: light-dark(#b7791f, #f0b429)`
+- 模組 CSS **不得**再出現 `data-theme`（選擇器或屬性都不行）。
+- 題材按鈕的 `data-theme` 屬性改名為 **`data-topic`**（避免和殼的主題屬性同名）。
+- 驗收：真殼 Chromium 上切淺／深兩種主題，量 `.nw` 內正面長條段的 computed `background-color` 分別是 `rgb(200, 16, 46)` 與 `rgb(255, 107, 107)`。
+- `modudock.json` version → `0.3.2`。

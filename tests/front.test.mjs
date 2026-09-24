@@ -243,7 +243,7 @@ const analysis = (overrides = {}) => ({market: 'positive', theme: 'memory', dir:
 const financeArticle = (overrides = {}) => article({category: 'finance', analysis: analysis(), ...overrides});
 const panel = h => h.container.querySelector('[aria-label=財經分析]');
 const themeButtons = h => [...h.container.querySelectorAll('[aria-label=題材排行] button')];
-const themeButton = (h, id) => themeButtons(h).find(button => button.dataset.theme === id);
+const themeButton = (h, id) => themeButtons(h).find(button => button.dataset.topic === id);
 const choose = (h, control, value) => {
   control.value = value;
   control.dispatchEvent(new h.window.Event('change'));
@@ -314,7 +314,7 @@ test('ranking uses count then fixed table order, excludes macro/other and caps a
       ...Array.from({length: 11}, () => financeArticle({analysis: analysis({theme: 'other'})}))])));
   choose(h, h.categories, 'finance');
   assert.equal(themeButtons(h).length, 10);
-  assert.deepEqual(themeButtons(h).map(b => b.dataset.theme),
+  assert.deepEqual(themeButtons(h).map(b => b.dataset.topic),
     ['memory', 'foundry', 'ic_design', 'packaging', 'semi_equip', 'ai_server', 'cooling', 'pcb', 'optical', 'display']);
   assert.equal(themeButton(h, 'memory').getAttribute('aria-label'), '記憶體 2');
   for (const group of [themes.slice(0, 10), themes.slice(10)]) {
@@ -474,8 +474,7 @@ test('style stays inside module root, scopes parsed CSS rules and leaves host un
       if (rule.selectorText) {
         for (const selector of rule.selectorText.split(',')) {
           const value = selector.trim();
-          // The only prefix exception is the exact dark-theme override mandated by §14.2.
-          assert.ok(/^\.nw(?:\b|\s)/.test(value) || value === ':root[data-theme="dark"] .nw', value);
+          assert.ok(/^\.nw(?:\b|\s)/.test(value), value);
           selectors.push(value);
         }
       } else {
@@ -485,6 +484,7 @@ test('style stays inside module root, scopes parsed CSS rules and leaves host un
       }
     }
   }
+  assert.doesNotMatch(style.textContent, /data-theme/);
   inspect(style.sheet.cssRules);
   assert.ok(selectors.length > 50);
   assert.ok(groups.some(text => text.startsWith('@container (min-width: 560px)')));
@@ -498,19 +498,17 @@ test('style stays inside module root, scopes parsed CSS rules and leaves host un
   assert.equal(h.container.childNodes.length, 0);
 });
 
-test('palette inherits shell tokens with specified light fallbacks and dark semantic colors', t => {
+test('palette inherits shell tokens and uses light-dark for semantic colors', t => {
   const h = setup(t);
   const rules = [...h.container.querySelector('style').sheet.cssRules];
   const base = rules.find(rule => rule.selectorText === '.nw').style;
-  const dark = rules.find(rule => rule.selectorText === ':root[data-theme="dark"] .nw').style;
   for (const [token, shell, fallback] of [['bg', 'bg', '#ffffff'], ['fg', 'fg', '#242424'],
     ['muted', 'fg-muted', '#616161'], ['line', 'border', '#c7c7c7'], ['surface', 'surface', '#f3f3f3'],
     ['accent', 'accent', '#005fb8'], ['focus', 'focus', '#005fb8']]) {
     assert.equal(base.getPropertyValue(`--nw-${token}`), `var(--md-${shell}, ${fallback})`);
   }
   for (const [token, light, night] of [['up', '#c8102e', '#ff6b6b'], ['down', '#0f7b3f', '#4fd18b'], ['mixed', '#b7791f', '#f0b429']]) {
-    assert.equal(base.getPropertyValue(`--nw-${token}`), light);
-    assert.equal(dark.getPropertyValue(`--nw-${token}`), night);
+    assert.equal(base.getPropertyValue(`--nw-${token}`), `light-dark(${light}, ${night})`);
   }
   assert.equal(base.getPropertyValue('--nw-idle'), 'color-mix(in srgb, var(--nw-muted) 45%, transparent)');
 });
@@ -552,6 +550,9 @@ test('theme mini-bars scale to leader and split qualified bull, bear and remaini
   h.message(listing(items));
   choose(h, h.categories, 'finance');
   const leader = themeButton(h, 'memory');
+  assert.equal(leader.getAttribute('data-topic'), 'memory');
+  assert.equal(h.container.querySelector('button[data-theme]'), null);
+  assert.equal(h.container.querySelectorAll('button[data-topic]').length, 2);
   const leaderBar = leader.querySelector('.nw-theme-bar');
   assert.equal(leaderBar.style.width, '100%');
   assert.equal(themeButton(h, 'foundry').querySelector('.nw-theme-bar').style.width, '50%');

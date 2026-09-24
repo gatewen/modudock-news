@@ -41,9 +41,9 @@ const css = `
   --nw-surface: var(--md-surface, #f3f3f3);
   --nw-accent: var(--md-accent, #005fb8);
   --nw-focus: var(--md-focus, #005fb8);
-  --nw-up: #c8102e;
-  --nw-down: #0f7b3f;
-  --nw-mixed: #b7791f;
+  --nw-up: light-dark(#c8102e, #ff6b6b);
+  --nw-down: light-dark(#0f7b3f, #4fd18b);
+  --nw-mixed: light-dark(#b7791f, #f0b429);
   --nw-idle: color-mix(in srgb, var(--nw-muted) 45%, transparent);
   container-type: inline-size;
   margin: 8px;
@@ -51,11 +51,6 @@ const css = `
   color: var(--nw-fg);
   font: 14px/1.5 "PingFang TC", "Noto Sans TC", "Microsoft JhengHei", system-ui, sans-serif;
   font-variant-numeric: tabular-nums;
-}
-:root[data-theme="dark"] .nw {
-  --nw-up: #ff6b6b;
-  --nw-down: #4fd18b;
-  --nw-mixed: #f0b429;
 }
 .nw *, .nw *::before, .nw *::after { box-sizing: border-box; }
 .nw [hidden] { display: none !important; }
@@ -281,10 +276,10 @@ export default function mount(ctx) {
     // Stable sorting preserves the fixed table order for equal counts.
     const ranked = [...themes].filter(([id, count]) => id !== "macro" && id !== "other" && count.count)
       .sort((a, b) => b[1].count - a[1].count).slice(0, 10);
-    const existing = new Map([...ranking.querySelectorAll("button")].map(button => [button.dataset.theme, button]));
+    const existing = new Map([...ranking.querySelectorAll("button")].map(button => [button.dataset.topic, button]));
     const rankedIds = new Set(ranked.map(([id]) => id));
     for (const child of [...ranking.children]) {
-      if (!rankedIds.has(child.dataset.theme)) child.remove();
+      if (!rankedIds.has(child.dataset.topic)) child.remove();
     }
     if (!ranked.length) ranking.replaceChildren(make("span", "nw-hint", "題材：尚無"));
     for (const [id, count] of ranked) {
@@ -292,7 +287,7 @@ export default function mount(ctx) {
       if (!button) {
         button = make("button", "nw-theme");
         button.type = "button";
-        button.dataset.theme = id;
+        button.dataset.topic = id;
         const track = make("span", "nw-theme-track");
         track.setAttribute("aria-hidden", "true");
         const bar = make("span", "nw-bar nw-theme-bar");
@@ -316,9 +311,9 @@ export default function mount(ctx) {
   }
 
   function onTheme(event) {
-    const button = event.target?.closest?.("button[data-theme]");
-    if (!button || !ranking.contains(button) || !themeNames.has(button.dataset.theme)) return;
-    selectedTheme = selectedTheme === button.dataset.theme ? "" : button.dataset.theme;
+    const button = event.target?.closest?.("button[data-topic]");
+    if (!button || !ranking.contains(button) || !themeNames.has(button.dataset.topic)) return;
+    selectedTheme = selectedTheme === button.dataset.topic ? "" : button.dataset.topic;
     drawItems();
   }
   function onClearTheme() {
