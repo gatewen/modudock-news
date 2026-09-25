@@ -50,6 +50,12 @@ class ModelRound:
     round_id: int
     deadline: float | None = None  # Starts with this round's first model request.
     failed: bool = False
+    requests: dict = field(default_factory=lambda: dict.fromkeys(('classify', 'analysis', 'events', 'topics', 'tone'), 0))
+    failures: int = 0
+    started: float | None = None
+    running: bool = False
+    awaiting: int = 0
+    logged: bool = False
 
 
 @dataclass
@@ -113,6 +119,7 @@ class Scheduler:
         self.topic_cache = OrderedDict()
         self.topic_in_flight = set()
         self.model_work = None
+        self.model_rounds = {}
         self.event_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST * 2)
         self.event_cache = OrderedDict()
         self.event_in_flight = set()
@@ -297,11 +304,32 @@ class Scheduler:
         self.analysis_in_flight.add(key)
         self.cv.notify_all()
 
+    def _finish_model_rounds(self):
+        # cv held: results may generate more work, so queue emptiness alone is not completion.
+        queues = (self.classify_jobs, self.analysis_jobs, self.event_jobs, self.topic_jobs, self.tone_jobs)
+        for round_id, work in list(self.model_rounds.items()):
+            if work.running:
+                continue
+            terminal = work.failed or (work.deadline is not None and self.model_clock() >= work.deadline)
+            queued = False
+            for jobs in queues:
+                with jobs.mutex:
+                    queued |= any(candidate is work for candidate, _ in jobs.queue)
+            if not terminal and (work.awaiting or queued):
+                continue
+            counts = work.requests
+            elapsed = max(0, self.model_clock() - work.started)
+            self.log(f"model round={round_id} requests={sum(counts.values())} failed={work.failures} "
+                     f"elapsed={elapsed:.1f}s " + ' '.join(f'{kind}={count}' for kind, count in counts.items()))
+            work.logged = True
+            del self.model_rounds[round_id]
+
     def _classify_worker(self):
         # Reconsider priority at every HTTP batch boundary. In-flight HTTP is
         # not preemptible. Queue/results/work references all remain bounded.
         while True:
             with self.cv:
+                self._finish_model_rounds()
                 while not self.stopping and (
                     (self.classify_jobs.empty() and self.analysis_jobs.empty() and self.event_jobs.empty() and self.topic_jobs.empty() and self.tone_jobs.empty())
                     or any(isinstance(result, (ClassifyResult, EventResult, TopicResult)) for result in self.results)
@@ -354,6 +382,13 @@ class Scheduler:
                 if work.deadline is None:
                     work.deadline = self.model_clock() + self.model_budget
                 allowed = self._classify_enabled() and not work.failed and self.model_clock() < work.deadline
+                if allowed:
+                    label = 'tone' if toning else 'topics' if topic_matching else 'events' if matching else 'analysis' if analyzing else 'classify'
+                    if work.started is None:
+                        work.started = self.model_clock()
+                    work.requests[label] += 1
+                    work.running = True
+                    self.model_rounds[work.round_id] = work
             result = None
             if allowed:
                 try:
@@ -362,6 +397,10 @@ class Scheduler:
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
             with self.cv:
+                work.running = False
+                work.awaiting += 1
+                if allowed and result is None:
+                    work.failures += 1
                 if result is None:
                     work.failed = True
             keys = tuple(pair.key for pair in batch) if matching or topic_matching else tuple(key for key, _, _ in batch)
@@ -505,6 +544,10 @@ class Scheduler:
         # Called only under cv by the coordinator. A worker produces exactly
         # one candidate per job; the generation check is the ownership guard.
         self.processed_results += 1
+        if isinstance(candidate, (ClassifyResult, AnalysisResult, EventResult, TopicResult, ToneResult)):
+            work = self.model_rounds.get(candidate.round_id)
+            if work is not None:
+                work.awaiting -= 1
         if isinstance(candidate, ToneResult):
             self.tone_in_flight.difference_update(candidate.finished)
             self.tone_in_flight.difference_update(candidate.tones)
@@ -653,6 +696,7 @@ class Scheduler:
                     packet = self._accept(self.results.popleft())
                     if packet is not None:
                         resends[:] = [packet]
+                self._finish_model_rounds()
                 self.cv.notify_all()
                 if self.active:
                     now = self.clock()

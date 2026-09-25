@@ -163,7 +163,8 @@ const css = `
 .nw .nw-theme-bar { height: 6px; transition: width 240ms ease; }
 .nw .nw-theme-count { text-align: right; }
 .nw .nw-note { display: block; margin-top: 16px; }
-.nw .nw-filter { display: flex; align-items: center; gap: 8px; padding: 12px 0 0; color: var(--nw-muted); font-size: 12px; }
+.nw .nw-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0 0; color: var(--nw-muted); font-size: 12px; }
+.nw .nw-topic-sources { flex-basis: 100%; overflow-wrap: anywhere; }
 .nw .nw-list { list-style: none; margin: 0; padding: 0; }
 .nw .nw-row { padding: 14px 0; }
 .nw .nw-row + .nw-row { border-top: 1px solid var(--nw-line); }
@@ -309,6 +310,9 @@ export default function mount(ctx) {
   clearTheme.textContent = "清除";
   clearTheme.setAttribute("aria-label", "取消題材篩選");
   themeFilter.append(themeLabel, clearTheme);
+  const topicSources = make("span", "nw-hint nw-topic-sources");
+  topicSources.hidden = true;
+  themeFilter.append(topicSources);
   const panel = make("section", "nw-panel");
   const focus = make("section", "nw-focus-section");
   focus.hidden = true;
@@ -606,7 +610,18 @@ export default function mount(ctx) {
     themeFilter.hidden = panel.hidden || !selectedTheme;
     themeLabel.textContent = selectedTheme ? `已篩選：${topicNames.get(selectedTheme)}` : "";
     clearTheme.textContent = "清除";
+    topicSources.hidden = !selectedTopic;
+    topicSources.textContent = "";
     if (selectedTopic) {
+      const counts = new Map();
+      for (const item of items) {
+        const name = text(item?.source);
+        if (item?.topic === selectedTopic && name) counts.set(name, (counts.get(name) || 0) + 1);
+      }
+      const ranked = [...counts].sort((a, b) => b[1] - a[1]
+        || (sourceOrder.get(a[0]) ?? Infinity) - (sourceOrder.get(b[0]) ?? Infinity));
+      topicSources.textContent = ranked.slice(0, 5).map(([name, count]) => `${name} ${count}`).join("・")
+        + (ranked.length > 5 ? ` 等 ${ranked.length - 5} 家` : "");
       const title = Array.from(topics.find(topic => topic.id === selectedTopic).title);
       themeFilter.hidden = false;
       themeLabel.textContent = `話題：${title.slice(0, 24).join("")}${title.length > 24 ? "…" : ""}`;

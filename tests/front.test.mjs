@@ -1970,3 +1970,24 @@ test('per-report tone appears only in topic filter and validates ids without inh
   focusTopicButtons(h)[0].click();
   assert.equal(h.container.querySelector('.nw-tone-tag'),null);
 });
+
+test('topic source distribution counts reports, orders feed ties, limits five and updates on resend', t => {
+  const h=setup(t), topic=topicRecord();
+  const names=['B','A','C','D','E','F','G'];
+  const reports=names.flatMap((source,i)=>Array.from({length:i<2?3:1},(_,j)=>
+    article({source,topic:topic.id,event:'111111111111',event_size:11,title:`${source}${j}`})));
+  const body={...topicListing(reports),sources:['A','B','C','D','E','F','G'].map(name=>({name,ok:true}))};
+  h.message(body);
+  const hint=h.container.querySelector('.nw-topic-sources');
+  assert.equal(hint.hidden,true);
+  focusTopicButtons(h)[0].click();
+  assert.equal(hint.hidden,false);
+  assert.equal(hint.textContent,'A 3・B 3・C 1・D 1・E 1 等 2 家');
+  h.message({...body,items:[...reports,article({source:'G',topic:topic.id}),article({source:'G',topic:topic.id}),article({source:'G',topic:topic.id})]});
+  assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1 等 2 家');
+  saveWatch(h,'A0'); watchControls(h).only.click();
+  assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1 等 2 家');
+  focusTopicButtons(h)[0].click();
+  assert.equal(hint.hidden,true);
+  assert.equal(hint.textContent,'');
+});
