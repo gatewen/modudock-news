@@ -1346,8 +1346,11 @@ test('topic click resets other filters, keeps event grouping, toggles and surviv
   assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'true');
   focusTopicButtons(h)[0].click();
   assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'false');
-  assert.equal(mainRows(h).length, 3);
+  assert.equal(mainRows(h).length, 0); // Restores the previous source/category, whose combination has no reports.
+  assert.equal(h.select.value, '甲');
+  assert.equal(h.categories.value, 'finance');
   assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  choose(h, h.select, '');
   choose(h, h.categories, 'finance');
   assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'false');
   const css = h.container.querySelector('style').textContent;
@@ -2082,7 +2085,7 @@ test('text buttons use visible names and external descriptions survive redraws a
   assert.equal(h.container.querySelector('[data-topic="issue:budget"]').hasAttribute('aria-describedby'),false);
   scan();
   focusTopicButtons(h)[0].click();
-  assert.equal(h.container.querySelector('.nw-filter button').textContent,'取消話題篩選');
+  assert.equal(h.container.querySelector('.nw-filter button').textContent,'返回');
   scan();
   const finalIds=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
   h.handle.unmount();
@@ -2204,4 +2207,71 @@ test('model status shows working and paused, with focus hint only while topics a
     assert.doesNotThrow(()=>h.message({...listing([]),model}));
     assert.doesNotMatch(h.container.querySelector('[role=status]').textContent,/整理/);
   }
+});
+
+for (const exit of ['return','same-topic','disappear']) {
+  test(`topic ${exit} restores filters scroll and focus across topic switches`, t => {
+    const h=setup(t), first=topicRecord(), second=topicRecord({id:'bbbbbbbbbbbb',title:'另一話題'});
+    const body=topicListing([financeArticle({title:'AI 原檢視',source:'甲',link:'https://example.com/original'}),
+      article({topic:first.id,title:first.title}),article({topic:second.id,title:second.title})],[first,second]);
+    const outer=h.window.document.createElement('div');
+    outer.style.overflowY='auto';
+    Object.defineProperties(outer,{scrollHeight:{value:1000},clientHeight:{value:200}});
+    h.window.document.body.append(outer); outer.append(h.container);
+    outer.scrollTop=123;
+    h.message(body); saveWatch(h,'AI'); watchControls(h).only.click();
+    choose(h,h.categories,'finance'); choose(h,h.select,'甲'); themeButton(h,'memory').click();
+    h.container.querySelector('.nw-list a').focus();
+    focusTopicButtons(h)[0].click();
+    assert.equal(h.categories.value,''); assert.equal(h.select.value,'');
+    watchControls(h).only.click(); // Temporary topic view changes must not replace saved settings.
+    outer.scrollTop=456;
+    focusTopicButtons(h)[1].click();
+    h.message(body);
+    if(exit==='return') {
+      const button=h.container.querySelector('.nw-filter button');
+      assert.equal(button.textContent,'返回');
+      assert.equal(described(h,button),'回到進入話題前的篩選與位置');
+      button.click();
+    } else if(exit==='same-topic') focusTopicButtons(h)[1].click();
+    else h.message({...body,topics:{list:[first]}});
+    assert.equal(h.categories.value,'finance'); assert.equal(h.select.value,'甲');
+    assert.equal(themeButton(h,'memory').getAttribute('aria-pressed'),'true');
+    assert.equal(watchControls(h).only.getAttribute('aria-pressed'),'true');
+    assert.equal(outer.scrollTop,123);
+    assert.equal(h.window.document.activeElement.href,'https://example.com/original');
+  });
+}
+
+test('manual source category and clear-all discard saved topic view', t => {
+  for(const action of ['source','category','clear']) {
+    const h=setup(t), id=topicRecord().id;
+    const body=topicListing([financeArticle({source:'甲'}),article({topic:id,source:'乙'})]);
+    h.message(body); choose(h,h.categories,'finance'); choose(h,h.select,'甲');
+    focusTopicButtons(h)[0].click();
+    if(action==='source') choose(h,h.select,'乙');
+    if(action==='category') choose(h,h.categories,'world');
+    if(action==='clear') {
+      saveWatch(h,'absent'); watchControls(h).only.click();
+      h.container.querySelector('.nw-empty button').click();
+    }
+    const source=h.select.value, category=h.categories.value;
+    focusTopicButtons(h)[0].click(); h.container.querySelector('.nw-filter button').click();
+    assert.equal(h.select.value,source); assert.equal(h.categories.value,category);
+    assert.notEqual(h.categories.value,'finance');
+  }
+});
+
+test('return skips removed source and theme options and tolerates vanished focus', t => {
+  const h=setup(t), id=topicRecord().id;
+  h.message(topicListing([financeArticle({source:'乙',link:'https://example.com/removed'}),article({topic:id})]));
+  choose(h,h.categories,'finance'); choose(h,h.select,'乙'); themeButton(h,'memory').click();
+  h.container.querySelector('.nw-list a').focus(); focusTopicButtons(h)[0].click();
+  h.message({...topicListing([financeArticle({analysis:analysis({theme:'foundry'})}),article({topic:id})]),sources:[{name:'甲',ok:true}]});
+  const calls=[];
+  t.mock.method(h.window.HTMLElement.prototype,'focus',function(){calls.push(this);});
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(h.select.value,''); assert.equal(h.categories.value,'finance');
+  assert.equal(h.container.querySelector('.nw-filter').hidden,true);
+  assert.equal(mainRows(h).length,1); assert.equal(calls.length,0);
 });

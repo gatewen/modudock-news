@@ -390,6 +390,7 @@ export default function mount(ctx) {
   let modelState = "";
   let selectedTheme = "";
   let selectedTopic = "";
+  let savedView = null;
   let topics = [];
   let analysisEnabled = true;
   let eventsPending = 0;
@@ -591,10 +592,22 @@ export default function mount(ctx) {
     const button = event.target?.closest?.("button[data-event], button[data-topic-id]");
     if (!button || !focusList.contains(button)) return;
     if (button.dataset.topicId) {
+      if (selectedTopic === button.dataset.topicId) { returnToView(); return; }
+      if (!selectedTopic) {
+        let scroller = root.parentElement;
+        while (scroller) {
+          const style = view.getComputedStyle(scroller);
+          if (/(auto|scroll|overlay)/.test(style.overflowY || style.overflow) && scroller.scrollHeight > scroller.clientHeight) break;
+          scroller = scroller.parentElement;
+        }
+        scroller ||= document.scrollingElement;
+        savedView = {source:sources.value, category:categories.value, theme:selectedTheme, watched:onlyWatched,
+          scroller, scrollTop:scroller?.scrollTop || 0, focus:focusIdentity(document.activeElement)};
+      }
       sources.value = "";
       categories.value = "";
       selectedTheme = "";
-      selectedTopic = selectedTopic === button.dataset.topicId ? "" : button.dataset.topicId;
+      selectedTopic = button.dataset.topicId;
       drawItems();
       return;
     }
@@ -659,6 +672,7 @@ export default function mount(ctx) {
     themeFilter.hidden = panel.hidden || !selectedTheme;
     themeLabel.textContent = selectedTheme ? `已篩選：${topicNames.get(selectedTheme)}` : "";
     clearTheme.textContent = "清除篩選";
+    describe(clearTheme, "", themeFilter);
     topicSources.hidden = !selectedTopic;
     topicSources.textContent = "";
     if (selectedTopic) {
@@ -674,7 +688,8 @@ export default function mount(ctx) {
       const title = Array.from(topics.find(topic => topic.id === selectedTopic).title);
       themeFilter.hidden = false;
       themeLabel.textContent = `話題：${title.slice(0, 24).join("")}${title.length > 24 ? "…" : ""}`;
-      clearTheme.textContent = "取消話題篩選";
+      clearTheme.textContent = "返回";
+      describe(clearTheme, "回到進入話題前的篩選與位置", themeFilter);
     }
     if (panel.hidden) return;
     signalHeading.textContent = world ? "局勢走向" : "股市訊號";
@@ -772,12 +787,34 @@ export default function mount(ctx) {
     selectedTheme = selectedTheme === button.dataset.topic ? "" : button.dataset.topic;
     drawItems();
   }
+  function returnToView() {
+    const saved = savedView;
+    savedView = null;
+    selectedTopic = "";
+    if (saved) {
+      sources.value = [...sources.options].some(option => option.value === saved.source) ? saved.source : "";
+      categories.value = [...categories.options].some(option => option.value === saved.category) ? saved.category : "";
+      selectedTheme = saved.theme;
+      onlyWatched = saved.watched && trackedWords.length > 0;
+    }
+    drawItems(false);
+    if (selectedTheme && ![...ranking.querySelectorAll("button[data-topic]")].some(button => button.dataset.topic === selectedTheme)) {
+      selectedTheme = "";
+      drawItems(false);
+    }
+    if (saved) {
+      restoreFocus(saved.focus);
+      if (saved.scroller?.isConnected) saved.scroller.scrollTop = saved.scrollTop;
+    }
+  }
   function onClearTheme() {
+    if (selectedTopic) { returnToView(); return; }
     selectedTheme = "";
     selectedTopic = "";
     drawItems();
   }
   function onSourceOrCategory() {
+    savedView = null;
     selectedTopic = "";
     drawItems();
   }
@@ -849,8 +886,8 @@ export default function mount(ctx) {
     }
     if (target) target.focus({preventScroll: true});
   }
-  function drawItems() {
-    const focused = focusIdentity(document.activeElement);
+  function drawItems(keepFocus = true) {
+    const focused = keepFocus ? focusIdentity(document.activeElement) : null;
     const applicable = categories.value === "politics" ? issueTopics : categories.value === "world" ? regionTopics
       : financial(categories.value) ? themeNames : new Map();
     if (selectedTheme && !applicable.has(selectedTheme)) selectedTheme = "";
@@ -959,6 +996,7 @@ export default function mount(ctx) {
     restoreFocus(focused);
   }
   function onClearAll() {
+    savedView = null;
     sources.value = "";
     categories.value = "";
     selectedTheme = "";
@@ -980,7 +1018,7 @@ export default function mount(ctx) {
       topicIds.add(topic.id);
       return true;
     }).slice(0, 5);
-    if (!topics.some(topic => topic.id === selectedTopic)) selectedTopic = "";
+    const lostTopic = selectedTopic && !topics.some(topic => topic.id === selectedTopic);
     const published = items.map(item => Date.parse(text(item?.published))).filter(Number.isFinite);
     latestPublished = published.length ? Math.max(...published) : null;
     const presentEvents = new Set(items.filter(item => item && typeof item === "object").map(eventId).filter(Boolean));
@@ -1016,7 +1054,8 @@ export default function mount(ctx) {
       : failed.length > 1 ? `${failureName(failed[0])}等 ${failed.length} 個來源失敗` : "";
     status.title = failed.map(source => `${failureName(source)}${typeof source.error === "string"
       ? `：${Array.from(source.error).slice(0, 80).join("")}` : ""}`).join("\n");
-    drawItems();
+    if (lostTopic) returnToView();
+    else drawItems();
   }
   list.addEventListener("click", onExpand);
   list.addEventListener("click", onSummary);
@@ -1068,6 +1107,7 @@ export default function mount(ctx) {
       clearTheme.removeEventListener("click", onClearTheme);
       selectedTheme = "";
       selectedTopic = "";
+      savedView = null;
       topics = [];
       items = [];
       root.remove();
