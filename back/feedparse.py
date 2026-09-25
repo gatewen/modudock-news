@@ -42,6 +42,7 @@ TOPICS_RESERVE = len(json.dumps({'pending': MAX_ITEMS_LIST, 'tone_pending': MAX_
     for _ in range(5)]}, ensure_ascii=True))
 TOPIC_FIELD_RESERVE = len(', "topic": "' + 'f' * 12 + '"')
 TONE_FIELD_RESERVE = len(', "tone": "negative"')
+MODEL_RESERVE = len(json.dumps({'state': 'working', 'reason': 'disabled'}))
 ATOM = "http://www.w3.org/2005/Atom"
 
 
@@ -288,6 +289,8 @@ def fit_packet(packet):
         if "count" in body:
             body["count"] = len(items)
         reserved = sum(CATEGORY_RESERVE for item in items if item.get("category") == "")
+        if 'model' in body:
+            reserved += max(0, MODEL_RESERVE - len(json.dumps(body['model'])))
         reserved += sum(ANALYSIS_RESERVE for item in items
                         if "analysis" in item and item["analysis"] is None
                         and item.get("category") in ANALYSIS_CATEGORIES | {""})

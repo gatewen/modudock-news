@@ -2167,3 +2167,41 @@ test('watch toggle stays on toolbar while settings close and disappears with emp
   assert.equal(c.only.getAttribute('aria-pressed'),'false');
   assert.equal(mainRows(h).length,2);
 });
+
+test('topic progress counts new events with old representatives and coexists with tone', t => {
+  const id=topicRecord().id;
+  const reports=[eventStory('111111111111','old representative',8,{topic:id}),
+    eventStory('111111111111','new child',11,{topic:id}),eventStory('111111111111','new sibling',12,{topic:id}),
+    eventStory('222222222222','new event',11,{topic:id}),eventStory('333333333333','old event',7,{topic:id})];
+  const body=topicListing(reports,[topicRecord({count:5,tone:{positive:2,negative:3,neutral:0,mixed:0}})]);
+  const first=setup(t); first.message(body);
+  assert.equal(first.container.querySelector('.nw-topic-new'),null);
+  const h=setup(t,withSeen(seenAt)); h.message(body);
+  const hint=h.container.querySelector('.nw-topic-new');
+  assert.equal(hint.textContent,'上次之後新增 2 個事件');
+  assert.equal(hint.previousElementSibling.className,'nw-tone');
+  h.message({...body,topics:{list:[topicRecord()]}});
+  assert.equal(h.container.querySelector('.nw-topic-new').previousElementSibling.className,'nw-title');
+  h.message({...body,items:reports.map(item=>({...item,published:seenAt}))});
+  assert.equal(h.container.querySelector('.nw-topic-new'),null);
+});
+
+test('model status shows working and paused, with focus hint only while topics are absent', t => {
+  const h=setup(t);
+  for (const [state,label] of [['working','整理中'],['paused','整理暫停，下次更新繼續'],['done',''],['off','']]) {
+    h.message({...listing([]),model:{state,reason:'ignored'}});
+    const status=h.container.querySelector('[role=status]').textContent;
+    if(label) assert.ok(status.includes(`更新 · ${label}`));
+    else assert.doesNotMatch(status,/整理/);
+    const focus=focusArea(h);
+    assert.equal(focus.hidden,state!=='working');
+    if(state==='working') assert.match(focus.textContent,/正在整理多家媒體同報的話題/);
+  }
+  h.message({...topicListing([article({topic:topicRecord().id})]),model:{state:'working'}});
+  assert.equal(focusTopicButtons(h).length,1);
+  assert.doesNotMatch(focusArea(h).textContent,/正在整理/);
+  for (const model of [null,{},'working',{state:{}},{state:'<img>'}]) {
+    assert.doesNotThrow(()=>h.message({...listing([]),model}));
+    assert.doesNotMatch(h.container.querySelector('[role=status]').textContent,/整理/);
+  }
+});

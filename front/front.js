@@ -187,6 +187,7 @@ const css = `
 .nw .nw-title { display: block; font-size: 15px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; color: var(--nw-fg); text-decoration: none; }
 .nw a.nw-title:hover { color: var(--nw-accent); text-decoration: underline; }
 .nw .nw-new { color: var(--nw-accent); font-size: 12px; font-weight: 700; margin-right: 6px; }
+.nw .nw-topic-new { color: var(--nw-accent); font-size: 12px; margin-top: 4px; }
 .nw .nw-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-summary { font-size: 13px; color: var(--nw-muted); line-height: 1.6; margin: 8px 0 0; max-width: 42em; overflow-wrap: anywhere; }
 .nw .nw-summary-label { display: block; font-size: 12px; color: var(--nw-muted); }
@@ -386,6 +387,7 @@ export default function mount(ctx) {
   let disposed = false;
   let items = [];
   let received = false;
+  let modelState = "";
   let selectedTheme = "";
   let selectedTopic = "";
   let topics = [];
@@ -549,9 +551,16 @@ export default function mount(ctx) {
         copy.append(newsTitle(representative || {title: topic.title}, "nw-title", members.some(isNew)));
         const tone = toneSummary(topic);
         if (tone) copy.append(tone);
+        const newEvents = groupItems(members).filter(group => group.reports.some(isNew)).length;
+        if (lastSeen !== null && newEvents) copy.append(make("div", "nw-topic-new", `上次之後新增 ${newEvents} 個事件`));
         row.append(copy, button);
         focusList.append(row);
       }
+      return;
+    }
+    if (modelState === "working") {
+      focus.hidden = false;
+      focusList.replaceChildren(make("p", "nw-hint", "正在整理多家媒體同報的話題"));
       return;
     }
     const ranked = groups.map(group => ({...group,
@@ -871,7 +880,8 @@ export default function mount(ctx) {
     const dividerIndex = prefix > 0 && prefix < groups.length ? prefix : -1;
     if (received) {
       const count = groups.filter(group => group.reports.some(isNew)).length;
-      status.textContent = [updatedText, count ? `${count} 則新` : "", failedText, classificationText]
+      const modelText = modelState === "working" ? "整理中" : modelState === "paused" ? "整理暫停，下次更新繼續" : "";
+      status.textContent = [updatedText, modelText, count ? `${count} 則新` : "", failedText, classificationText]
         .filter(Boolean).join(" · ");
     }
     drawFocus(groups);
@@ -957,6 +967,8 @@ export default function mount(ctx) {
     drawItems();
   }
   function renderList(body) {
+    modelState = body.model && typeof body.model === "object" && ["working", "paused", "done", "off"].includes(body.model.state)
+      ? body.model.state : "";
     received = true;
     items = Array.isArray(body.items) ? body.items : [];
     const rawTopics = Array.isArray(body.topics?.list) ? body.topics.list : [];

@@ -239,7 +239,9 @@ class Scheduler:
         with self.cv:
             if self.stopping or not self._classify_enabled():
                 return
-            work = ModelRound(self.round_id)
+            work = self.model_work
+            if work is None or work.round_id != self.round_id:
+                work = ModelRound(self.round_id)
             self.model_work = work
             for item in packet["body"]["items"]:
                 key = dedup_key(item["link"])
@@ -494,7 +496,21 @@ class Scheduler:
                           'pending': len(pending) if self._classify_enabled()
                           and self.topic_matcher is not None and body['events']['pending'] == 0 else 0,
                           'list': [{k: v for k, v in topic.items() if k != 'keys'} for topic in topics]}
+        body['model'] = self._model_state(body)
         return packet
+
+    def _model_state(self, body):
+        if not self._classify_enabled():
+            return {'state': 'off', 'reason': 'disabled'}
+        pending = any(body.get(name, {}).get('pending', 0) > 0
+                      for name in ('classify', 'analysis', 'events', 'topics')) or body.get('topics', {}).get('tone_pending', 0) > 0
+        if not pending:
+            return {'state': 'done', 'reason': ''}
+        work = self.model_work
+        expired = work is not None and work.deadline is not None and self.model_clock() >= work.deadline
+        if work is not None and (work.failed or expired):
+            return {'state': 'paused', 'reason': 'failed' if work.failures or not expired else 'budget'}
+        return {'state': 'working', 'reason': ''}
 
     def _enqueue_topics(self, packet):
         # Coordinator only. Reuse this list's admission budget across snowball steps.
@@ -537,6 +553,8 @@ class Scheduler:
             body = self.last_list["body"]
             visible = {dedup_key(item["link"]) for item in body["items"]}
             if accepted & visible or body["classify"]["enabled"] != self._classify_enabled():
+                return self._decorate(self.last_list)
+            if body.get('model') != self._model_state(body):
                 return self._decorate(self.last_list)
         return None
 
@@ -678,6 +696,7 @@ class Scheduler:
             "op": "list", "items": merge_items([cache.items for cache in caches]),
             "sources": statuses, "at": self.now().isoformat()}}
         with self.cv:
+            self.model_work = ModelRound(self.round_id)
             self._cache_events({pair.key: True for pair in candidate_pairs(packet["body"]["items"])
                                 if pair.automatic and pair.key not in self.event_cache})
             packet = self._decorate(packet)
