@@ -54,6 +54,7 @@ function eventId(item) {
 }
 
 let focusHeadingId = 0;
+let watchInputId = 0;
 const css = `
 .nw {
   --nw-bg: var(--md-bg, #ffffff);
@@ -77,7 +78,7 @@ const css = `
 }
 .nw *, .nw *::before, .nw *::after { box-sizing: border-box; }
 .nw [hidden] { display: none !important; }
-.nw button, .nw select {
+.nw button, .nw select, .nw input {
   font: inherit;
   color: var(--nw-fg);
   background: var(--nw-bg);
@@ -88,19 +89,22 @@ const css = `
 }
 .nw button { cursor: pointer; }
 .nw button:disabled { cursor: default; color: var(--nw-muted); }
-.nw button:focus-visible, .nw a:focus-visible, .nw select:focus-visible {
+.nw button:focus-visible, .nw a:focus-visible, .nw select:focus-visible, .nw input:focus-visible {
   outline: 2px solid var(--nw-focus);
   outline-offset: 2px;
 }
 .nw .nw-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 12px; }
 .nw .nw-status { margin-left: auto; font-size: 12px; color: var(--nw-muted); }
+.nw .nw-watch-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; }
+.nw .nw-watch-input { flex: 1 1 220px; min-width: 0; }
+.nw .nw-watch { color: var(--nw-accent); border: 1px solid var(--nw-accent); border-radius: 3px; padding: 0 4px; font-size: 12px; }
 .nw .nw-panel { background: var(--nw-surface); border-radius: 8px; padding: 14px 16px; }
 .nw .nw-focus-section { background: var(--nw-surface); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
 .nw .nw-focus-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
 .nw .nw-focus-list { display: grid; gap: 10px; }
 .nw .nw-focus-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .nw .nw-focus-count { font-size: 12px; white-space: nowrap; }
-.nw .nw-focus-count[data-topic-id][aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 3px 0 0 var(--nw-accent); }
+.nw .nw-focus-count[data-topic-id][aria-pressed="true"], .nw .nw-watch-only[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 3px 0 0 var(--nw-accent); }
 .nw .nw-focus-short { display: none; }
 .nw .nw-focus-copy { min-width: 0; }
 .nw .nw-tone { margin-top: 6px; }
@@ -192,6 +196,24 @@ export default function mount(ctx) {
     try { view.localStorage.setItem(`modudock.module.news.${name}`, JSON.stringify(value)); }
     catch { /* Storage may be unavailable or full; reading news still works. */ }
   }
+  function normalizeWatchWords(list) {
+    const seen = new Set(), result = [];
+    for (const value of Array.isArray(list) ? list : []) {
+      if (typeof value !== "string") continue;
+      const word = value.trim(), folded = word.toLowerCase();
+      if (!word || Array.from(word).length > 20 || seen.has(folded)) continue;
+      seen.add(folded);
+      result.push(word);
+      if (result.length === 10) break;
+    }
+    return result;
+  }
+  function watchWords() { return normalizeWatchWords(loadState("watch")); }
+  function setWatchWords(list) {
+    const normalized = normalizeWatchWords(list);
+    saveState("watch", normalized);
+    return normalized;
+  }
   const storedLastSeen = loadState("lastSeen");
   const parsedLastSeen = typeof storedLastSeen === "string" ? Date.parse(storedLastSeen) : NaN;
   const lastSeen = Number.isFinite(parsedLastSeen) ? parsedLastSeen : null;
@@ -230,6 +252,26 @@ export default function mount(ctx) {
     option.textContent = name;
     categories.append(option);
   }
+  const watchToggle = make("button", "", "追蹤");
+  watchToggle.type = "button";
+  watchToggle.setAttribute("aria-expanded", "false");
+  const watchSettings = make("div", "nw-watch-settings");
+  watchSettings.hidden = true;
+  const watchInput = make("input", "nw-watch-input");
+  watchInput.type = "text";
+  watchInput.id = `nw-watch-input-${++watchInputId}`;
+  watchInput.placeholder = "以空白或逗號分隔，最多 10 個";
+  const watchLabel = make("label", "", "追蹤關鍵字");
+  watchLabel.htmlFor = watchInput.id;
+  const watchSave = make("button", "", "儲存");
+  watchSave.type = "button";
+  const watchOnly = make("button", "nw-watch-only", "只看追蹤（0）");
+  watchOnly.type = "button";
+  watchOnly.setAttribute("aria-pressed", "false");
+  let trackedWords = watchWords(), onlyWatched = false;
+  watchInput.value = trackedWords.join(" ");
+  watchOnly.disabled = trackedWords.length === 0;
+  watchSettings.append(watchLabel, watchInput, watchSave, watchOnly);
   const status = make("span", "nw-status");
   status.setAttribute("role", "status");
   status.textContent = "等待模組就緒";
@@ -297,7 +339,7 @@ export default function mount(ctx) {
   rankingSection.append(rankingHeading, ranking);
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(sample, market, macro, rankingSection, note);
-  toolbar.append(refresh, sources, categories, status);
+  toolbar.append(refresh, sources, categories, watchToggle, status, watchSettings);
   root.append(toolbar, focus, panel, themeFilter, list, empty);
   ctx.container.append(root);
 
@@ -584,6 +626,36 @@ export default function mount(ctx) {
     selectedTopic = "";
     drawItems();
   }
+  function onWatchToggle() {
+    watchSettings.hidden = !watchSettings.hidden;
+    watchToggle.setAttribute("aria-expanded", String(!watchSettings.hidden));
+  }
+  function onWatchSave() {
+    const words = [];
+    let word = "";
+    for (const char of watchInput.value) {
+      if (!char.trim() || char === "," || char === "，") {
+        if (word) words.push(word);
+        word = "";
+      } else word += char;
+    }
+    if (word) words.push(word);
+    trackedWords = setWatchWords(words);
+    watchInput.value = trackedWords.join(" ");
+    if (!trackedWords.length) onlyWatched = false;
+    drawItems();
+  }
+  function onWatchKey(event) {
+    if (event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+      onWatchSave();
+    }
+  }
+  function onWatchOnly() {
+    if (!trackedWords.length) return;
+    onlyWatched = !onlyWatched;
+    drawItems();
+  }
   function focusIdentity(node) {
     if (!node || !root.contains(node)) return null;
     if (node.matches(".nw-list a")) return {
@@ -614,10 +686,17 @@ export default function mount(ctx) {
     drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
     list.replaceChildren();
     const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
-    const groups = groupItems(filtered);
+    const allGroups = groupItems(filtered);
+    const matches = new Map(allGroups.map(group => [group, trackedWords.find(word => group.reports.some(item =>
+      text(item.title).toLowerCase().includes(word.toLowerCase()) || text(item.summary).toLowerCase().includes(word.toLowerCase())))]));
+    const watchedCount = allGroups.filter(group => matches.get(group)).length;
+    watchOnly.disabled = trackedWords.length === 0;
+    watchOnly.setAttribute("aria-pressed", String(onlyWatched));
+    watchOnly.textContent = `只看追蹤（${watchedCount}）`;  // Events, like the list and status.
+    const groups = onlyWatched ? allGroups.filter(group => matches.get(group)) : allGroups;
     if (received) {
       const count = groups.filter(group => group.reports.some(isNew)).length;
-      status.textContent = [updatedText, count ? `${count} 則新` : "", failedText, classificationText]
+      status.textContent = [updatedText, count ? `${count} 則新` : "", watchedCount ? `追蹤 ${watchedCount}` : "", failedText, classificationText]
         .filter(Boolean).join(" · ");
     }
     drawFocus(groups);
@@ -628,6 +707,7 @@ export default function mount(ctx) {
       const row = make("li", "nw-row");
       if (group.id) row.dataset.event = group.id;
       const meta = make("div", "nw-meta");
+      if (matches.get(group)) meta.append(make("span", "nw-watch", `追蹤：${matches.get(group)}`));
       if (analysis?.kind === "world") {
         const tag = make("span", "nw-tag", regionNames.get(analysis.region));
         if (analysis.trend === "escalation" || analysis.trend === "deescalation") {
@@ -674,6 +754,7 @@ export default function mount(ctx) {
     categories.value = "";
     selectedTheme = "";
     selectedTopic = "";
+    onlyWatched = false;
     drawItems();
   }
   function renderList(body) {
@@ -710,14 +791,18 @@ export default function mount(ctx) {
     }
     sourceOrder = new Map([...names].map((name, i) => [name, i]));
     sources.value = names.has(previous) ? previous : "";
-    const failed = records.filter(source => source?.ok === false).length;
+    const failed = records.filter(source => source?.ok === false);
+    const failureName = source => text(source.name) || "未命名來源";
     const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
     analysisEnabled = classify.enabled !== false;
     const pending = Number.isInteger(classify.pending) && classify.pending >= 0 ? classify.pending : 0;
     classificationText = classify.enabled === false ? "分類：關閉" : pending > 0 ? `未分類：${pending}` : "";
     const updated = localTime(body.at);
     updatedText = updated ? `${updated} 更新` : "";
-    failedText = failed > 0 ? `失敗來源：${failed}` : "";
+    failedText = failed.length === 1 ? `${failureName(failed[0])} 失敗`
+      : failed.length > 1 ? `${failureName(failed[0])}等 ${failed.length} 個來源失敗` : "";
+    status.title = failed.map(source => `${failureName(source)}${typeof source.error === "string"
+      ? `：${Array.from(source.error).slice(0, 80).join("")}` : ""}`).join("\n");
     drawItems();
   }
   list.addEventListener("click", onExpand);
@@ -728,6 +813,10 @@ export default function mount(ctx) {
   refresh.addEventListener("click", onRefresh);
   sources.addEventListener("change", onSourceOrCategory);
   categories.addEventListener("change", onSourceOrCategory);
+  watchToggle.addEventListener("click", onWatchToggle);
+  watchSave.addEventListener("click", onWatchSave);
+  watchInput.addEventListener("keydown", onWatchKey);
+  watchOnly.addEventListener("click", onWatchOnly);
   view.addEventListener("pagehide", persistLastSeen);
   ctx.channel.onMessage((body) => {
     if (!disposed && body && body.op === "list") renderList(body);
@@ -750,6 +839,10 @@ export default function mount(ctx) {
       refresh.removeEventListener("click", onRefresh);
       sources.removeEventListener("change", onSourceOrCategory);
       categories.removeEventListener("change", onSourceOrCategory);
+      watchToggle.removeEventListener("click", onWatchToggle);
+      watchSave.removeEventListener("click", onWatchSave);
+      watchInput.removeEventListener("keydown", onWatchKey);
+      watchOnly.removeEventListener("click", onWatchOnly);
       list.removeEventListener("click", onExpand);
       focusList.removeEventListener("click", onFocus);
       expanded.clear();

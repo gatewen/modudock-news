@@ -71,7 +71,7 @@ test('list rows, local time, link attributes, summary and status', t => {
   assert.equal(row.querySelector('.nw-time').textContent, `${date.getMonth() + 1}/${date.getDate()} ${local}`);
   const updated = new Date('2026-09-21T02:04:00Z');
   assert.equal(h.container.querySelector('[role=status]').textContent,
-    `${pad(updated.getHours())}:${pad(updated.getMinutes())} 更新 · 失敗來源：1`);
+    `${pad(updated.getHours())}:${pad(updated.getMinutes())} 更新 · 乙 失敗`);
 });
 
 test('untrusted text stays text; non-http links never become anchors', t => {
@@ -96,7 +96,7 @@ test('malformed packets and fields are safe and never stringify objects', t => {
     article({published: 'not-a-date'})], [null, {}, {name: {}, ok: false}]));
   assert.equal(h.container.querySelectorAll('li').length, 2);
   assert.equal(h.container.querySelector('li').textContent, '未分類');
-  assert.equal(h.container.querySelector('span[title]').title, '');
+  assert.equal(h.container.querySelector('.nw-list span[title]').title, '');
   assert.equal(h.select.options.length, 1);
   h.message({op: 'list', items: {}, sources: {}, at: {}});
   assert.equal(h.container.querySelectorAll('li').length, 0);
@@ -582,9 +582,9 @@ test('status shows local HH:mm and suppresses zero failures and zero unclassifie
   h.message({...listing([], [{name: '甲', ok: true}]), classify: {enabled: true, pending: 0}});
   assert.equal(status(), `${hhmm} 更新`);
   h.message({...listing([]), classify: {enabled: true, pending: 3}});
-  assert.equal(status(), `${hhmm} 更新 · 失敗來源：1 · 未分類：3`);
+  assert.equal(status(), `${hhmm} 更新 · 乙 失敗 · 未分類：3`);
   h.message({...listing([], [{ok: false}, {ok: false}, {ok: 'false'}]), classify: {enabled: false}});
-  assert.equal(status(), `${hhmm} 更新 · 失敗來源：2 · 分類：關閉`);
+  assert.equal(status(), `${hhmm} 更新 · 未命名來源等 2 個來源失敗 · 分類：關閉`);
   for (const at of [null, {}, 10, 'bad']) {
     h.message({...listing([], []), at});
     assert.equal(status(), '');
@@ -1348,7 +1348,7 @@ test('topic click resets other filters, keeps event grouping, toggles and surviv
   choose(h, h.categories, 'finance');
   assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'false');
   const css = h.container.querySelector('style').textContent;
-  assert.match(css, /\.nw \.nw-focus-count\[data-topic-id\]\[aria-pressed="true"\] \{ border-color: var\(--nw-accent\); box-shadow: inset 3px 0 0 var\(--nw-accent\); \}/);
+  assert.match(css, /\.nw \.nw-focus-count\[data-topic-id\]\[aria-pressed="true"\], \.nw \.nw-watch-only\[aria-pressed="true"\] \{ border-color: var\(--nw-accent\); box-shadow: inset 3px 0 0 var\(--nw-accent\); \}/);
 });
 
 test('topic filter cancels via clear button, source change, category change and empty clear all', t => {
@@ -1498,4 +1498,143 @@ test('bad topic tone is ignored without losing the topic or interpreting hostile
   focusTopicButtons(h)[0].focus();
   h.message(topicListing([], [topicRecord({count:10, tone:toneCounts({negative:5, neutral:5})})]));
   assert.equal(h.window.document.activeElement, focusTopicButtons(h)[0]);
+});
+const watchKey = 'modudock.module.news.watch';
+const watchControls = h => ({input:h.container.querySelector('.nw-watch-input'),
+  only:h.container.querySelector('.nw-watch-only'), settings:h.container.querySelector('.nw-watch-settings'),
+  toggle:h.categories.nextElementSibling,
+  save:h.container.querySelector('.nw-watch-settings button')});
+function saveWatch(h, value, enter = false) {
+  const controls = watchControls(h);
+  controls.input.value = value;
+  if (enter) controls.input.dispatchEvent(new h.window.KeyboardEvent('keydown', {key:'Enter', bubbles:true}));
+  else controls.save.click();
+}
+
+test('watch settings normalize stored words and save with Enter for reload', t => {
+  const raw = [' AI ', null, 3, '', 'ai', 'x'.repeat(21), '𠮷'.repeat(20),
+    ...Array.from({length:12}, (_, i) => `詞${i}`)];
+  const h = setup(t, window => window.localStorage.setItem(watchKey, JSON.stringify(raw)));
+  const c = watchControls(h);
+  assert.equal(c.toggle.textContent, '追蹤');
+  assert.equal(c.toggle.getAttribute('aria-expanded'), 'false');
+  assert.equal(h.window.getComputedStyle(c.settings).display, 'none');
+  c.toggle.click();
+  assert.equal(c.settings.hidden, false);
+  assert.equal(c.toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(c.settings.querySelector('label').htmlFor, c.input.id);
+  assert.equal(c.input.placeholder, '以空白或逗號分隔，最多 10 個');
+  assert.deepEqual(c.input.value.split(' '), ['AI', '𠮷'.repeat(20), ...Array.from({length:8}, (_, i) => `詞${i}`)]);
+  saveWatch(h, '  AI,ai，台股  .*(', true);
+  assert.deepEqual(JSON.parse(h.window.localStorage.getItem(watchKey)), ['AI', '台股', '.*(']);
+  const reloaded = setup(t, window => window.localStorage.setItem(watchKey, h.window.localStorage.getItem(watchKey)));
+  assert.equal(watchControls(reloaded).input.value, 'AI 台股 .*(');
+  saveWatch(h, raw.filter(v => typeof v === 'string').join(','));
+  assert.equal(JSON.parse(h.window.localStorage.getItem(watchKey)).length, 10);
+});
+
+test('watch matches title or summary literally and tags group representative with first configured word', t => {
+  const h = setup(t);
+  saveWatch(h, 'AI,台股,.*(,<img>');
+  h.message(listing([
+    eventStory('111111111111', '最早', 8),
+    eventStory('111111111111', '台股', 9, {summary:'ai 成長'}),
+    article({title:'字元 .*( 原樣'}), article({title:'<img>'}),
+    article({title:'不符合', summary:{}}), article({title:{}, summary:null}),
+  ]));
+  const rows = mainRows(h);
+  assert.equal(rows[0].querySelector('.nw-meta').firstElementChild.textContent, '追蹤：AI');
+  assert.equal(rows[0].querySelector('.nw-expand').textContent, '另 1 則報導');
+  assert.equal(rows[1].querySelector('.nw-watch').textContent, '追蹤：.*(');
+  assert.equal(rows[2].querySelector('.nw-watch').textContent, '追蹤：<img>');
+  assert.equal(h.container.querySelector('img'), null);
+  assert.equal(watchControls(h).only.textContent, '只看追蹤（3）');
+  assert.match(h.container.querySelector('[role=status]').textContent, /追蹤 3/);
+  watchControls(h).only.click();
+  assert.deepEqual(mainTitles(h), ['最早', '字元 .*( 原樣', '<img>']);
+});
+
+test('watch button and status both count events, matching the list', t => {
+  const h = setup(t, withSeen(seenAt));
+  saveWatch(h, 'AI');
+  h.message(listing([eventStory('111111111111', 'AI', 11), eventStory('111111111111', 'ai', 12)]));
+  assert.equal(watchControls(h).only.textContent, '只看追蹤（1）');
+  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新 · 追蹤 1/);
+});
+
+test('watch filter combines with source category theme and topic and survives replacement', t => {
+  const h = setup(t), id = topicRecord().id;
+  saveWatch(h, 'AI');
+  const body = topicListing([
+    financeArticle({title:'AI 記憶體', topic:id}),
+    financeArticle({title:'AI 晶圓', analysis:analysis({theme:'foundry'})}),
+    financeArticle({title:'AI 乙', source:'乙'}),
+    article({title:'AI 國際', category:'world'}), financeArticle({title:'普通'}),
+  ]);
+  h.message(body);
+  watchControls(h).only.click();
+  choose(h, h.categories, 'finance');
+  choose(h, h.select, '甲');
+  themeButton(h, 'memory').click();
+  assert.deepEqual(mainTitles(h), ['AI 記憶體']);
+  h.message(body);
+  assert.deepEqual(mainTitles(h), ['AI 記憶體']);
+  assert.equal(watchControls(h).only.getAttribute('aria-pressed'), 'true');
+  focusTopicButtons(h)[0].click();
+  assert.deepEqual(mainTitles(h), ['AI 記憶體']);
+  h.message(body);
+  assert.deepEqual(mainTitles(h), ['AI 記憶體']);
+  saveWatch(h, '不存在');
+  assert.equal(mainRows(h).length, 0);
+  h.container.querySelector('.nw-empty button').click();
+  assert.equal(watchControls(h).only.getAttribute('aria-pressed'), 'false');
+  assert.equal(mainRows(h).length, 5);
+  saveWatch(h, '');
+  assert.equal(watchControls(h).only.disabled, true);
+  assert.doesNotMatch(h.container.querySelector('[role=status]').textContent, /追蹤/);
+});
+
+test('watch storage failures and malformed values are safe and empty words disable filtering', t => {
+  for (const value of ['bad json', '{}', 'null', '"AI"']) {
+    const h = setup(t, window => window.localStorage.setItem(watchKey, value));
+    assert.equal(watchControls(h).only.disabled, true);
+  }
+  const h = setup(t, window => Object.defineProperty(window, 'localStorage', {
+    configurable:true, get() { throw new Error('blocked'); },
+  }));
+  saveWatch(h, 'AI', true);
+  h.message(listing([article({title:'ai'}), article()]));
+  watchControls(h).only.click();
+  assert.deepEqual(mainTitles(h), ['ai']);
+  saveWatch(h, ' , ');
+  assert.equal(watchControls(h).only.disabled, true);
+  assert.equal(watchControls(h).only.getAttribute('aria-pressed'), 'false');
+  assert.equal(mainRows(h).length, 2);
+});
+
+test('watch unmount removes all settings listeners', t => {
+  const h = setup(t), c = watchControls(h);
+  h.handle.unmount();
+  c.toggle.click(); c.input.value = 'AI'; c.save.click();
+  c.input.dispatchEvent(new h.window.KeyboardEvent('keydown', {key:'Enter'}));
+  c.only.dispatchEvent(new h.window.Event('click'));
+  assert.equal(c.settings.hidden, true);
+  assert.equal(c.only.getAttribute('aria-pressed'), 'false');
+  assert.equal(h.window.localStorage.getItem(watchKey), null);
+  assert.equal(h.container.childElementCount, 0);
+});
+
+test('failed source status names all failures with bounded safe error tooltips', t => {
+  const h = setup(t), status = h.container.querySelector('[role=status]');
+  h.message(listing([], [{name:'甲', ok:false, error:'𠮷'.repeat(81)},
+    {name:'<img>', ok:false, error:'timeout'}, {name:'丙', ok:true, error:'ignored'}]));
+  assert.match(status.textContent, /甲等 2 個來源失敗/);
+  assert.equal(status.title, `甲：${'𠮷'.repeat(80)}\n<img>：timeout`);
+  assert.equal(h.container.querySelector('img'), null);
+  h.message(listing([], [{name:'乙', ok:false, error:{}}]));
+  assert.match(status.textContent, /乙 失敗/);
+  assert.equal(status.title, '乙');
+  h.message(listing([], [{name:'乙', ok:true}]));
+  assert.equal(status.title, '');
+  assert.doesNotMatch(status.textContent, /失敗/);
 });
