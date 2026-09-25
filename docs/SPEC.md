@@ -1089,3 +1089,16 @@ cx-mod 以「每天早上看 3 分鐘的使用者」走查提出 5 項（皆不�
 - 來源選單每個選項附該來源的報導數（來自 `body.sources[].count`）；`ok === false` 的來源附「（失敗）」；「全部來源」附總報導數。
 - 選項文字只用 textContent；補送時就地更新文字，不重建 `<select>`（保留目前選取值與鍵盤焦點）。
 - 驗收：前半測試（類別數隨來源篩選變、全部的總數、失敗標記、補送不改變選取值與焦點）；真殼截圖由 cc-mod 審（展開選單的畫面以選項文字檢查代替）。
+
+### 18.27 第 27 輪（前半結構整理，行為不變）
+
+第 26 輪結果：選單附數量（真殼實測）。
+**動機**：front/front.js 已 1150+ 行；其中樣式字串約 150 行、名稱對照與驗證函式約 70 行，與 mount 的狀態邏輯混在一起。
+
+**R27-A 拆檔（純搬移，不改行為）**
+- `front/style.js`：`export const css = ...`（原字串原封不動）。
+- `front/labels.js`：categoryNames、themeNames、regionNames、issue 名稱、topic/trend/market/direction 的 id 集合，以及 validAnalysis、topicOf、arrow、eventId 等無狀態工具（原程式原封不動，改為 export）。
+- `front/front.js`：以相對路徑 `import { css } from "./style.js"`、`import {...} from "./labels.js"`；`export default function mount` 不變。
+- 不改任何行為、文字、選擇器、測試斷言（測試只允許調整 import 路徑，若有需要）。模組層級計數器（focusHeadingId 等 id 產生器）留在 front.js。
+- manifest `frontend.public` 為 `front`，同目錄檔案皆可被瀏覽器載入；cc-mod 於真殼確認實際載入成功。
+- 驗收：前半測試全綠且數量不變；cc-mod 重跑前半變異掃描（變異目標可能移到 labels.js）＋真殼截圖。
