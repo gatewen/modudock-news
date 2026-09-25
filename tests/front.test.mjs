@@ -3062,3 +3062,74 @@ test('disabled classification explains fixed reasons and clears stale titles on 
   h.message({...listing([],[{name:'甲',ok:true}]),classify:{enabled:true},model:{state:'done',reason:''}});
   assert.doesNotMatch(status.textContent,/金鑰|分類：關閉/); assert.equal(status.title,'');
 });
+
+const viewKey='modudock.module.news.view';
+test('manual source/category choices persist and restore once after first list on remount', t => {
+  const h=setup(t), body=listing([financeArticle(),worldArticle({source:'乙'})]);
+  h.message(body);
+  choose(h,h.select,'乙'); choose(h,h.categories,'world');
+  assert.deepEqual(JSON.parse(h.window.localStorage.getItem(viewKey)),{source:'乙',category:'world'});
+  const next=setup(t,w=>w.localStorage.setItem(viewKey,h.window.localStorage.getItem(viewKey)));
+  assert.equal(next.select.value,''); assert.equal(next.categories.value,'');
+  next.message(body);
+  assert.equal(next.select.value,'乙'); assert.equal(next.categories.value,'world');
+  assert.equal(mainRows(next).length,1);
+  next.message({...body,sources:[{name:'甲',ok:true}]});
+  assert.equal(next.select.value,'');
+  next.message(body); assert.equal(next.select.value,''); // Never reapply on resends.
+  choose(next,next.categories,'');
+  assert.deepEqual(JSON.parse(next.window.localStorage.getItem(viewKey)),{source:'',category:''});
+});
+
+test('stored view validates fields independently and does not revive missing options', t => {
+  for(const [stored,source,category] of [
+    [{source:'missing',category:'finance'},'','finance'],
+    [{source:'甲',category:'missing'},'甲',''],
+    [{source:{},category:['finance']},'',''],
+    [['甲','finance'],'',''], ['finance','',''], [null,'',''],
+  ]) {
+    const h=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify(stored)));
+    h.message(listing([financeArticle()]));
+    assert.equal(h.select.value,source); assert.equal(h.categories.value,category);
+  }
+  const h=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify({source:'乙',category:'finance'})));
+  h.message(listing([] ,[])); h.message(listing([financeArticle({source:'乙'})]));
+  assert.equal(h.select.value,''); assert.equal(h.categories.value,'finance');
+  const early=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify({source:'乙',category:'finance'})));
+  choose(early,early.categories,'world'); early.message(listing([worldArticle()]));
+  assert.equal(early.categories.value,'world'); assert.equal(early.select.value,'');
+});
+
+test('topic entry return disappearance theme and clear filters do not save view', t => {
+  const h=setup(t), topic=topicRecord(), body=topicListing([financeArticle({topic:topic.id})]);
+  h.message(body); choose(h,h.categories,'finance'); choose(h,h.select,'甲');
+  const saved=h.window.localStorage.getItem(viewKey);
+  const writes=[];
+  const original=h.window.localStorage.setItem.bind(h.window.localStorage);
+  t.mock.method(h.window.localStorage,'setItem',(key,value)=>{if(key===viewKey) writes.push(value); original(key,value);});
+  themeButton(h,'memory').click();
+  focusTopicButtons(h)[0].click();
+  assert.equal(h.categories.value,'');
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(h.categories.value,'finance');
+  focusTopicButtons(h)[0].click(); h.message({...body,topics:{list:[]}});
+  assert.equal(h.categories.value,'finance');
+  saveWatch(h,'nothing'); watchControls(h).only.click();
+  h.container.querySelector('.nw-empty button').click();
+  assert.equal(h.select.value,''); assert.equal(h.categories.value,'');
+  assert.deepEqual(writes,[]); assert.equal(h.window.localStorage.getItem(viewKey),saved);
+});
+
+test('view storage failures are silent and manual selection still works', t => {
+  for(const failure of ['invalid','read','write']) {
+    const h=setup(t,w=>{
+      w.localStorage.setItem(viewKey,'invalid-json');
+      if(failure==='read') t.mock.method(w.localStorage,'getItem',()=>{throw new Error('denied');});
+      if(failure==='write') t.mock.method(w.localStorage,'setItem',()=>{throw new Error('full');});
+    });
+    assert.doesNotThrow(()=>h.message(listing([financeArticle()])));
+    assert.equal(h.categories.value,'');
+    assert.doesNotThrow(()=>choose(h,h.categories,'finance'));
+    assert.equal(h.categories.value,'finance'); assert.equal(mainRows(h).length,1);
+  }
+});

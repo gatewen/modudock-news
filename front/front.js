@@ -39,6 +39,7 @@ export default function mount(ctx) {
     saveState("watch", normalized);
     return normalized;
   }
+  let initialView = loadState("view");
   const storedLastSeen = loadState("lastSeen");
   const parsedLastSeen = typeof storedLastSeen === "string" ? Date.parse(storedLastSeen) : NaN;
   const lastSeen = Number.isFinite(parsedLastSeen) ? parsedLastSeen : null;
@@ -687,6 +688,8 @@ export default function mount(ctx) {
     drawItems();
   }
   function onSourceOrCategory() {
+    initialView = null; // A manual choice before the first list takes precedence.
+    saveState("view", {source: sources.value, category: categories.value});
     savedView = null;
     selectedTopic = "";
     drawItems();
@@ -957,6 +960,13 @@ export default function mount(ctx) {
     for (const option of [...sources.options]) if (option !== all && !names.has(option.value)) option.remove();
     sourceOrder = new Map([...names].map((name, i) => [name, i]));
     sources.value = names.has(previous) ? previous : "";
+    if (initialView && typeof initialView === "object" && !Array.isArray(initialView)) {
+      if (typeof initialView.source === "string" && [...sources.options].some(option => option.value === initialView.source))
+        sources.value = initialView.source;
+      if (typeof initialView.category === "string" && [...categories.options].some(option => option.value === initialView.category))
+        categories.value = initialView.category;
+    }
+    initialView = null; // Restore only once, including when an option is missing.
     const failed = records.filter(source => source?.ok === false);
     const failureName = source => text(source.name) || "未命名來源";
     const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
