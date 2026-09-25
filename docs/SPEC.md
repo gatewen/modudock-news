@@ -804,3 +804,23 @@ feeds.json 追加四個（2026-09-23 以模組自己的 Fetcher＋parse_feed 實
 **R7-B 補送不搶走鍵盤焦點**
 - drawItems 重畫前，若 `document.activeElement` 在本模組根元素內，記下它的身分：清單標題連結（href＋所在列的事件 id）、展開按鈕（data-event）、焦點區按鈕（data-event 或 data-topic-id）、題材按鈕（data-topic）。重畫後找到相同身分的新元素就 `focus({preventScroll: true})`；找不到就不動（不把焦點丟到別處）。
 - 驗收：前半測試（四種元素在補送後仍有焦點；元素消失時不報錯）。
+
+### 18.8 第 8 輪（話題的報導基調）
+
+第 7 輪結果：種子黏著、補送保住焦點（審核補：被裁掉的種子略過）。
+**資料缺口**：「習近平訪美」41 則中 39 則是政治類，而政治類沒有任何分析 → 話題層級沒有風向可看。
+**真 API 驗證（19:5x，cc-mod）**：對該話題 41 則問「報導基調」→ 負面 17、中性 15、正反 5、正面 4；逐則人工檢查約 8 成同意，錯誤多為「中性 vs 負面」邊界；彙總方向與實際報導敘事（「排場十足但進展有限」）一致。
+
+**R8-A 基調判斷（後半）**
+- 對象：目前 topics.list 中各話題的成員報導（不限類別）。沒有結果的排入 tone 工作。
+- 優先序最低：分類 > 分析 > 配對 > 話題 > 基調；同執行緒、共用 enabled 與 60 秒預算。
+- `ToneClient(_ChoiceClient)`（可放 topics.py）：每批 ≤20 則；題目 `q_{i}`：instructions「news_{i} 對它所報導的事情，整體評價基調是什麼？」；criteria：`positive`「正面：強調成果、進展、合作或利多」、`negative`「負面：強調分歧、受挫、風險、抗議或批評」、`neutral`「中性：主要陳述事實、行程或背景」、`mixed`「正反並陳」；abstain `neutral`（沿用 THRESHOLD 0.35）。
+- 快取 tone_cache：key → tone，FIFO 4000；失敗批次不寫。
+- 列表：topics.list 每筆加 `tone: {"positive": n, "negative": n, "neutral": n, "mixed": n}`（以**報導**計，只算已有結果者）；`body.topics.tone_pending`＝話題成員中尚無結果的則數（API 關閉時 0）。有變化或歸零時補送（同話題規則）。大小守衛預留。
+- 驗收：單元測試（題目點名 news_i、abstain、優先序最低、計數、pending）；真實跑 cc-mod 驗 tone_pending 歸零、總時間增加 ≤ 8 秒。
+
+**R8-B 基調顯示（前半）**
+- 焦點區話題列：標題下方一行細條（高 4px，沿用 nw-bar／nw-segment；色段固定順序 正面、正反、中性、負面，同股市訊號條）＋小字「報導基調：負面 17・中性 15・正反 5・正面 4」（依數量多→少、只列 >0 者）。**已判斷則數 ≥5 才顯示**。
+- 顏色：負面 `--nw-danger`、正面 `--nw-accent`、正反 `--nw-mixed`、中性 `--nw-idle`。**不用紅漲綠跌**（那是股市語意）。
+- 文字與細條都是輔助：aria 以文字為準，細條 `aria-hidden`。
+- 驗收：前半測試（<5 不顯示、排序、驗證壞資料忽略）；真殼深淺截圖由 cc-mod 審。

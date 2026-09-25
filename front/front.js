@@ -102,6 +102,13 @@ const css = `
 .nw .nw-focus-count { font-size: 12px; white-space: nowrap; }
 .nw .nw-focus-count[data-topic-id][aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 3px 0 0 var(--nw-accent); }
 .nw .nw-focus-short { display: none; }
+.nw .nw-focus-copy { min-width: 0; }
+.nw .nw-tone { margin-top: 6px; }
+.nw .nw-bar.nw-tone-bar { height: 4px; margin-bottom: 4px; }
+.nw .nw-tone-negative { background: var(--nw-danger); }
+.nw .nw-tone-positive { background: var(--nw-accent); }
+.nw .nw-tone-mixed { background: var(--nw-mixed); }
+.nw .nw-tone-neutral { background: var(--nw-idle); }
 .nw .nw-sample { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 18px; color: var(--nw-muted); font-size: 12px; }
 .nw .nw-pending { margin-left: auto; }
 .nw .nw-warning { flex-basis: 100%; }
@@ -376,6 +383,26 @@ export default function mount(ctx) {
     button.setAttribute("aria-expanded", String(expanded.has(id)));
     button.closest(".nw-row").querySelector(".nw-reports").hidden = !expanded.has(id);
   }
+  function toneSummary(topic) {
+    const tone = topic.tone;
+    const labels = [["negative", "負面"], ["neutral", "中性"], ["mixed", "正反"], ["positive", "正面"]];
+    if (!tone || typeof tone !== "object" || Array.isArray(tone)
+        || labels.some(([id]) => !Number.isSafeInteger(tone[id]) || tone[id] < 0)) return null;
+    const total = labels.reduce((sum, [id]) => sum + tone[id], 0);
+    if (!Number.isSafeInteger(total) || total < 5 || total > topic.count) return null;
+    const ranked = labels.filter(([id]) => tone[id] > 0).sort((a, b) => tone[b[0]] - tone[a[0]]);
+    const summary = make("div", "nw-tone");
+    const bar = make("div", "nw-bar nw-tone-bar");
+    bar.setAttribute("aria-hidden", "true");
+    // Fixed segment order (like the market bar) keeps colors comparable across topics.
+    for (const id of ["positive", "mixed", "neutral", "negative"].filter(id => tone[id] > 0)) {
+      const segment = make("span", `nw-segment nw-tone-${id}`);
+      segment.style.width = `${tone[id] / total * 100}%`;
+      bar.append(segment);
+    }
+    summary.append(bar, make("span", "nw-hint", `報導基調：${ranked.map(([id, name]) => `${name} ${tone[id]}`).join("・")}`));
+    return summary;
+  }
   function drawFocus(groups) {
     if (topics.length) {
       focus.hidden = false;
@@ -391,7 +418,11 @@ export default function mount(ctx) {
         button.setAttribute("aria-label", `篩選話題：${topic.title}，${topic.sources} 家媒體・${topic.count} 則`);
         button.append(make("span", "nw-focus-long", `${topic.sources} 家媒體・${topic.count} 則`),
           make("span", "nw-focus-short", `${topic.sources} 家`));
-        row.append(newsTitle(representative || {title: topic.title}, "nw-title", members.some(isNew)), button);
+        const copy = make("div", "nw-focus-copy");
+        copy.append(newsTitle(representative || {title: topic.title}, "nw-title", members.some(isNew)));
+        const tone = toneSummary(topic);
+        if (tone) copy.append(tone);
+        row.append(copy, button);
         focusList.append(row);
       }
       return;

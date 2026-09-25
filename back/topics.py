@@ -154,3 +154,30 @@ class TopicMatcher(_ChoiceClient):
             choice, probability = _choice(answers.get(f't_{i}'), CRITERIA, 'different')
             result[batch[0][0], batch[i][0]] = choice == 'same_topic' and probability >= .7
         return result
+
+
+TONE_CRITERIA = {
+    'positive': '正面：強調成果、進展、合作或利多',
+    'negative': '負面：強調分歧、受挫、風險、抗議或批評',
+    'neutral': '中性：主要陳述事實、行程或背景',
+    'mixed': '正反並陳',
+}
+
+
+class ToneClient(_ChoiceClient):
+    _label = 'tone'
+
+    def tone(self, batch):
+        return self._request(batch)
+
+    def tone_round(self, items):
+        return self._run_round(items, self.tone)
+
+    def _questions(self, size):
+        return {f'q_{i}': {'type': 'choice',
+                'instructions': f'news_{i} 對它所報導的事情，整體評價基調是什麼？',
+                'criteria': TONE_CRITERIA} for i in range(size)}
+
+    def _decode(self, batch, answers):
+        return {key: _choice(answers.get(f'q_{i}'), TONE_CRITERIA, 'neutral')[0]
+                for i, (key, _, _) in enumerate(batch)}

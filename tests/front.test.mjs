@@ -1456,3 +1456,46 @@ test('expanded report link keeps focus by href and containing event after replac
   assert.equal(h.window.document.activeElement.className, 'nw-report-title');
   assert.equal(h.window.document.activeElement.closest('.nw-reports').hidden, false);
 });
+
+const toneCounts = (overrides = {}) => ({positive:0, negative:0, neutral:0, mixed:0, ...overrides});
+
+test('topic tone needs five judged reports, sorts positive counts and uses a decorative four-pixel bar', t => {
+  const h = setup(t);
+  h.message(topicListing([], [topicRecord({count:41, tone:toneCounts({negative:4})})]));
+  assert.equal(focusArea(h).querySelector('.nw-tone'), null);
+  h.message(topicListing([], [topicRecord({count:41, tone:toneCounts({negative:5})})]));
+  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調：負面 5');
+  assert.equal(focusArea(h).querySelectorAll('.nw-tone .nw-segment').length, 1);
+  h.message(topicListing([], [topicRecord({count:41, tone:{positive:4, negative:17, neutral:15, mixed:5}})]));
+  const tone = focusArea(h).querySelector('.nw-tone');
+  assert.equal(tone.querySelector('.nw-hint').textContent, '報導基調：負面 17・中性 15・正反 5・正面 4');
+  const bar = tone.querySelector('.nw-tone-bar');
+  assert.equal(bar.getAttribute('aria-hidden'), 'true');
+  assert.equal(h.window.getComputedStyle(bar).height, '4px');
+  assert.equal(tone.hasAttribute('aria-hidden'), false);
+  assert.deepEqual([...bar.children].map(n => n.className), ['nw-segment nw-tone-positive',
+    'nw-segment nw-tone-mixed','nw-segment nw-tone-neutral','nw-segment nw-tone-negative']);
+  [4,5,15,17].forEach((count,i) => assert.ok(Math.abs(parseFloat(bar.children[i].style.width)-count/41*100)<.001));
+  const css = h.container.querySelector('style').textContent;
+  for (const [id, token] of [['negative','danger'],['positive','accent'],['mixed','mixed'],['neutral','idle']]) {
+    assert.ok(css.includes(`.nw .nw-tone-${id} { background: var(--nw-${token}); }`));
+  }
+});
+
+test('bad topic tone is ignored without losing the topic or interpreting hostile values', t => {
+  const h = setup(t);
+  const bad = [null, [], 'bad', {}, toneCounts({negative:-1}), toneCounts({negative:'5'}),
+    toneCounts({negative:5.5}), toneCounts({negative:Infinity}), toneCounts({negative:true}),
+    toneCounts({negative:NaN}), toneCounts({negative:11}), toneCounts({negative:'<img src=x>'})];
+  for (const tone of bad) {
+    h.message(topicListing([], [topicRecord({count:10, tone})]));
+    assert.equal(focusTopicButtons(h).length, 1);
+    assert.equal(focusArea(h).querySelector('.nw-tone'), null);
+    assert.equal(focusArea(h).querySelector('img'), null);
+  }
+  h.message(topicListing([], [topicRecord({count:10, tone:toneCounts({positive:5, neutral:5})})]));
+  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調：中性 5・正面 5');
+  focusTopicButtons(h)[0].focus();
+  h.message(topicListing([], [topicRecord({count:10, tone:toneCounts({negative:5, neutral:5})})]));
+  assert.equal(h.window.document.activeElement, focusTopicButtons(h)[0]);
+});

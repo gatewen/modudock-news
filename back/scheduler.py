@@ -19,13 +19,13 @@ if __package__:
     from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from .events import candidate_pairs, group_events, _fits as pairs_fit
-    from .topics import plan as topic_plan, TopicPair, fits as topics_fit
+    from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
     from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from classify import CRITERIA, MAX_ITEMS, MAX_CHARS
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from events import candidate_pairs, group_events, _fits as pairs_fit
-    from topics import plan as topic_plan, TopicPair, fits as topics_fit
+    from topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 
 
 @dataclass
@@ -60,6 +60,13 @@ class EventResult:
 
 
 @dataclass
+class ToneResult:
+    tones: dict = field(default_factory=dict)
+    finished: tuple = ()
+    round_id: int = 0
+
+
+@dataclass
 class TopicResult:
     matches: dict = field(default_factory=dict)
     finished: tuple = ()
@@ -85,7 +92,7 @@ class ClassifyResult:
 class Scheduler:
     def __init__(self, feeds, fetcher, outbox, seq, *, interval=600,
                  source_timeout=30, round_timeout=60, clock=time.monotonic,
-                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None, topic_matcher=None):
+                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None, topic_matcher=None, tone_client=None):
         if not 1 <= len(feeds) <= 32 or min(interval, source_timeout, round_timeout) <= 0:
             raise ValueError("invalid scheduler limits")
         self.feeds, self.fetcher, self.outbox, self.seq = deepcopy(feeds), fetcher, outbox, seq
@@ -98,6 +105,10 @@ class Scheduler:
         self.analyzer = analyzer
         self.matcher = matcher
         self.topic_matcher = topic_matcher
+        self.tone_client = tone_client
+        self.tone_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
+        self.tone_cache = OrderedDict()
+        self.tone_in_flight = set()
         self.topic_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
         self.topic_cache = OrderedDict()
         self.topic_in_flight = set()
@@ -209,7 +220,7 @@ class Scheduler:
                 self.cv.notify_all()
 
     def _classify_enabled(self):
-        clients = [client for client in (self.classifier, self.analyzer, self.matcher, self.topic_matcher) if client is not None]
+        clients = [client for client in (self.classifier, self.analyzer, self.matcher, self.topic_matcher, self.tone_client) if client is not None]
         if any(not client.enabled for client in clients):
             for client in clients:
                 client.enabled = False
@@ -243,6 +254,7 @@ class Scheduler:
                         continue
                     self.event_in_flight.add(pair.key)
             self._enqueue_topics(packet)
+            self._enqueue_tones(packet)
             self.cv.notify_all()
 
     def _submit_classification(self, result):
@@ -291,15 +303,17 @@ class Scheduler:
         while True:
             with self.cv:
                 while not self.stopping and (
-                    (self.classify_jobs.empty() and self.analysis_jobs.empty() and self.event_jobs.empty() and self.topic_jobs.empty())
-                    or any(isinstance(result, ClassifyResult) for result in self.results)
+                    (self.classify_jobs.empty() and self.analysis_jobs.empty() and self.event_jobs.empty() and self.topic_jobs.empty() and self.tone_jobs.empty())
+                    or any(isinstance(result, (ClassifyResult, TopicResult)) for result in self.results)
                 ):
                     self.cv.wait()
                 if self.stopping:
                     return
                 jobs = (self.classify_jobs if not self.classify_jobs.empty() else
                         self.analysis_jobs if not self.analysis_jobs.empty() else
-                        self.event_jobs if not self.event_jobs.empty() else self.topic_jobs)
+                        self.event_jobs if not self.event_jobs.empty() else
+                        self.topic_jobs if not self.topic_jobs.empty() else self.tone_jobs)
+                toning = jobs is self.tone_jobs
                 topic_matching = jobs is self.topic_jobs
                 matching = jobs is self.event_jobs
                 analyzing = jobs is self.analysis_jobs
@@ -343,7 +357,7 @@ class Scheduler:
             result = None
             if allowed:
                 try:
-                    result = (self.topic_matcher.match(batch) if topic_matching else self.matcher.match(batch) if matching else
+                    result = (self.tone_client.tone(batch) if toning else self.topic_matcher.match(batch) if topic_matching else self.matcher.match(batch) if matching else
                               self.analyzer.analyze(batch, kind=kind) if analyzing else self.classifier.classify(batch))
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
@@ -351,7 +365,9 @@ class Scheduler:
                 if result is None:
                     work.failed = True
             keys = tuple(pair.key for pair in batch) if matching or topic_matching else tuple(key for key, _, _ in batch)
-            if topic_matching:
+            if toning:
+                candidate = ToneResult(result or {}, keys, work.round_id)
+            elif topic_matching:
                 candidate = TopicResult(result or {}, keys, work.round_id)
             elif matching:
                 candidate = EventResult(result or {}, keys, work.round_id)
@@ -415,7 +431,12 @@ class Scheduler:
             key = dedup_key(item['link'])
             if key in membership:
                 item['topic'] = membership[key]
-        body['topics'] = {'pending': len(pending) if self._classify_enabled()
+        for topic in topics:
+            topic['tone'] = {tone: sum(self.tone_cache.get(key) == tone for key in topic['keys'])
+                             for tone in TONE_CRITERIA}
+        body['topics'] = {'tone_pending': sum(key not in self.tone_cache for key in membership)
+                          if self._classify_enabled() and self.tone_client is not None else 0,
+                          'pending': len(pending) if self._classify_enabled()
                           and self.topic_matcher is not None and body['events']['pending'] == 0 else 0,
                           'list': [{k: v for k, v in topic.items() if k != 'keys'} for topic in topics]}
         return packet
@@ -439,6 +460,23 @@ class Scheduler:
             self.topic_in_flight.add((seed, key))
         self.cv.notify_all()
 
+    def _enqueue_tones(self, packet):
+        work = self.model_work
+        if (self.tone_client is None or work is None or self.stopping or work.failed
+                or not self._classify_enabled()
+                or (work.deadline is not None and self.model_clock() >= work.deadline)):
+            return
+        for item in packet['body']['items']:
+            key = dedup_key(item['link'])
+            if 'topic' not in item or key in self.tone_cache or key in self.tone_in_flight:
+                continue
+            try:
+                self.tone_jobs.put_nowait((work, (key, item['title'], item['summary'])))
+            except queue.Full:
+                break
+            self.tone_in_flight.add(key)
+        self.cv.notify_all()
+
     def _model_resend(self, accepted):
         if not self.active and self.last_list is not None:
             body = self.last_list["body"]
@@ -451,6 +489,22 @@ class Scheduler:
         # Called only under cv by the coordinator. A worker produces exactly
         # one candidate per job; the generation check is the ownership guard.
         self.processed_results += 1
+        if isinstance(candidate, ToneResult):
+            self.tone_in_flight.difference_update(candidate.finished)
+            self.tone_in_flight.difference_update(candidate.tones)
+            for key, tone in candidate.tones.items():
+                if isinstance(tone, str) and tone in TONE_CRITERIA:
+                    self.tone_cache[key] = tone
+                    if len(self.tone_cache) > 4000:
+                        self.tone_cache.popitem(last=False)
+            if not self.active and self.last_list is not None:
+                packet = self._decorate(self.last_list)
+                self._enqueue_tones(packet)
+                old, new = self.last_list['body']['topics'], packet['body']['topics']
+                if old['list'] != new['list'] or (old.get('tone_pending', 0) > 0 and new['tone_pending'] == 0):
+                    return packet
+                return self._model_resend(set())
+            return None
         if isinstance(candidate, TopicResult):
             self.topic_in_flight.difference_update(candidate.finished)
             self.topic_in_flight.difference_update(candidate.matches)
@@ -462,6 +516,7 @@ class Scheduler:
             if not self.active and self.last_list is not None:
                 packet = self._decorate(self.last_list)
                 self._enqueue_topics(packet)
+                self._enqueue_tones(packet)
                 old, new = self.last_list['body'], packet['body']
                 changed = (old.get('topics', {}).get('list') != new['topics']['list']
                            or [i.get('topic') for i in old['items']] != [i.get('topic') for i in new['items']])
@@ -477,6 +532,7 @@ class Scheduler:
             if not self.active and self.last_list is not None:
                 packet = self._decorate(self.last_list)
                 self._enqueue_topics(packet)
+                self._enqueue_tones(packet)
                 old = [(i["event"], i["event_size"]) for i in self.last_list["body"]["items"]]
                 new = [(i["event"], i["event_size"]) for i in packet["body"]["items"]]
                 pending_cleared = (self.last_list["body"]["events"]["pending"] > 0
