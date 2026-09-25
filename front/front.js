@@ -65,6 +65,7 @@ function eventId(item) {
 
 let focusHeadingId = 0;
 let descriptionId = 0;
+let summaryId = 0;
 let watchInputId = 0;
 const css = `
 .nw {
@@ -187,7 +188,9 @@ const css = `
 .nw a.nw-title:hover { color: var(--nw-accent); text-decoration: underline; }
 .nw .nw-new { color: var(--nw-accent); font-size: 12px; font-weight: 700; margin-right: 6px; }
 .nw .nw-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--nw-muted); }
-.nw .nw-expand { color: var(--nw-muted); background: transparent; padding: 0 5px; font-size: 12px; }
+.nw .nw-summary { font-size: 13px; color: var(--nw-muted); line-height: 1.6; margin: 8px 0 0; max-width: 42em; overflow-wrap: anywhere; }
+.nw .nw-summary-label { display: block; font-size: 12px; color: var(--nw-muted); }
+.nw .nw-expand, .nw .nw-summary-toggle { color: var(--nw-muted); background: transparent; padding: 0 5px; font-size: 12px; }
 .nw .nw-reports { list-style: none; margin: 10px 0 0; padding: 0 0 0 16px; border-left: 1px solid var(--nw-line); }
 .nw .nw-report { padding: 6px 0; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-report-title { color: var(--nw-muted); font-size: 12px; text-decoration: none; overflow-wrap: anywhere; }
@@ -284,7 +287,7 @@ export default function mount(ctx) {
     option.textContent = name;
     categories.append(option);
   }
-  const watchToggle = make("button", "", "追蹤");
+  const watchToggle = make("button", "", "追蹤設定");
   watchToggle.type = "button";
   watchToggle.setAttribute("aria-expanded", "false");
   const watchSettings = make("div", "nw-watch-settings");
@@ -297,13 +300,14 @@ export default function mount(ctx) {
   watchLabel.htmlFor = watchInput.id;
   const watchSave = make("button", "", "儲存");
   watchSave.type = "button";
-  const watchOnly = make("button", "nw-watch-only", "只看追蹤（0）");
+  const watchOnly = make("button", "nw-watch-only", "只看追蹤 0");
   watchOnly.type = "button";
   watchOnly.setAttribute("aria-pressed", "false");
   let trackedWords = watchWords(), onlyWatched = false;
   watchInput.value = trackedWords.join(" ");
   watchOnly.disabled = trackedWords.length === 0;
-  watchSettings.append(watchLabel, watchInput, watchSave, watchOnly);
+  watchOnly.hidden = trackedWords.length === 0;
+  watchSettings.append(watchLabel, watchInput, watchSave);
   const status = make("span", "nw-status");
   status.setAttribute("role", "status");
   status.textContent = "等待模組就緒";
@@ -374,7 +378,7 @@ export default function mount(ctx) {
   rankingSection.append(rankingHeading, ranking);
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(sample, market, history, macro, rankingSection, note);
-  toolbar.append(refresh, sources, categories, watchToggle, status, watchSettings);
+  toolbar.append(refresh, sources, categories, watchToggle, watchOnly, status, watchSettings);
   root.append(toolbar, focus, panel, themeFilter, list, empty);
   ctx.container.append(root);
 
@@ -390,6 +394,7 @@ export default function mount(ctx) {
   let historyAt = Date.now();
   let updatedText = "", failedText = "", classificationText = "";
   const expanded = new Set();
+  const summaries = new Set();
   let sourceOrder = new Map();
   const text = (value) => typeof value === "string" ? value : "";
   const localTime = (value) => {
@@ -471,6 +476,18 @@ export default function mount(ctx) {
       title.rel = "noopener noreferrer";
     }
     return title;
+  }
+  function summaryKey(group) {
+    return group.id ? `event:${group.id}` : `link:${text(group.reports[0].link)}`;
+  }
+  function onSummary(event) {
+    const button = event.target?.closest?.("button.nw-summary-toggle");
+    if (!button || !list.contains(button)) return;
+    const key = button.dataset.summary;
+    if (summaries.has(key)) summaries.delete(key);
+    else summaries.add(key);
+    button.setAttribute("aria-expanded", String(summaries.has(key)));
+    document.getElementById(button.getAttribute("aria-controls")).hidden = !summaries.has(key);
   }
   function onExpand(event) {
     const button = event.target?.closest?.("button[data-event]");
@@ -795,7 +812,7 @@ export default function mount(ctx) {
       return {selector: ".nw-focus-row a", href: node.href,
         event: row.dataset.event || "", topic: row.dataset.topicId || ""};
     }
-    for (const [selector, attribute] of [[".nw-list .nw-expand", "event"],
+    for (const [selector, attribute] of [[".nw-list .nw-summary-toggle", "summary"], [".nw-list .nw-expand", "event"],
       [".nw-focus-count[data-event]", "event"], [".nw-focus-count[data-topic-id]", "topicId"],
       [".nw-theme[data-topic]", "topic"]]) {
       if (node.matches(selector)) return {selector, attribute, value: node.dataset[attribute]};
@@ -840,9 +857,12 @@ export default function mount(ctx) {
       text(item.title).toLowerCase().includes(word.toLowerCase()) || text(item.summary).toLowerCase().includes(word.toLowerCase())))]));
     const watchedCount = allGroups.filter(group => matches.get(group)).length;
     watchOnly.disabled = trackedWords.length === 0;
+    watchOnly.hidden = trackedWords.length === 0;
     watchOnly.setAttribute("aria-pressed", String(onlyWatched));
-    watchOnly.textContent = `只看追蹤（${watchedCount}）`;  // Events, like the list and status.
+    watchOnly.textContent = `只看追蹤 ${watchedCount}`;  // Events, like the list and status.
     const groups = onlyWatched ? allGroups.filter(group => matches.get(group)) : allGroups;
+    const visibleSummaries = new Set(groups.filter(group => text(group.reports[0].summary)).map(summaryKey));
+    for (const key of summaries) if (!visibleSummaries.has(key)) summaries.delete(key);
     const newGroups = groups.map(group => group.reports.some(isNew));
     // New groups normally form a prefix; the divider closes that prefix only
     // when old groups follow it. New groups outside the prefix keep a badge.
@@ -851,7 +871,7 @@ export default function mount(ctx) {
     const dividerIndex = prefix > 0 && prefix < groups.length ? prefix : -1;
     if (received) {
       const count = groups.filter(group => group.reports.some(isNew)).length;
-      status.textContent = [updatedText, count ? `${count} 則新` : "", watchedCount ? `追蹤 ${watchedCount}` : "", failedText, classificationText]
+      status.textContent = [updatedText, count ? `${count} 則新` : "", failedText, classificationText]
         .filter(Boolean).join(" · ");
     }
     drawFocus(groups);
@@ -906,6 +926,20 @@ export default function mount(ctx) {
           reports.append(entry);
         }
         row.append(reports);
+      }
+      if (text(item.summary)) {
+        const key = summaryKey(group);
+        const paragraph = make("p", "nw-summary", item.summary);
+        paragraph.id = `nw-summary-${++summaryId}`;
+        paragraph.hidden = !summaries.has(key);
+        paragraph.prepend(make("small", "nw-summary-label", "來源摘要"));
+        const button = make("button", "nw-summary-toggle", "摘要");
+        button.type = "button";
+        button.dataset.summary = key;
+        button.setAttribute("aria-expanded", String(summaries.has(key)));
+        button.setAttribute("aria-controls", paragraph.id);
+        meta.append(button);
+        meta.after(paragraph);  // Below meta, so the toggle does not move when expanded.
       }
       list.append(row);
     }
@@ -973,6 +1007,7 @@ export default function mount(ctx) {
     drawItems();
   }
   list.addEventListener("click", onExpand);
+  list.addEventListener("click", onSummary);
   focusList.addEventListener("click", onFocus);
   clearAll.addEventListener("click", onClearAll);
   ranking.addEventListener("click", onTheme);
@@ -1011,6 +1046,8 @@ export default function mount(ctx) {
       watchInput.removeEventListener("keydown", onWatchKey);
       watchOnly.removeEventListener("click", onWatchOnly);
       list.removeEventListener("click", onExpand);
+      list.removeEventListener("click", onSummary);
+      summaries.clear();
       focusList.removeEventListener("click", onFocus);
       expanded.clear();
       sourceOrder.clear();

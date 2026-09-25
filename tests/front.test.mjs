@@ -65,7 +65,7 @@ test('list rows, local time, link attributes, summary and status', t => {
   const local = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   const row = h.container.querySelector('li');
   assert.equal(row.firstElementChild, anchor);
-  assert.equal(row.lastElementChild.className, 'nw-meta');
+  assert.equal(row.querySelector('.nw-meta').nextElementSibling.className, 'nw-summary');
   assert.equal(row.querySelector('.nw-category').textContent, '未分類');
   assert.equal(row.querySelector('.nw-source').textContent, '甲');
   assert.equal(row.querySelector('.nw-time').textContent, `${date.getMonth() + 1}/${date.getDate()} ${local}`);
@@ -696,13 +696,13 @@ test('events collapse to earliest report and toggle accessible other reports wit
   const row = mainRows(h)[0];
   const button = row.querySelector('.nw-expand');
   assert.equal(button.parentElement.className, 'nw-meta');
-  assert.equal(button.parentElement.lastElementChild, button);
+  assert.equal(button.parentElement.lastElementChild.className, 'nw-summary-toggle');
   assert.equal(button.textContent, '另 2 則報導');
   assert.equal(button.getAttribute('aria-expanded'), 'false');
   const reports = row.querySelector('.nw-reports');
   assert.equal(reports.hidden, true);
   assert.equal(h.window.getComputedStyle(reports).display, 'none');
-  assert.equal(mainRows(h)[1].querySelector('button'), null);
+  assert.equal(mainRows(h)[1].querySelector('.nw-expand'), null);
   button.click();
   assert.equal(button.getAttribute('aria-expanded'), 'true');
   assert.equal(reports.hidden, false);
@@ -1519,7 +1519,7 @@ test('watch settings normalize stored words and save with Enter for reload', t =
     ...Array.from({length:12}, (_, i) => `詞${i}`)];
   const h = setup(t, window => window.localStorage.setItem(watchKey, JSON.stringify(raw)));
   const c = watchControls(h);
-  assert.equal(c.toggle.textContent, '追蹤');
+  assert.equal(c.toggle.textContent, '追蹤設定');
   assert.equal(c.toggle.getAttribute('aria-expanded'), 'false');
   assert.equal(h.window.getComputedStyle(c.settings).display, 'none');
   c.toggle.click();
@@ -1551,18 +1551,18 @@ test('watch matches title or summary literally and tags group representative wit
   assert.equal(rows[1].querySelector('.nw-watch').textContent, '追蹤：.*(');
   assert.equal(rows[2].querySelector('.nw-watch').textContent, '追蹤：<img>');
   assert.equal(h.container.querySelector('img'), null);
-  assert.equal(watchControls(h).only.textContent, '只看追蹤（3）');
-  assert.match(h.container.querySelector('[role=status]').textContent, /追蹤 3/);
+  assert.equal(watchControls(h).only.textContent, '只看追蹤 3');
+  assert.doesNotMatch(h.container.querySelector('[role=status]').textContent, /追蹤/);
   watchControls(h).only.click();
   assert.deepEqual(mainTitles(h), ['最早', '字元 .*( 原樣', '<img>']);
 });
 
-test('watch button and status both count events, matching the list', t => {
+test('watch toolbar button counts events without duplicating the status', t => {
   const h = setup(t, withSeen(seenAt));
   saveWatch(h, 'AI');
   h.message(listing([eventStory('111111111111', 'AI', 11), eventStory('111111111111', 'ai', 12)]));
-  assert.equal(watchControls(h).only.textContent, '只看追蹤（1）');
-  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新 · 追蹤 1/);
+  assert.equal(watchControls(h).only.textContent, '只看追蹤 1');
+  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新/);
 });
 
 test('watch filter combines with source category theme and topic and survives replacement', t => {
@@ -2097,4 +2097,73 @@ test('a feed timestamp in the future never pushes lastSeen past the current time
   h.handle.unmount();
   const stored = Date.parse(JSON.parse(h.window.localStorage.getItem(seenKey)));
   assert.ok(stored <= Date.now() && stored >= before - 1000);
+});
+
+test('summary toggles safe full source text with aria, survives resend and preserves keyboard focus', t => {
+  const h=setup(t), id='111111111111', summary='<img src=x> '+ '完整摘要'.repeat(120);
+  const body=listing([eventStory(id,'代表',8,{summary}),eventStory(id,'子報導',9,{summary:'另一份摘要'})]);
+  h.message(body);
+  let button=h.container.querySelector('.nw-summary-toggle');
+  const paragraph=()=>h.window.document.getElementById(button.getAttribute('aria-controls'));
+  assert.equal(button.parentElement.lastElementChild,button);
+  assert.equal(button.textContent,'摘要');
+  assert.equal(button.hasAttribute('aria-label'),false);
+  assert.equal(paragraph().previousElementSibling.className,'nw-meta');
+  assert.equal(paragraph().hidden,true);
+  assert.equal(button.getAttribute('aria-expanded'),'false');
+  assert.equal(paragraph().querySelector('small').textContent,'來源摘要');
+  assert.equal(paragraph().lastChild.textContent,summary);
+  assert.equal(h.container.querySelector('img'),null);
+  assert.equal(mainRows(h)[0].querySelector('.nw-title').title,summary);
+  button.click(); button.focus();
+  assert.equal(paragraph().hidden,false);
+  h.message(body); button=h.container.querySelector('.nw-summary-toggle');
+  assert.equal(button.getAttribute('aria-expanded'),'true');
+  assert.equal(paragraph().hidden,false);
+  assert.equal(h.window.document.activeElement,button);
+  button.click(); assert.equal(paragraph().hidden,true);
+  button.click();
+  const retained=button;
+  h.handle.unmount(); retained.click();
+  assert.equal(retained.getAttribute('aria-expanded'),'true');
+  assert.equal(h.container.childElementCount,0);
+});
+
+test('summary handles missing text, link fallback and forgets rows that disappear', t => {
+  const h=setup(t);
+  for(const summary of ['',null,{},42]) {
+    h.message(listing([article({summary})]));
+    assert.equal(h.container.querySelector('.nw-summary-toggle'),null);
+  }
+  const body=listing([article({summary:'來源內容'})]);
+  h.message(body); h.container.querySelector('.nw-summary-toggle').click();
+  h.message(body);
+  assert.equal(h.container.querySelector('.nw-summary').hidden,false);
+  h.message(listing([])); h.message(body);
+  assert.equal(h.container.querySelector('.nw-summary').hidden,true);
+  h.container.querySelector('.nw-summary-toggle').click();
+  choose(h,h.categories,'world'); choose(h,h.categories,'');
+  assert.equal(h.container.querySelector('.nw-summary').hidden,true);
+});
+
+test('watch toggle stays on toolbar while settings close and disappears with empty keywords', t => {
+  const h=setup(t), c=watchControls(h);
+  assert.equal(c.toggle.textContent,'追蹤設定');
+  assert.equal(c.toggle.nextElementSibling,c.only);
+  assert.equal(c.only.hidden,true);
+  assert.equal(c.settings.querySelector('.nw-watch-only'),null);
+  saveWatch(h,'AI');
+  h.message(listing([article({title:'AI'}),article()]));
+  assert.equal(c.only.hidden,false);
+  assert.equal(c.only.textContent,'只看追蹤 1');
+  c.toggle.click(); c.only.click(); c.toggle.click();
+  assert.equal(c.settings.hidden,true);
+  assert.equal(c.only.hidden,false);
+  assert.equal(c.only.getAttribute('aria-pressed'),'true');
+  assert.equal(mainRows(h).length,1);
+  assert.doesNotMatch(h.container.querySelector('[role=status]').textContent,/追蹤/);
+  saveWatch(h,'');
+  assert.equal(c.only.hidden,true);
+  assert.equal(c.only.getAttribute('aria-pressed'),'false');
+  assert.equal(mainRows(h).length,2);
 });
