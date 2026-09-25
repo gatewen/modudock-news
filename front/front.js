@@ -537,10 +537,12 @@ export default function mount(ctx) {
   }
   function drawFocus(groups) {
     if (topics.length) {
-      focus.hidden = false;
       focusList.replaceChildren();
       for (const topic of topics) {
         const members = items.filter(item => item && item.topic === topic.id);
+        if (!selectedTopic && (sources.value || categories.value) && !members.some(item =>
+          (!sources.value || text(item.source) === sources.value)
+          && (!categories.value || text(item.category) === categories.value))) continue;
         const representative = members.find(item => item.title === topic.title);
         const row = make("div", "nw-focus-row");
         row.dataset.topicId = topic.id;
@@ -560,6 +562,7 @@ export default function mount(ctx) {
         row.append(copy, button);
         focusList.append(row);
       }
+      focus.hidden = focusList.childElementCount === 0;
       return;
     }
     if (modelState === "working") {
@@ -1052,7 +1055,8 @@ export default function mount(ctx) {
     const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
     analysisEnabled = classify.enabled !== false;
     const pending = Number.isInteger(classify.pending) && classify.pending >= 0 ? classify.pending : 0;
-    classificationText = classify.enabled === false ? "分類：關閉" : pending > 0 ? `未分類：${pending}` : "";
+    classificationText = classify.enabled === false ? "分類：關閉"
+      : modelState !== "working" && pending > 0 ? `未分類：${pending}` : "";
     const updated = localTime(body.at);
     const at = Date.parse(text(body.at));
     historyAt = Number.isFinite(at) ? at : Date.now();

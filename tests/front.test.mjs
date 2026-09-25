@@ -1329,6 +1329,7 @@ test('topic click resets other filters, keeps event grouping, toggles and surviv
   const h = setup(t), id = topicRecord().id;
   const reports = [...focusReports('111111111111', 3, 10, {topic:id}),
     article({title:'另一事件', topic:id, category:'world'}), article({title:'外面', category:'politics'})];
+  reports[0].source = '甲';
   const body = topicListing(reports);
   h.message(body);
   choose(h, h.categories, 'finance');
@@ -1346,13 +1347,14 @@ test('topic click resets other filters, keeps event grouping, toggles and surviv
   assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'true');
   focusTopicButtons(h)[0].click();
   assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'false');
-  assert.equal(mainRows(h).length, 0); // Restores the previous source/category, whose combination has no reports.
+  assert.equal(mainRows(h).length, 1); // Restores the previous source/category scope.
   assert.equal(h.select.value, '甲');
   assert.equal(h.categories.value, 'finance');
-  assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  assert.equal(h.container.querySelector('.nw-filter').hidden, false);
+  assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'true');
   choose(h, h.select, '');
   choose(h, h.categories, 'finance');
-  assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'false');
+  assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'true');
   const css = h.container.querySelector('style').textContent;
   assert.match(css, /\.nw \.nw-focus-count\[data-topic-id\]\[aria-pressed="true"\], \.nw \.nw-watch-only\[aria-pressed="true"\] \{ border-color: var\(--nw-accent\); box-shadow: inset 3px 0 0 var\(--nw-accent\); \}/);
 });
@@ -1369,6 +1371,8 @@ test('topic filter cancels via clear button, source change, category change and 
     focusTopicButtons(h)[0].click();
     assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'true');
     cancel();
+    choose(h, h.select, '');
+    choose(h, h.categories, '');
     assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'false');
     assert.equal(h.container.querySelector('.nw-filter').hidden, true);
   }
@@ -2084,6 +2088,7 @@ test('text buttons use visible names and external descriptions survive redraws a
   choose(h,h.categories,'politics');
   assert.equal(h.container.querySelector('[data-topic="issue:budget"]').hasAttribute('aria-describedby'),false);
   scan();
+  choose(h,h.categories,'');
   focusTopicButtons(h)[0].click();
   assert.equal(h.container.querySelector('.nw-filter button').textContent,'返回');
   scan();
@@ -2212,7 +2217,7 @@ test('model status shows working and paused, with focus hint only while topics a
 for (const exit of ['return','same-topic','disappear']) {
   test(`topic ${exit} restores filters scroll and focus across topic switches`, t => {
     const h=setup(t), first=topicRecord(), second=topicRecord({id:'bbbbbbbbbbbb',title:'另一話題'});
-    const body=topicListing([financeArticle({title:'AI 原檢視',source:'甲',link:'https://example.com/original'}),
+    const body=topicListing([financeArticle({title:'AI 原檢視',source:'甲',link:'https://example.com/original',topic:first.id}),
       article({topic:first.id,title:first.title}),article({topic:second.id,title:second.title})],[first,second]);
     const outer=h.window.document.createElement('div');
     outer.style.overflowY='auto';
@@ -2246,7 +2251,7 @@ for (const exit of ['return','same-topic','disappear']) {
 test('manual source category and clear-all discard saved topic view', t => {
   for(const action of ['source','category','clear']) {
     const h=setup(t), id=topicRecord().id;
-    const body=topicListing([financeArticle({source:'甲'}),article({topic:id,source:'乙'})]);
+    const body=topicListing([financeArticle({source:'甲',topic:id}),article({topic:id,source:'乙',category:'world'})]);
     h.message(body); choose(h,h.categories,'finance'); choose(h,h.select,'甲');
     focusTopicButtons(h)[0].click();
     if(action==='source') choose(h,h.select,'乙');
@@ -2264,7 +2269,7 @@ test('manual source category and clear-all discard saved topic view', t => {
 
 test('return skips removed source and theme options and tolerates vanished focus', t => {
   const h=setup(t), id=topicRecord().id;
-  h.message(topicListing([financeArticle({source:'乙',link:'https://example.com/removed'}),article({topic:id})]));
+  h.message(topicListing([financeArticle({source:'乙',link:'https://example.com/removed',topic:id}),article({topic:id})]));
   choose(h,h.categories,'finance'); choose(h,h.select,'乙'); themeButton(h,'memory').click();
   h.container.querySelector('.nw-list a').focus(); focusTopicButtons(h)[0].click();
   h.message({...topicListing([financeArticle({analysis:analysis({theme:'foundry'})}),article({topic:id})]),sources:[{name:'甲',ok:true}]});
@@ -2321,4 +2326,80 @@ test('row separates ordered information from right-aligned actions with narrow l
   assert.match(css,/@container \(max-width: 419\.98px\)\s*\{\s*\.nw \.nw-actions \{ margin-left: 0; \}/);
   h.message(listing([article({summary:''})]));
   assert.equal(mainRows(h)[0].querySelector('.nw-actions'),null);
+});
+
+test('topic focus follows source and category on the same report and retains whole-topic counts', t => {
+  const h=setup(t), first=topicRecord({sources:4,count:9}), second=topicRecord({id:'bbbbbbbbbbbb'});
+  const body=topicListing([
+    financeArticle({topic:first.id,source:'甲'}), worldArticle({topic:first.id,source:'乙'}),
+    worldArticle({topic:second.id,source:'甲'}), article({topic:second.id,source:'乙',category:'politics'}),
+  ],[first,second]);
+  const ids=()=>focusTopicButtons(h).map(button=>button.dataset.topicId);
+  h.message(body);
+  assert.deepEqual(ids(),[first.id,second.id]);
+  choose(h,h.categories,'finance');
+  assert.deepEqual(ids(),[first.id]);
+  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent,'4 家媒體・9 則');
+  choose(h,h.categories,'world');
+  choose(h,h.select,'乙');
+  assert.deepEqual(ids(),[first.id]); // Second has world and 乙, but not on the same report.
+  h.message(body);
+  assert.deepEqual(ids(),[first.id]);
+  focusTopicButtons(h)[0].click();
+  assert.deepEqual(ids(),[first.id,second.id]); // Topic view still offers every topic.
+  assert.equal(mainRows(h).length,2); // Clicking includes members outside the former scope.
+  assert.equal(h.categories.value,'');
+  assert.equal(h.select.value,'');
+  h.container.querySelector('.nw-filter button').click();
+  assert.deepEqual(ids(),[first.id]);
+  choose(h,h.categories,'');
+  choose(h,h.select,'甲');
+  assert.deepEqual(ids(),[first.id,second.id]);
+  choose(h,h.categories,'politics');
+  assert.deepEqual(ids(),[]);
+  assert.equal(focusArea(h).hidden,true);
+  choose(h,h.select,'乙');
+  assert.deepEqual(ids(),[second.id]);
+  assert.equal(focusArea(h).hidden,false);
+});
+
+test('filtered-out topics hide focus without event fallback or working hint', t => {
+  const h=setup(t), topic=topicRecord();
+  const reports=[article({topic:topic.id,category:'world'}),
+    ...focusReports('111111111111',3)];
+  for (const state of ['done','working']) {
+    h.message({...topicListing(reports),model:{state}});
+    choose(h,h.categories,'finance');
+    assert.equal(focusArea(h).hidden,true);
+    assert.equal(focusButtons(h).length,0);
+    assert.doesNotMatch(focusArea(h).textContent,/正在整理/);
+    h.message({...listing(reports),model:{state:'done'}});
+    assert.equal(focusArea(h).hidden,false); // Genuine absence still uses scoped event fallback.
+    assert.equal(focusButtons(h)[0].dataset.event,'111111111111');
+  }
+});
+
+test('working suppresses pending classification count while paused and done retain it', t => {
+  const h=setup(t), status=()=>h.container.querySelector('[role=status]').textContent;
+  for (const state of ['working','paused','done']) {
+    h.message({...listing([article()]),classify:{enabled:true,pending:7},model:{state}});
+    if (state==='working') {
+      assert.match(status(),/整理中/);
+      assert.doesNotMatch(status(),/未分類/);
+    } else assert.match(status(),/未分類：7/);
+    h.message({...listing([]),classify:{enabled:true,pending:0},model:{state}});
+    assert.doesNotMatch(status(),/未分類/);
+  }
+  h.message({...listing([]),classify:{enabled:false,pending:7},model:{state:'off'}});
+  assert.match(status(),/分類：關閉/);
+  assert.doesNotMatch(status(),/未分類/);
+});
+
+test('source alone filters topic focus and clearing it restores every topic', t => {
+  const h=setup(t), first=topicRecord(), second=topicRecord({id:'bbbbbbbbbbbb'});
+  h.message(topicListing([article({topic:first.id,source:'甲'}),article({topic:second.id,source:'乙'})],[first,second]));
+  for (const [source,ids] of [['甲',[first.id]],['乙',[second.id]],['',[first.id,second.id]]]) {
+    choose(h,h.select,source);
+    assert.deepEqual(focusTopicButtons(h).map(button=>button.dataset.topicId),ids);
+  }
 });
