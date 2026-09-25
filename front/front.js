@@ -162,6 +162,8 @@ const css = `
 .nw .nw-list { list-style: none; margin: 0; padding: 0; }
 .nw .nw-row { padding: 14px 0; }
 .nw .nw-row + .nw-row { border-top: 1px solid var(--nw-line); }
+.nw .nw-divider { display: flex; align-items: center; gap: 12px; padding: 14px 16px; font-size: 12px; color: var(--nw-accent); }
+.nw .nw-divider::after { content: ""; flex: 1; border-top: 1px solid var(--nw-accent); }
 .nw .nw-title { display: block; font-size: 15px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; color: var(--nw-fg); text-decoration: none; }
 .nw a.nw-title:hover { color: var(--nw-accent); text-decoration: underline; }
 .nw .nw-new { color: var(--nw-accent); font-size: 12px; font-weight: 700; margin-right: 6px; }
@@ -776,13 +778,25 @@ export default function mount(ctx) {
     watchOnly.setAttribute("aria-pressed", String(onlyWatched));
     watchOnly.textContent = `只看追蹤（${watchedCount}）`;  // Events, like the list and status.
     const groups = onlyWatched ? allGroups.filter(group => matches.get(group)) : allGroups;
+    const newGroups = groups.map(group => group.reports.some(isNew));
+    // New groups normally form a prefix; the divider closes that prefix only
+    // when old groups follow it. New groups outside the prefix keep a badge.
+    const firstOld = newGroups.indexOf(false);
+    const prefix = lastSeen === null ? 0 : firstOld < 0 ? groups.length : firstOld;
+    const dividerIndex = prefix > 0 && prefix < groups.length ? prefix : -1;
     if (received) {
       const count = groups.filter(group => group.reports.some(isNew)).length;
       status.textContent = [updatedText, count ? `${count} 則新` : "", watchedCount ? `追蹤 ${watchedCount}` : "", failedText, classificationText]
         .filter(Boolean).join(" · ");
     }
     drawFocus(groups);
-    for (const group of groups) {
+    for (const [index, group] of groups.entries()) {
+      if (index === dividerIndex) {
+        const divider = make("li", "nw-divider", "上次看到這裡");
+        divider.setAttribute("role", "separator");
+        divider.setAttribute("aria-label", "以上是上次之後的新報導");
+        list.append(divider);
+      }
       const item = group.reports[0];
       const category = text(item.category);
       const analysis = validAnalysis(item);
@@ -805,7 +819,7 @@ export default function mount(ctx) {
       }
       meta.append(make("span", "nw-category", categoryNames.get(category) || "未分類"),
         make("span", "nw-source", text(item.source)), newsTime(item));
-      row.append(newsTitle(item, "nw-title", group.reports.some(isNew)), meta);
+      row.append(newsTitle(item, "nw-title", newGroups[index] && index >= prefix), meta);
       if (group.reports.length > 1) {
         const toggle = make("button", "nw-expand", `另 ${group.reports.length - 1} 則報導`);
         toggle.type = "button";
@@ -819,14 +833,14 @@ export default function mount(ctx) {
           const entry = make("li", "nw-report");
           const details = make("div", "nw-report-meta");
           details.append(make("span", "nw-source", text(report.source)), newsTime(report));
-          entry.append(newsTitle(report, "nw-report-title"), details);
+          entry.append(newsTitle(report, "nw-report-title", false), details);
           reports.append(entry);
         }
         row.append(reports);
       }
       list.append(row);
     }
-    empty.hidden = list.children.length > 0;
+    empty.hidden = groups.length > 0;
     emptyText.textContent = received ? "這個條件下沒有新聞" : "正在取得新聞";
     clearAll.hidden = !received;
     restoreFocus(focused);

@@ -1211,9 +1211,9 @@ test('new markers use frozen mount baseline, include focus and grouped reports, 
     article({published:'2026-09-25T00:00:00Z', category:'world'})],
     ['媒體0','媒體1','媒體2','甲'].map(name => ({name, ok:true})));
   h.message(body);
-  assert.equal(mainRows(h)[0].querySelector('.nw-title .nw-new').textContent, '新');
+  assert.equal(mainRows(h)[0].querySelector('.nw-title .nw-new'), null);
   assert.equal(focusArea(h).querySelector('.nw-title .nw-new').textContent, '新');
-  assert.equal(mainRows(h)[0].querySelectorAll('.nw-report-title .nw-new').length, 1);
+  assert.equal(mainRows(h)[0].querySelectorAll('.nw-report-title .nw-new').length, 0);
   assert.equal(mainRows(h)[1].querySelector('.nw-new'), null); // Equal is not new.
   assert.match(h.container.querySelector('[role=status]').textContent, /更新 · 2 則新/);
   h.window.localStorage.setItem(seenKey, JSON.stringify('2099-01-01T00:00:00Z'));
@@ -1263,7 +1263,8 @@ test('pagehide and unmount save max of baseline and current list candidate, with
   assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), seenAt);
   h.window.dispatchEvent(new h.window.Event('pagehide'));
   assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2026-09-25T00:00:00.000Z');
-  assert.equal(h.container.querySelector('.nw-new').textContent, '新');
+  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新/);
+  assert.equal(h.container.querySelector('.nw-new'), null);
   h.handle.unmount();
   h.window.localStorage.setItem(seenKey, JSON.stringify('sentinel'));
   h.window.dispatchEvent(new h.window.Event('pagehide'));
@@ -1826,4 +1827,99 @@ test('lastSeen reread ignores invalid values and read errors during persistence'
   Object.defineProperty(h.window, 'localStorage', {configurable:true, get() { throw new Error('blocked'); }});
   assert.doesNotThrow(() => h.handle.unmount());
   assert.equal(h.container.childElementCount, 0);
+});
+
+const divider = h => h.container.querySelector('.nw-divider');
+test('seen divider is absent without baseline, or with only new or only old groups', t => {
+  for (const baseline of [false, true]) {
+    const h = setup(t, baseline ? withSeen(seenAt) : () => {});
+    for (const hours of baseline ? [[11,12], [8,10], []] : [[11,8]]) {
+      h.message(listing(hours.map((hour,i) => eventStory(String(i).padStart(12,'0'), '報導', hour))));
+      assert.equal(divider(h), null);
+      assert.equal(h.container.querySelector('.nw-list .nw-new'), null);
+    }
+  }
+});
+
+test('seen divider precedes first old group, omits child markers and retains focus markers', t => {
+  const h = setup(t, withSeen(seenAt));
+  const reports = focusReports('111111111111', 3, 9);
+  h.message(listing([...reports, eventStory('222222222222', '舊', 10)]));
+  const line = divider(h), rows = mainRows(h);
+  assert.equal(line.previousElementSibling, rows[0]);
+  assert.equal(line.nextElementSibling, rows[1]);
+  assert.equal(line.textContent, '上次看到這裡');
+  assert.equal(line.getAttribute('role'), 'separator');
+  assert.equal(line.getAttribute('aria-label'), '以上是上次之後的新報導');
+  assert.equal(line.querySelector('a,button,[tabindex]'), null);
+  assert.equal(line.hasAttribute('tabindex'), false);
+  assert.equal(h.container.querySelector('.nw-list .nw-new'), null);
+  assert.equal(focusArea(h).querySelectorAll('.nw-new').length, 1);
+  assert.equal(mainRows(h).length, 2);
+  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新/);
+  const css = h.container.querySelector('style').textContent;
+  assert.match(css, /\.nw \.nw-divider \{[^}]*padding: 14px 16px;[^}]*font-size: 12px;[^}]*color: var\(--nw-accent\)/);
+  assert.match(css, /\.nw \.nw-divider::after \{[^}]*flex: 1;[^}]*border-top: 1px solid var\(--nw-accent\)/);
+});
+
+test('out-of-order new groups below divider keep a representative new marker', t => {
+  const h = setup(t, withSeen(seenAt));
+  h.message(listing([eventStory('111111111111', '新', 12),
+    article({title:'無日期', published:'bad'}),
+    eventStory('222222222222', '例外新群', 11), eventStory('222222222222', '例外群舊報導', 8)]));
+  assert.equal(divider(h).nextElementSibling, mainRows(h)[1]);
+  assert.equal(mainRows(h)[0].querySelector('.nw-new'), null);
+  assert.equal(mainRows(h)[2].querySelector('.nw-title .nw-new').textContent, '新');
+  assert.equal(mainRows(h)[2].querySelector('.nw-report-title .nw-new'), null);
+  assert.match(h.container.querySelector('[role=status]').textContent, /2 則新/);
+});
+
+test('replacement moves seen divider and preserves link focus without treating separator as news', t => {
+  const h = setup(t, withSeen(seenAt));
+  const a = eventStory('111111111111', 'A', 12, {link:'https://example.com/a'});
+  const b = eventStory('222222222222', 'B', 9, {link:'https://example.com/b'});
+  const c = eventStory('333333333333', 'C', 8, {link:'https://example.com/c'});
+  h.message(listing([a,b,c]));
+  assert.equal(divider(h).nextElementSibling, mainRows(h)[1]);
+  h.container.querySelector('a[href="https://example.com/b"]').focus();
+  h.message(listing([a,{...b,published:'2026-09-24T11:00:00Z'},c]));
+  assert.equal(divider(h).nextElementSibling, mainRows(h)[2]);
+  assert.equal(h.window.document.activeElement.href, b.link);
+  assert.equal(h.container.querySelectorAll('.nw-divider').length, 1);
+  h.message(listing([a,{...b,event:a.event},c]));
+  assert.equal(mainRows(h).length, 2);
+  assert.equal(divider(h).nextElementSibling, mainRows(h)[1]);
+});
+
+test('seen divider recomputes after source category theme topic and watch filters', t => {
+  const h = setup(t, withSeen(seenAt)), id = topicRecord().id;
+  const items = [eventStory('111111111111', 'AI 新', 12, {topic:id}),
+    eventStory('222222222222', '舊', 8, {source:'乙', analysis:analysis({theme:'foundry'})}),
+    article({title:'國際舊', category:'world'})];
+  h.message(topicListing(items));
+  assert.ok(divider(h));
+  choose(h,h.select,'甲'); choose(h,h.categories,'finance');
+  assert.equal(divider(h), null);
+  choose(h,h.select,'');
+  assert.ok(divider(h));
+  themeButton(h,'memory').click();
+  assert.equal(divider(h), null);
+  themeButton(h,'memory').click();
+  assert.ok(divider(h));
+  focusTopicButtons(h)[0].click();
+  assert.equal(divider(h), null);
+  focusTopicButtons(h)[0].click();
+  assert.ok(divider(h));
+  saveWatch(h,'AI'); watchControls(h).only.click();
+  assert.equal(divider(h), null);
+  watchControls(h).only.click();
+  assert.ok(divider(h));
+});
+
+test('an old group at the top suppresses the divider and new groups keep their markers', t => {
+  const h = setup(t, withSeen(seenAt));
+  h.message(listing([eventStory('000000000001', '舊', 8), eventStory('000000000002', '新甲', 11),
+    eventStory('000000000003', '新乙', 12)]));
+  assert.equal(divider(h), null);
+  assert.equal(h.container.querySelectorAll('.nw-list .nw-row .nw-new').length, 2);
 });
