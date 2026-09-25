@@ -376,3 +376,53 @@ class WorldAnalyzeTests(unittest.TestCase):
         for invalid in [dict(world, kind='finance'), dict(finance, kind='world'), dict(world, kind=[]),
                         dict(world, region='zzz'), dict(world, trend={}), dict(world, kind='zzz'), None]:
             self.assertFalse(valid_analysis(invalid))
+
+
+def politics_answers(n=2, probability=.9):
+    return {'answers': {f'issue_{i}': {'choice':'budget', 'probabilities':{'budget':probability}}
+                        for i in range(n)}}
+
+
+class PoliticsAnalyzeTests(unittest.TestCase):
+    def test_exact_question_criteria_indices_threshold_and_batches(self):
+        import re
+        spec = (Path(__file__).resolve().parents[1] / 'docs/SPEC.md').read_text().split('### 18.16',1)[1]
+        expected = dict(re.findall(r'`([a-z_]+)`「([^」]+)」', spec))
+        self.assertEqual(len(expected), 10)
+        for probability, choice in [(.34,'other'), (.35,'budget')]:
+            with server(lambda p,*_: (200, politics_answers(len(p['state']), probability), {})) as (url, received):
+                batches = list(Analyzer(endpoint=url,key='test').analyze_round(items(21),kind='politics'))
+            self.assertEqual([len(b) for b in batches], [20,1])
+            for batch in batches:
+                self.assertTrue(all(v == {'kind':'politics','issue':choice} for v in batch.values()))
+            for _,_,payload in received:
+                for i in range(len(payload['state'])):
+                    self.assertEqual(payload['questions'][f'issue_{i}'], {'type':'choice',
+                        'instructions':f'news_{i} 這則新聞主要涉及哪一個政治議題？', 'criteria':expected})
+
+    def test_validation_and_whole_batch_rejection(self):
+        from back.analyze import valid_analysis, analysis_kind
+        self.assertEqual(analysis_kind('politics'),'politics')
+        self.assertTrue(valid_analysis({'kind':'politics','issue':'budget'}))
+        for value in [None, {}, {'kind':'politics'}, {'kind':'politics','issue':{}},
+                      {'kind':'politics','issue':'zzz'}, {'kind':'world','issue':'budget'}]:
+            self.assertFalse(valid_analysis(value))
+        body = politics_answers()
+        body['answers']['issue_1']['choice'] = 'zzz'
+        with server(lambda *_:(200,body,{})) as (url,_):
+            self.assertIsNone(Analyzer(endpoint=url,key='test',log=lambda _:None).analyze(items(),kind='politics'))
+
+    def test_politics_reserves_longest_shape_before_analysis_arrives(self):
+        from back.feedparse import fit_packet, packet_bytes, MAX_PACKET, MAX_ANALYSIS, MAX_WORLD_ANALYSIS, MAX_POLITICS_ANALYSIS
+        import copy
+        for shape in [MAX_WORLD_ANALYSIS, MAX_POLITICS_ANALYSIS]:
+            self.assertGreaterEqual(len(json.dumps(MAX_ANALYSIS)),len(json.dumps(shape)))
+        item={'title':'x'*300,'summary':'y'*400,'category':'politics','analysis':None}
+        packet={'t':'msg','body':{'items':[dict(item) for _ in range(300)]}}
+        packet['body']['padding']='x'*(MAX_PACKET-len(packet_bytes(packet))-1)
+        fitted=fit_packet(packet)
+        self.assertLess(len(fitted['body']['items']),300)
+        expanded=copy.deepcopy(fitted)
+        for record in expanded['body']['items']: record['analysis']=MAX_POLITICS_ANALYSIS
+        self.assertLessEqual(len(packet_bytes(expanded)),MAX_PACKET)
+        self.assertEqual(len(fit_packet(expanded)['body']['items']),len(fitted['body']['items']))

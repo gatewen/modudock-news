@@ -256,7 +256,7 @@ test('analysis panel appears only for finance or tech between toolbar and list',
   const h = setup(t);
   assert.equal(panel(h).hidden, true);
   h.message(listing([financeArticle(), financeArticle({category: 'tech'})]));
-  for (const category of ['', 'politics', 'life', 'other', 'finance', 'tech']) {
+  for (const category of ['', 'life', 'other', 'finance', 'tech']) {
     choose(h, h.categories, category);
     assert.equal(panel(h).hidden, !['finance', 'tech'].includes(category));
   }
@@ -886,7 +886,7 @@ test('world panel replaces finance panel only for world and restores finance pre
   const h = setup(t);
   h.message(listing([worldArticle(), financeArticle()]));
   const surface = h.container.querySelector('.nw-panel');
-  for (const category of ['', 'politics', 'life', 'society']) {
+  for (const category of ['', 'life', 'society']) {
     choose(h, h.categories, category);
     assert.equal(surface.hidden, true);
     assert.equal(worldPanel(h), null);
@@ -1990,4 +1990,47 @@ test('topic source distribution counts reports, orders feed ties, limits five an
   focusTopicButtons(h)[0].click();
   assert.equal(hint.hidden,true);
   assert.equal(hint.textContent,'');
+});
+
+test('politics panel ranks neutral issues by events, filters and clears incompatible selections', t => {
+  const h=setup(t);
+  const political=(issue,extra={})=>article({category:'politics',analysis:{kind:'politics',issue},...extra});
+  const body=listing([political('budget',{event:'111111111111',event_size:2}),
+    political('budget',{event:'111111111111',event_size:2}), political('budget'),
+    political('cross_strait'),political('other'),political('zzz'),political({}),financeArticle(),worldArticle()]);
+  h.message(body); choose(h,h.categories,'politics');
+  const surface=h.container.querySelector('[aria-label="政治議題分析"]');
+  assert.equal(surface.hidden,false);
+  assert.equal(surface.querySelector('.nw-market').hidden,true);
+  assert.equal(surface.querySelector('.nw-history').hidden,true);
+  assert.equal(surface.querySelector('.nw-macro').hidden,true);
+  assert.match(surface.querySelector('.nw-sample-count').textContent,/6 個事件（7 則報導）/);
+  assert.equal(surface.querySelector('.nw-pending').textContent,'待分析 2');
+  const buttons=()=>[...surface.querySelectorAll('button[data-topic]')];
+  assert.deepEqual(buttons().map(b=>b.dataset.topic),['issue:budget','issue:cross_strait','issue:other']);
+  assert.deepEqual(buttons().map(b=>b.querySelector('.nw-theme-count').textContent),['2','1','1']);
+  assert.ok(buttons().every(b=>b.querySelectorAll('.nw-segment').length===1));
+  assert.equal(buttons()[0].querySelector('.nw-segment').className,'nw-segment nw-issue-count');
+  assert.equal(mainRows(h)[0].querySelector('.nw-tag').textContent,'預算與補貼');
+  buttons()[0].click(); assert.equal(mainRows(h).length,2);
+  assert.equal(buttons()[0].getAttribute('aria-pressed'),'true');
+  h.message(body); assert.equal(mainRows(h).length,2);
+  h.container.querySelector('[aria-label="取消議題篩選"]').click(); assert.equal(mainRows(h).length,6);
+  buttons()[0].click(); buttons()[0].click(); assert.equal(mainRows(h).length,6);
+  buttons()[0].click(); choose(h,h.categories,'finance');
+  assert.equal(mainRows(h).length,1); assert.equal(surface.querySelector('.nw-market').hidden,false);
+  themeButton(h,'memory').click(); choose(h,h.categories,'politics');
+  assert.equal(mainRows(h).length,6);
+  choose(h,h.categories,'world'); regionButton(h,'asia_pacific').click();
+  choose(h,h.categories,'politics'); assert.equal(mainRows(h).length,6);
+});
+
+test('issue "other" ranks last even when it has more events', t => {
+  const h=setup(t);
+  const political=issue=>article({category:'politics',analysis:{kind:'politics',issue}});
+  h.message(listing([political('other'),political('other'),political('other'),political('energy_env')]));
+  choose(h,h.categories,'politics');
+  const surface=h.container.querySelector('[aria-label="政治議題分析"]');
+  assert.deepEqual([...surface.querySelectorAll('button[data-topic]')].map(b=>b.dataset.topic),
+    ['issue:energy_env','issue:other']);
 });

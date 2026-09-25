@@ -1256,13 +1256,14 @@ class AnalysisSchedulerTests(unittest.TestCase):
             while not sink.packets.empty():
                 self.assertEqual(sink.packets.get_nowait()['t'], 'msg')  # No second publish.
 
-    def test_world_and_finance_analyze_separately_other_categories_never_analyzed(self):
+    def test_three_analysis_kinds_request_separately_other_categories_never_analyzed(self):
         from tests.test_classify import server
-        from tests.test_analyze import world_answers
+        from tests.test_analyze import world_answers, politics_answers
         labels = ['finance-a', 'world-b', 'tech-c', 'world-d', 'politics-e', 'society-f',
                   'life-g', 'sports-h', 'entertainment-i', 'other-j']
         def respond(payload, *_):
-            body = world_answers(len(payload['state'])) if 'trend_0' in payload['questions'] else model_answers(payload)
+            body = (politics_answers(len(payload['state'])) if 'issue_0' in payload['questions'] else
+                    world_answers(len(payload['state'])) if 'trend_0' in payload['questions'] else model_answers(payload))
             return 200, body, {}
         with server(respond) as (url, received):
             scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels), **self.clients(url))
@@ -1275,6 +1276,8 @@ class AnalysisSchedulerTests(unittest.TestCase):
             for item in final['items']:
                 if item['category'] == 'world':
                     self.assertEqual(item['analysis'], {'kind': 'world', 'trend': 'escalation', 'region': 'asia_pacific'})
+                elif item['category'] == 'politics':
+                    self.assertEqual(item['analysis'], {'kind': 'politics', 'issue': 'budget'})
                 elif item['category'] in {'finance', 'tech'}:
                     self.assertEqual(item['analysis']['kind'], 'finance')
                 else:
@@ -1283,17 +1286,17 @@ class AnalysisSchedulerTests(unittest.TestCase):
             for _, _, payload in received[1:]:
                 world = 'trend_0' in payload['questions']
                 titles = [i['title'] for i in payload['state'].values()]
-                self.assertTrue(all(title.split('-')[0] in ({'world'} if world else {'finance', 'tech'}) for title in titles))
+                self.assertTrue(all(title.split('-')[0] in ({'politics'} if 'issue_0' in payload['questions'] else {'world'} if world else {'finance', 'tech'}) for title in titles))
                 analyzed.extend(titles)
                 self.assertFalse('trend_0' in payload['questions'] and 'market_0' in payload['questions'])
-            self.assertCountEqual(analyzed, labels[:4])
+            self.assertCountEqual(analyzed, labels[:5])
             updates = []
             while not sink.packets.empty():
                 packet = sink.packets.get_nowait()
                 self.assertEqual(packet['t'], 'msg')
                 self.assertEqual(packet['body']['at'], initial['at'])
                 updates.append(packet['body'])
-            self.assertTrue(any(body['analysis']['pending'] == 4 for body in updates))
+            self.assertTrue(any(body['analysis']['pending'] == 5 for body in updates))
             self.assertTrue(any(any(i['category'] == 'world' and i['analysis'] for i in body['items']) for body in updates))
 
     def test_cached_world_category_schedules_analysis_and_cache_hit_skips_http(self):

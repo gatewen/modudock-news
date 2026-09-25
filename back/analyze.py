@@ -1,4 +1,4 @@
-"""Fixed finance and world question sets, sharing the classifier's HTTP and limits.
+"""Fixed finance, world and politics question sets, sharing the classifier's HTTP and limits.
 
 Inputs are (key, title, summary) tuples. Category eligibility, shared scheduling
 budget, threads and cache ownership belong to the coordinator, not this client.
@@ -10,7 +10,7 @@ if __package__:
 else:
     from classify import _ChoiceClient, _choice
 
-ANALYSIS_CATEGORIES = frozenset({"finance", "tech", "world"})
+ANALYSIS_CATEGORIES = frozenset({"finance", "tech", "world", "politics"})
 
 MARKET_CRITERIA = {
     "positive": "對股市或個股前景呈現正向訊息：上漲、利多、成長、獲利",
@@ -73,11 +73,24 @@ WORLD_QUESTIONS = {
         "other": "以上皆非",
     }, "other"),
 }
-QUESTION_SETS = {"finance": QUESTIONS, "world": WORLD_QUESTIONS}
+ISSUE_CRITERIA = {
+    "cross_strait": "兩岸關係、中國對台",
+    "us_intl": "美國與國際外交（含川習會、軍售外交）",
+    "defense": "國防、軍事、國安",
+    "election": "選舉、候選人、選戰、政黨動態",
+    "budget": "預算、財政、普發現金、補貼、稅",
+    "legislature": "立法院議事、法案",
+    "justice": "司法、檢調、弊案、貪污",
+    "energy_env": "能源、核能、環境",
+    "local": "地方施政、建設",
+    "other": "以上皆非",
+}
+POLITICS_QUESTIONS = {"issue": ("這則新聞主要涉及哪一個政治議題？", ISSUE_CRITERIA, "other")}
+QUESTION_SETS = {"finance": QUESTIONS, "world": WORLD_QUESTIONS, "politics": POLITICS_QUESTIONS}
 
 
 def analysis_kind(category):
-    return "world" if category == "world" else "finance"
+    return category if category in {"world", "politics"} else "finance"
 
 
 class Analyzer(_ChoiceClient):
@@ -124,5 +137,5 @@ def valid_analysis(value):
         return False
     return (all(isinstance(value.get(name), str) and value[name] in criteria
                 for name, (_, criteria, _) in QUESTION_SETS[kind].items())
-            and (kind == "world" or (type(value.get("dir_p")) in (int, float)
+            and (kind != "finance" or (type(value.get("dir_p")) in (int, float)
                                     and 0 <= value["dir_p"] <= 1)))
