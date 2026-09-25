@@ -1,10 +1,11 @@
 from copy import deepcopy
+import threading
 from types import SimpleNamespace
 import unittest
 
-from back.scheduler import Scheduler, ModelRound, ToneResult
+from back.scheduler import Scheduler, ModelRound, ToneResult, EventResult
 from back.topics import ToneClient, TopicPair
-from back.events import Pair
+from back.events import Pair, candidate_pairs
 from back.feedparse import MAX_PACKET, packet_bytes
 from tests import test_topic_scheduler as topic_helpers
 from tests.test_topics import snapshot, story, response
@@ -21,6 +22,65 @@ class ToneSchedulerTests(unittest.TestCase):
         s, sink = topic_helpers.TopicSchedulerTests.make(self, url, items, **options)
         s.tone_client = ToneClient(shared=s.classifier)
         return s, sink
+
+    def test_second_round_waits_for_event_acceptance_before_topics_then_failing_tone(self):
+        for fail in [False, True]:
+            with self.subTest(tone_fails=fail):
+                items, _ = snapshot([story('one', 'ALPHA BETA'), story('two', 'BETA DELTA')])
+                s, _ = self.make('http://unused.invalid', items)
+                seed = items[0]['link']
+                s.topic_cache.update({(seed, items[3]['link']): True, (seed, items[4]['link']): True})
+                s.round_id = 1
+                first = s._emit(s.caches, [])
+                self.assertEqual(first['body']['topics']['list'][0]['count'], 5)
+                # Next round retains the previous topic while one event answer is missing.
+                pair = next(p for p in candidate_pairs(items) if not p.automatic)
+                del s.event_cache[pair.key]
+                s.topic_cache.clear()
+                s.round_id = 2
+                second = s._emit(s.caches, [])
+                s._enqueue_classification(second)
+                self.assertEqual(second['body']['events']['pending'], 1)
+                self.assertTrue(s.topic_jobs.empty())
+                self.assertFalse(s.tone_jobs.empty())
+                calls, yielded = [], threading.Event()
+                def events(batch):
+                    calls.append('events')
+                    return {p.key: False for p in batch}
+                def topics(batch):
+                    calls.append('topics')
+                    return {p.key: True for p in batch}
+                def tone(batch):
+                    calls.append('tone')
+                    yielded.set()  # Also releases the test if priority is broken.
+                    return None if fail else {key: 'neutral' for key, _, _ in batch}
+                s.matcher.match, s.topic_matcher.match, s.tone_client.tone = events, topics, tone
+                wait = s.cv.wait
+                def observed_wait(timeout=None):
+                    if any(isinstance(result, EventResult) for result in s.results):
+                        yielded.set()
+                    return wait(timeout)
+                s.cv.wait = observed_wait
+                # Drive coordinator acceptance explicitly, so the race is deterministic.
+                s.classify_worker.start()
+                self.assertTrue(yielded.wait(2))
+                with s.cv:
+                    self.assertEqual(calls, ['events'])
+                    self.assertIsInstance(s.results[0], EventResult)
+                def accept_results():
+                    with s.cv:
+                        while s.results:
+                            packet = s._accept(s.results.popleft())
+                            if packet is not None:
+                                s._send_list(packet)
+                        s.cv.notify_all()
+                        return 'tone' in calls and not s.tone_in_flight and not s.topic_in_flight
+                eventually(accept_results, timeout=3)
+                self.assertEqual(calls, ['events', 'topics', 'topics', 'tone'])
+                self.assertEqual(s.last_list['body']['topics']['pending'], 0)
+                self.assertEqual(s.last_list['body']['topics']['list'][0]['count'], 5)
+                self.assertEqual(s.model_work.failed, fail)
+                s.stop()
 
     def test_topic_members_all_categories_only_once_after_topics_and_resend_counts_reports(self):
         items, _ = snapshot([story('one','ALPHA BETA'), story('two','BETA DELTA')])

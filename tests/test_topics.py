@@ -30,6 +30,28 @@ def response(payload, *_):
 
 
 class PlanTests(unittest.TestCase):
+    def test_five_previous_topics_do_not_exclude_larger_new_topic_or_leak_pending(self):
+        seeds, extras, groups, previous = [], [], {}, []
+        for n, size in enumerate([3, 3, 3, 3, 3, 10]):
+            for j in range(size):
+                item = story(f'event{n}-{j}', f'TERM{n}', chr(65 + j), n)
+                seeds.append(item)
+                groups[item['link']] = {'event': str(n)}
+                if j == 0 and n < 5:
+                    previous.append(item['link'])
+            extras.append(story(f'candidate{n}', f'TERM{n}'))
+        items, padded_groups = snapshot(extras, seeds, size=200)
+        padded_groups.update(groups)
+        topics, pending = plan(items, padded_groups, {}, list('ABCDEFGHIJ'), previous)
+        new_id = sha1(seeds[15]['link'].encode()).hexdigest()[:12]
+        old_ids = sorted(sha1(seed.encode()).hexdigest()[:12] for seed in previous)
+        self.assertEqual([topic['id'] for topic in topics], [new_id] + old_ids[:4])
+        self.assertEqual(topics[0]['sources'], 10)
+        selected = {topic['id'] for topic in topics}
+        self.assertEqual(len(pending), 5)
+        self.assertEqual({sha1(seed.encode()).hexdigest()[:12] for seed, _ in pending}, selected)
+        self.assertEqual((topics, pending), plan(items[::-1], padded_groups, {}, list('ABCDEFGHIJ'), previous))
+
     def test_aliases_chinese_fragments_and_alphanumeric_terms(self):
         self.assertEqual(words('特朗普 特習 ai AB12'), words('川普 川習 AI ab12'))
         terms = words('半導體產業')

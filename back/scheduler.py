@@ -304,7 +304,7 @@ class Scheduler:
             with self.cv:
                 while not self.stopping and (
                     (self.classify_jobs.empty() and self.analysis_jobs.empty() and self.event_jobs.empty() and self.topic_jobs.empty() and self.tone_jobs.empty())
-                    or any(isinstance(result, (ClassifyResult, TopicResult)) for result in self.results)
+                    or any(isinstance(result, (ClassifyResult, EventResult, TopicResult)) for result in self.results)
                 ):
                     self.cv.wait()
                 if self.stopping:

@@ -18,6 +18,7 @@ else:
     from feedparse import dedup_key
 
 MAX_TOPICS = 5
+MAX_BUILT_TOPICS = 10
 MAX_PENDING = 60
 WINDOW = timedelta(hours=48)
 CRITERIA = {
@@ -36,7 +37,7 @@ def words(title):
 
 
 def plan(items, groups, cache, feed_order, previous=()):
-    """Retain viable previous seeds before filling slots; sort display separately."""
+    """Reuse previous seed identities, then rank built topics for display."""
     records = {dedup_key(item['link']): item for item in items}
     dates = {key: datetime.fromisoformat(item['published']) for key, item in records.items()}
     sources = {name: i for i, name in enumerate(feed_order)}
@@ -59,7 +60,7 @@ def plan(items, groups, cache, feed_order, previous=()):
         event = event_of[seed]
         if event in claimed:
             continue
-        if len(topics) == MAX_TOPICS:
+        if len(topics) == MAX_BUILT_TOPICS:
             break
         members = set(events[event])
         latest = max(dates[key] for key in members)
@@ -86,6 +87,10 @@ def plan(items, groups, cache, feed_order, previous=()):
                        'sources': source_count(members), 'count': len(members),
                        'keys': sorted(members, key=order.get)})
     topics.sort(key=lambda topic: (-topic['sources'], -topic['count'], topic['id']))
+    topics = topics[:MAX_TOPICS]
+    selected_ids = {topic['id'] for topic in topics}
+    pending = [(seed, key) for seed, key in pending
+               if sha1(seed.encode('utf-8')).hexdigest()[:12] in selected_ids]
     return topics, pending
 
 
