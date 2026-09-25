@@ -553,7 +553,27 @@ export default function mount(ctx) {
     selectedTopic = "";
     drawItems();
   }
+  function focusIdentity(node) {
+    if (!node || !root.contains(node)) return null;
+    if (node.matches(".nw-list a")) return {
+      selector: ".nw-list a", href: node.href, event: node.closest(".nw-row")?.dataset.event || "",
+    };
+    for (const [selector, attribute] of [[".nw-list .nw-expand", "event"],
+      [".nw-focus-count[data-event]", "event"], [".nw-focus-count[data-topic-id]", "topicId"],
+      [".nw-theme[data-topic]", "topic"]]) {
+      if (node.matches(selector)) return {selector, attribute, value: node.dataset[attribute]};
+    }
+    return null;
+  }
+  function restoreFocus(identity) {
+    if (!identity) return;
+    const target = [...root.querySelectorAll(identity.selector)].find(node => identity.href !== undefined
+      ? node.href === identity.href && (node.closest(".nw-row")?.dataset.event || "") === identity.event
+      : node.dataset[identity.attribute] === identity.value);
+    if (target) target.focus({preventScroll: true});
+  }
   function drawItems() {
+    const focused = focusIdentity(document.activeElement);
     if ((!financial(categories.value) && categories.value !== "world")
         || (selectedTheme && selectedTheme.startsWith("region:") !== (categories.value === "world"))) selectedTheme = "";
     const scoped = items.filter(item => item && typeof item === "object"
@@ -575,6 +595,7 @@ export default function mount(ctx) {
       const category = text(item.category);
       const analysis = validAnalysis(item);
       const row = make("li", "nw-row");
+      if (group.id) row.dataset.event = group.id;
       const meta = make("div", "nw-meta");
       if (analysis?.kind === "world") {
         const tag = make("span", "nw-tag", regionNames.get(analysis.region));
@@ -615,6 +636,7 @@ export default function mount(ctx) {
     empty.hidden = list.children.length > 0;
     emptyText.textContent = received ? "這個條件下沒有新聞" : "正在取得新聞";
     clearAll.hidden = !received;
+    restoreFocus(focused);
   }
   function onClearAll() {
     sources.value = "";

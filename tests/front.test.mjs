@@ -1401,3 +1401,58 @@ test('new topic badge comes from any member and topic listeners are inert after 
   assert.equal(h.container.children.length, 0);
   assert.equal(retained.getAttribute('aria-pressed'), 'true');
 });
+
+for (const kind of ['title', 'expand', 'eventFocus', 'topicFocus', 'theme']) {
+  test(`same-at replacement preserves ${kind} keyboard focus without scrolling`, t => {
+    const h = setup(t), id = '111111111111';
+    const reports = focusReports(id, 3, 10, {topic:topicRecord().id});
+    const body = kind === 'topicFocus' ? topicListing(reports) : listing(reports);
+    h.message(body);
+    if (kind === 'theme') choose(h, h.categories, 'finance');
+    const selectors = {title:'.nw-list a.nw-title', expand:'.nw-list .nw-expand',
+      eventFocus:'.nw-focus-count[data-event]', topicFocus:'.nw-focus-count[data-topic-id]', theme:'.nw-theme'};
+    const selector = selectors[kind], before = h.container.querySelector(selector);
+    before.focus();
+    const calls = [], original = h.window.HTMLElement.prototype.focus;
+    t.mock.method(h.window.HTMLElement.prototype, 'focus', function(options) {
+      calls.push({node:this, options}); return original.call(this, options);
+    });
+    h.message({...body, items:reports.map(item => ({...item, summary:'補送內容'}))});
+    const after = h.container.querySelector(selector);
+    assert.equal(h.window.document.activeElement, after);
+    assert.deepEqual(calls.at(-1), {node:after, options:{preventScroll:true}});
+    if (kind !== 'theme') assert.notEqual(after, before);
+  });
+}
+
+test('removed focus identity never focuses a different event with the same href or an unrelated button', t => {
+  const h = setup(t);
+  const reports = [...focusReports('111111111111', 3), ...focusReports('222222222222', 3)];
+  h.message(listing(reports));
+  const anchor = h.container.querySelector('.nw-list a.nw-title');
+  anchor.focus();
+  const calls = [], original = h.window.HTMLElement.prototype.focus;
+  t.mock.method(h.window.HTMLElement.prototype, 'focus', function(options) {
+    calls.push(this); return original.call(this, options);
+  });
+  assert.doesNotThrow(() => h.message(listing(reports.slice(3))));
+  assert.equal(calls.length, 0); // Same link belongs to a different event.
+  assert.notEqual(h.window.document.activeElement, h.container.querySelector('.nw-list a.nw-title'));
+  const outside = h.window.document.createElement('button');
+  h.window.document.body.append(outside); outside.focus(); calls.length = 0;
+  h.message(listing(reports));
+  assert.equal(h.window.document.activeElement, outside);
+  assert.equal(calls.length, 0);
+});
+
+test('expanded report link keeps focus by href and containing event after replacement', t => {
+  const h = setup(t), reports = focusReports('111111111111', 3).map((item,i) => ({...item, link:`https://example.com/${i}`}));
+  h.message(listing(reports));
+  h.container.querySelector('.nw-expand').click();
+  const child = h.container.querySelector('.nw-report-title');
+  child.focus();
+  h.message(listing(reports));
+  assert.equal(h.window.document.activeElement.href, child.href);
+  assert.equal(h.window.document.activeElement.className, 'nw-report-title');
+  assert.equal(h.window.document.activeElement.closest('.nw-reports').hidden, false);
+});

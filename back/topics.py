@@ -35,7 +35,8 @@ def words(title):
     return result
 
 
-def plan(items, groups, cache, feed_order):
+def plan(items, groups, cache, feed_order, previous=()):
+    """Retain viable previous seeds before filling slots; sort display separately."""
     records = {dedup_key(item['link']): item for item in items}
     dates = {key: datetime.fromisoformat(item['published']) for key, item in records.items()}
     sources = {name: i for i, name in enumerate(feed_order)}
@@ -51,14 +52,16 @@ def plan(items, groups, cache, feed_order):
         return len({records[key]['source'] for key in keys})
     seeds = [event for event, keys in events.items() if source_count(keys) >= 3]
     seeds.sort(key=lambda event: (-source_count(events[event]), -max(dates[k].timestamp() for k in events[event]), event))
+    seed_candidates = [seed for seed in previous if seed in records]
+    seed_candidates.extend(min(events[event], key=order.get) for event in seeds)
     claimed, topics, pending = set(), [], []
-    for event in seeds:
+    for seed in seed_candidates:
+        event = event_of[seed]
         if event in claimed:
             continue
         if len(topics) == MAX_TOPICS:
             break
         members = set(events[event])
-        seed = min(members, key=order.get)
         latest = max(dates[key] for key in members)
         while True:
             terms = set().union(*(features[key] for key in members))
@@ -73,12 +76,16 @@ def plan(items, groups, cache, feed_order):
                 continue
             candidates = [key for key in candidates if (seed, key) not in cache]
             candidates.sort(key=lambda key: (-len(features[key] & terms), -dates[key].timestamp(), key))
-            pending.extend((seed, key) for key in candidates[:MAX_PENDING])
+            unanswered = [(seed, key) for key in candidates[:MAX_PENDING]]
             break
+        if source_count(members) < 3:
+            continue
+        pending.extend(unanswered)
         claimed.update(event_of[key] for key in members)
         topics.append({'id': sha1(seed.encode('utf-8')).hexdigest()[:12], 'title': records[seed]['title'],
                        'sources': source_count(members), 'count': len(members),
                        'keys': sorted(members, key=order.get)})
+    topics.sort(key=lambda topic: (-topic['sources'], -topic['count'], topic['id']))
     return topics, pending
 
 

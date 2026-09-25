@@ -215,3 +215,30 @@ class TopicSchedulerTests(unittest.TestCase):
             s.refresh()
             eventually(lambda:s.completed==2 and not s.topic_in_flight and len(received)==2, timeout=5)
             self.assertFalse(s.topic_cache)
+
+    def test_seed_state_tracks_only_successfully_sent_lists_and_survives_round_stop(self):
+        items, _ = snapshot()
+        with server(response) as (url, _):
+            s, sink = self.make(url, items)
+            first = s._emit(s.caches, [])
+            previous = s.last_topic_seeds
+            self.assertEqual(previous, (items[0]['link'],))
+            older = story('older', items[0]['title'], 'A', -2)
+            s.caches[0].items.append(older)
+            second = s._emit(s.caches, [])
+            self.assertEqual(second['body']['topics']['list'][0]['id'], first['body']['topics']['list'][0]['id'])
+            self.assertEqual(s.last_topic_seeds, previous)
+            s.caches[0].items = [i for i in s.caches[0].items if i['link'] != previous[0]]
+            original_put = sink.put
+            sink.put = lambda _:False
+            self.assertIsNone(s._emit(s.caches, []))
+            self.assertEqual(s.last_topic_seeds, previous)
+            self.assertEqual(s.last_list, second)
+            sink.put = original_put
+            s._emit(s.caches, [])
+            self.assertEqual(s.last_topic_seeds, (older['link'],))
+            with s.cv:
+                s._begin()
+            self.assertEqual(s.last_topic_seeds, (older['link'],))
+            s.stop()
+            self.assertEqual(s.last_topic_seeds, (older['link'],))

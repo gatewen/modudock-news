@@ -8,6 +8,7 @@ from collections import OrderedDict, deque
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from hashlib import sha1
 import queue
 import sys
 import threading
@@ -113,6 +114,7 @@ class Scheduler:
         self.classify_cache = OrderedDict()
         self.in_flight = set()  # Coordinator-owned, including queued work.
         self.last_list = None
+        self.last_topic_seeds = ()
         self.classify_worker = (threading.Thread(target=self._classify_worker,
                                 name="news-classify", daemon=True)
                                 if self._classify_enabled() else None)
@@ -402,7 +404,7 @@ class Scheduler:
         items = packet['body']['items']
         if groups is None:
             groups = {dedup_key(i['link']): {'event': i['event']} for i in items}
-        return topic_plan(items, groups, self.topic_cache, [f['name'] for f in self.feeds])
+        return topic_plan(items, groups, self.topic_cache, [f['name'] for f in self.feeds], self.last_topic_seeds)
 
     def _decorate_topics(self, packet, groups):
         body = packet['body']
@@ -542,6 +544,11 @@ class Scheduler:
             if self.outbox.put(packet):
                 with self.cv:
                     self.last_list = deepcopy(packet)
+                    keys = [dedup_key(item['link']) for item in packet['body']['items']]
+                    seeds = {sha1(key.encode('utf-8')).hexdigest()[:12]: key for key in keys}
+                    # A seed trimmed by fit simply stops being sticky.
+                    self.last_topic_seeds = tuple(seeds[topic['id']] for topic in packet['body'].get('topics', {}).get('list', [])
+                                                  if topic.get('id') in seeds)
                 if publish:
                     self.outbox.put({"t": "publish", "seq": self.seq, "topic": "news.fetched",
                                      "body": {"count": len(packet["body"]["items"]),

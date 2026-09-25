@@ -76,7 +76,8 @@ class PlanTests(unittest.TestCase):
         topics, _ = plan(items, groups, {}, ['C','B','A'])
         self.assertEqual(len(topics), 5)
         seed = seeds[2]['link']
-        self.assertEqual(topics[0]['id'], sha1(seed.encode()).hexdigest()[:12])
+        self.assertIn(sha1(seed.encode()).hexdigest()[:12], [t['id'] for t in topics])
+        self.assertEqual([t['id'] for t in topics], sorted(t['id'] for t in topics))
         merged, _ = plan(items, groups, {(seed, seeds[3]['link']): True}, ['C','B','A'])
         self.assertEqual(merged[0]['count'], 6)
         self.assertFalse(set(merged[0]['keys']) & set(merged[1]['keys']))
@@ -103,6 +104,70 @@ class PlanTests(unittest.TestCase):
         expected = plan(items, groups, {}, ['A','B','C','D'])
         self.assertEqual([t['title'] for t in expected[0]], ['TOPICa','TOPICc','TOPICb'])
         self.assertEqual(expected, plan(items[::-1], groups, {}, ['A','B','C','D']))
+
+
+class StickyPlanTests(unittest.TestCase):
+    def scene(self):
+        a = [story(f'sa{i}', 'COMMON ALPHA', source, 3) for i, source in enumerate('ABC')]
+        b = [story(f'sb{i}', 'COMMON BETA', source, 1) for i, source in enumerate('ABC')]
+        items, groups = snapshot(seeds=a+b)
+        for item in a: groups[item['link']] = {'event':'a'}
+        for item in b: groups[item['link']] = {'event':'b'}
+        return items, groups, a, b
+
+    def test_previous_wins_after_other_event_overtakes_and_keeps_cached_answers(self):
+        items, groups, a, b = self.scene()
+        seed = a[0]['link']
+        cache = {(seed, b[0]['link']):True}
+        first, _ = plan(items, groups, cache, ['A','B','C','D','E'])
+        for i, source in enumerate('DE'):
+            item = story(f'new{i}', 'COMMON BETA', source, 8)
+            items.append(item); groups[item['link']] = {'event':'b'}
+        sticky, pending = plan(items, groups, cache, ['A','B','C','D','E'], [seed])
+        self.assertEqual(sticky[0]['id'], first[0]['id'])
+        self.assertEqual(sticky[0]['title'], a[0]['title'])
+        self.assertEqual(sticky[0]['count'], 8)
+        self.assertEqual(pending, [])
+        self.assertEqual(len(plan(items, groups, cache, ['A','B','C','D','E'])[0]), 2)
+
+    def test_previous_uses_exact_seed_even_when_not_earliest_and_can_expand_from_two_sources(self):
+        items, groups, a, b = self.scene()
+        seed = a[1]['link']
+        items.remove(a[2])
+        cache = {(seed, b[0]['link']):True}
+        topics, _ = plan(items, groups, cache, ['A','B','C'], [seed])
+        self.assertEqual(len(topics), 1)
+        self.assertEqual(topics[0]['id'], sha1(seed.encode()).hexdigest()[:12])
+        self.assertEqual(topics[0]['sources'], 3)
+
+    def test_rejected_previous_does_not_claim_events_or_generate_pending(self):
+        items, groups, a, b = self.scene()
+        # Old seed and its cached expansion still only cover A/B; a new
+        # eligible seed must be able to take those reports afterwards.
+        items.remove(a[2])
+        extra = story('extra', 'COMMON ALPHA', 'B')
+        items.append(extra); groups[extra['link']] = {'event':'extra'}
+        seed, replacement = a[0]['link'], b[0]['link']
+        cache = {(seed, extra['link']):True, (replacement, seed):True,
+                 (replacement, extra['link']):True}
+        topics, pending = plan(items, groups, cache, ['A','B','C'], [seed, 'missing'])
+        self.assertEqual(len(topics), 1)
+        self.assertEqual(topics[0]['id'], sha1(replacement.encode()).hexdigest()[:12])
+        self.assertEqual(topics[0]['count'], 6)
+        self.assertTrue(all(s != seed for s, _ in pending))
+
+    def test_missing_previous_ignored_and_output_sort_independent_of_previous_order(self):
+        items, groups, a, b = self.scene()
+        aseed, bseed = a[0]['link'], b[0]['link']
+        self.assertEqual(plan(items, groups, {}, ['A','B','C']),
+                         plan(items, groups, {}, ['A','B','C'], ['missing']))
+        extra = story('extra', 'COMMON BETA', 'A')
+        items.append(extra); groups[extra['link']] = {'event':'b'}
+        first, _ = plan(items, groups, {}, ['A','B','C'], [aseed,bseed])
+        second, _ = plan(items[::-1], groups, {}, ['A','B','C'], [bseed,aseed])
+        self.assertEqual(first, second)
+        self.assertEqual(first[0]['count'], 4)
+        self.assertEqual(first[0]['id'], sha1(bseed.encode()).hexdigest()[:12])
 
 
 class TopicMatcherTests(unittest.TestCase):
