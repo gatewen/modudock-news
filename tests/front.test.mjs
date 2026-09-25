@@ -2088,3 +2088,13 @@ test('text buttons use visible names and external descriptions survive redraws a
   h.handle.unmount();
   for (const id of finalIds) assert.equal(h.window.document.getElementById(id),null);
 });
+
+test('a feed timestamp in the future never pushes lastSeen past the current time', t => {
+  const h = setup(t, withSeen(seenAt));
+  const future = new Date(Date.now() + 5 * 3600e3).toISOString();
+  h.message(listing([article({published: future})]));
+  const before = Date.now();
+  h.handle.unmount();
+  const stored = Date.parse(JSON.parse(h.window.localStorage.getItem(seenKey)));
+  assert.ok(stored <= Date.now() && stored >= before - 1000);
+});
