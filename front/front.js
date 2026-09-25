@@ -147,6 +147,7 @@ const css = `
 .nw .nw-row + .nw-row { border-top: 1px solid var(--nw-line); }
 .nw .nw-title { display: block; font-size: 15px; font-weight: 500; line-height: 1.4; overflow-wrap: anywhere; color: var(--nw-fg); text-decoration: none; }
 .nw a.nw-title:hover { color: var(--nw-accent); text-decoration: underline; }
+.nw .nw-new { color: var(--nw-accent); font-size: 12px; font-weight: 700; margin-right: 6px; }
 .nw .nw-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-expand { color: var(--nw-muted); background: transparent; padding: 0 5px; font-size: 12px; }
 .nw .nw-reports { list-style: none; margin: 10px 0 0; padding: 0 0 0 16px; border-left: 1px solid var(--nw-line); }
@@ -174,6 +175,24 @@ const css = `
 
 export default function mount(ctx) {
   const document = ctx.container.ownerDocument;
+  const view = document.defaultView;
+  function loadState(name) {
+    try { return JSON.parse(view.localStorage.getItem(`modudock.module.news.${name}`)); }
+    catch { return null; }
+  }
+  function saveState(name, value) {
+    try { view.localStorage.setItem(`modudock.module.news.${name}`, JSON.stringify(value)); }
+    catch { /* Storage may be unavailable or full; reading news still works. */ }
+  }
+  const storedLastSeen = loadState("lastSeen");
+  const parsedLastSeen = typeof storedLastSeen === "string" ? Date.parse(storedLastSeen) : NaN;
+  const lastSeen = Number.isFinite(parsedLastSeen) ? parsedLastSeen : null;
+  let latestPublished = null;
+  function persistLastSeen() {
+    // A feed's future timestamp must not hide everything as "not new" later.
+    const latest = Math.max(lastSeen ?? -Infinity, Math.min(latestPublished ?? -Infinity, Date.now()));
+    if (Number.isFinite(latest)) saveState("lastSeen", new Date(latest).toISOString());
+  }
   const make = (tag, className, text = "") => {
     const element = document.createElement(tag);
     element.className = className;
@@ -281,6 +300,7 @@ export default function mount(ctx) {
   let selectedTheme = "";
   let analysisEnabled = true;
   let eventsPending = 0;
+  let updatedText = "", failedText = "", classificationText = "";
   const expanded = new Set();
   let sourceOrder = new Map();
   const text = (value) => typeof value === "string" ? value : "";
@@ -325,13 +345,17 @@ export default function mount(ctx) {
     }
     return [...groups.values()];
   }
-  function newsTitle(item, className) {
+  function isNew(item) {
+    return lastSeen !== null && Date.parse(text(item.published)) > lastSeen;
+  }
+  function newsTitle(item, className, marked = isNew(item)) {
     let safeURL = null;
     try {
       const url = new URL(text(item.link));
       if (url.protocol === "http:" || url.protocol === "https:") safeURL = url.href;
     } catch { /* Invalid and relative links stay plain text. */ }
     const title = make(safeURL ? "a" : "span", className, text(item.title));
+    if (marked) title.prepend(make("span", "nw-new", "新"));
     title.title = text(item.summary);
     if (safeURL) {
       title.href = safeURL;
@@ -369,7 +393,7 @@ export default function mount(ctx) {
       button.setAttribute("aria-label", `展開 ${group.count} 家媒體的報導`);
       button.append(make("span", "nw-focus-long", `${group.count} 家媒體`),
         make("span", "nw-focus-short", `${group.count} 家`));
-      row.append(newsTitle(group.reports[0], "nw-title"), button);
+      row.append(newsTitle(group.reports[0], "nw-title", group.reports.some(isNew)), button);
       focusList.append(row);
     }
   }
@@ -496,6 +520,11 @@ export default function mount(ctx) {
     list.replaceChildren();
     const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
     const groups = groupItems(filtered);
+    if (received) {
+      const count = groups.filter(group => group.reports.some(isNew)).length;
+      status.textContent = [updatedText, count ? `${count} 則新` : "", failedText, classificationText]
+        .filter(Boolean).join(" · ");
+    }
     drawFocus(groups);
     for (const group of groups) {
       const item = group.reports[0];
@@ -518,7 +547,7 @@ export default function mount(ctx) {
       }
       meta.append(make("span", "nw-category", categoryNames.get(category) || "未分類"),
         make("span", "nw-source", text(item.source)), newsTime(item));
-      row.append(newsTitle(item, "nw-title"), meta);
+      row.append(newsTitle(item, "nw-title", group.reports.some(isNew)), meta);
       if (group.reports.length > 1) {
         const toggle = make("button", "nw-expand", `另 ${group.reports.length - 1} 則報導`);
         toggle.type = "button";
@@ -552,6 +581,8 @@ export default function mount(ctx) {
   function renderList(body) {
     received = true;
     items = Array.isArray(body.items) ? body.items : [];
+    const published = items.map(item => Date.parse(text(item?.published))).filter(Number.isFinite);
+    latestPublished = published.length ? Math.max(...published) : null;
     const presentEvents = new Set(items.filter(item => item && typeof item === "object").map(eventId).filter(Boolean));
     for (const id of expanded) if (!presentEvents.has(id)) expanded.delete(id);
     const events = body.events && typeof body.events === "object" ? body.events : {};
@@ -575,9 +606,10 @@ export default function mount(ctx) {
     const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
     analysisEnabled = classify.enabled !== false;
     const pending = Number.isInteger(classify.pending) && classify.pending >= 0 ? classify.pending : 0;
-    const classification = classify.enabled === false ? "分類：關閉" : pending > 0 ? `未分類：${pending}` : "";
+    classificationText = classify.enabled === false ? "分類：關閉" : pending > 0 ? `未分類：${pending}` : "";
     const updated = localTime(body.at);
-    status.textContent = [updated ? `${updated} 更新` : "", failed > 0 ? `失敗來源：${failed}` : "", classification].filter(Boolean).join(" · ");
+    updatedText = updated ? `${updated} 更新` : "";
+    failedText = failed > 0 ? `失敗來源：${failed}` : "";
     drawItems();
   }
   list.addEventListener("click", onExpand);
@@ -588,6 +620,7 @@ export default function mount(ctx) {
   refresh.addEventListener("click", onRefresh);
   sources.addEventListener("change", drawItems);
   categories.addEventListener("change", drawItems);
+  view.addEventListener("pagehide", persistLastSeen);
   ctx.channel.onMessage((body) => {
     if (!disposed && body && body.op === "list") renderList(body);
   });
@@ -600,6 +633,9 @@ export default function mount(ctx) {
   ctx.report("ready");
   return {
     unmount() {
+      if (disposed) return;
+      persistLastSeen();
+      view.removeEventListener("pagehide", persistLastSeen);
       disposed = true;
       up = false;
       refresh.disabled = true;

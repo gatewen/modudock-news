@@ -4,8 +4,9 @@ import { readFileSync } from 'node:fs';
 import { Window } from 'happy-dom';
 import mount from '../front/front.js';
 
-function setup(t) {
+function setup(t, prepare = () => {}) {
   const window = new Window();
+  prepare(window);
   t.after(() => window.happyDOM.abort());
   const container = window.document.createElement('div');
   window.document.body.append(container);
@@ -1185,4 +1186,97 @@ test('local midnight shows date only, including today guessed and expanded repor
   assert.deepEqual(nodes.map(n => n.textContent), ['今天','12/31','約今天','約12/31','今天','00:00']);
   assert.equal(nodes[2].title, '來源沒有提供發布時間，以收錄時間代替');
   assert.equal(nodes[3].title, nodes[2].title);
+});
+
+const seenKey = 'modudock.module.news.lastSeen';
+const seenAt = '2026-09-24T10:00:00.000Z';
+const withSeen = value => window => window.localStorage.setItem(seenKey, JSON.stringify(value));
+
+test('first visit has no new markers and only saves latest valid publication on unmount', t => {
+  const h = setup(t);
+  h.message(listing([article({published:'2026-09-25T00:00:00Z'}), article({published:'bad'}),
+    article({published:'2026-09-24T00:00:00Z'})]));
+  assert.equal(h.container.querySelector('.nw-new'), null);
+  assert.ok(!h.container.querySelector('[role=status]').textContent.includes('則新'));
+  assert.equal(h.window.localStorage.getItem(seenKey), null);
+  h.handle.unmount();
+  assert.equal(h.window.localStorage.getItem(seenKey), JSON.stringify('2026-09-25T00:00:00.000Z'));
+  assert.equal(h.window.localStorage.length, 1);
+});
+
+test('new markers use frozen mount baseline, include focus and grouped reports, and count filtered events', t => {
+  const h = setup(t, withSeen(seenAt));
+  const reports = focusReports('111111111111', 3, 9); // 09:00 representative is old; 11:00 child is new.
+  const body = listing([...reports, article({published:seenAt}),
+    article({published:'2026-09-25T00:00:00Z', category:'world'})],
+    ['媒體0','媒體1','媒體2','甲'].map(name => ({name, ok:true})));
+  h.message(body);
+  assert.equal(mainRows(h)[0].querySelector('.nw-title .nw-new').textContent, '新');
+  assert.equal(focusArea(h).querySelector('.nw-title .nw-new').textContent, '新');
+  assert.equal(mainRows(h)[0].querySelectorAll('.nw-report-title .nw-new').length, 1);
+  assert.equal(mainRows(h)[1].querySelector('.nw-new'), null); // Equal is not new.
+  assert.match(h.container.querySelector('[role=status]').textContent, /更新 · 2 則新/);
+  h.window.localStorage.setItem(seenKey, JSON.stringify('2099-01-01T00:00:00Z'));
+  h.message(body); // Same-at replacement must not re-read or advance L.
+  assert.match(h.container.querySelector('[role=status]').textContent, /2 則新/);
+  choose(h, h.categories, 'finance');
+  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新/);
+  choose(h, h.select, '媒體0');
+  assert.equal(h.container.querySelector('.nw-new'), null);
+  assert.ok(!h.container.querySelector('[role=status]').textContent.includes('則新'));
+  h.handle.unmount();
+  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2026-09-25T00:00:00.000Z'); // Whole list, not filtered scope.
+});
+
+test('malformed stored JSON dates and nonstrings are treated as no baseline', t => {
+  for (const raw of ['broken JSON', '"bad date"', '123', '{}', '[]', 'null']) {
+    const h = setup(t, window => window.localStorage.setItem(seenKey, raw));
+    h.message(listing([article({published:'2026-09-25T00:00:00Z'})]));
+    assert.equal(h.container.querySelector('.nw-new'), null, raw);
+    assert.ok(!h.container.querySelector('[role=status]').textContent.includes('則新'), raw);
+    h.handle.unmount();
+  }
+});
+
+test('storage getter read and write exceptions do not break mount render pagehide or unmount', t => {
+  for (const mode of ['getter', 'read', 'write']) {
+    const h = setup(t, window => {
+      if (mode === 'getter') Object.defineProperty(window, 'localStorage', {get(){throw Error('blocked');}});
+      else Object.defineProperty(window, 'localStorage', {value:{
+        getItem(){if(mode === 'read') throw Error('read blocked'); return JSON.stringify(seenAt);},
+        setItem(){throw Error('quota');},
+      }});
+    });
+    assert.doesNotThrow(() => h.message(listing([article({published:'2026-09-25T00:00:00Z'})])));
+    assert.equal(mainRows(h).length, 1);
+    assert.doesNotThrow(() => h.window.dispatchEvent(new h.window.Event('pagehide')));
+    assert.doesNotThrow(() => h.handle.unmount());
+  }
+});
+
+test('pagehide and unmount save max of baseline and current list candidate, without advancing markers', t => {
+  const h = setup(t, withSeen(seenAt));
+  h.message(listing([article({published:'2026-09-23T00:00:00Z'})]));
+  h.window.dispatchEvent(new h.window.Event('pagehide'));
+  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), seenAt);
+  h.message(listing([article({published:'2026-09-25T00:00:00Z'})]));
+  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), seenAt);
+  h.window.dispatchEvent(new h.window.Event('pagehide'));
+  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2026-09-25T00:00:00.000Z');
+  assert.equal(h.container.querySelector('.nw-new').textContent, '新');
+  h.handle.unmount();
+  h.window.localStorage.setItem(seenKey, JSON.stringify('sentinel'));
+  h.window.dispatchEvent(new h.window.Event('pagehide'));
+  h.handle.unmount();
+  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), 'sentinel');
+});
+
+test('empty or invalid lists never persist invalid dates and preserve existing baseline', t => {
+  for (const baseline of [null, seenAt]) {
+    const h = setup(t, baseline ? withSeen(baseline) : undefined);
+    h.message(listing([article({published:{}}), article({published:'invalid'})]));
+    h.message(listing([]));
+    h.handle.unmount();
+    assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), baseline);
+  }
 });
