@@ -1595,6 +1595,8 @@ test('watch filter combines with source category theme and topic and survives re
   h.message(body);
   assert.deepEqual(mainTitles(h), ['AI 記憶體']);
   saveWatch(h, '不存在');
+  assert.equal(watchControls(h).only.getAttribute('aria-pressed'), 'false');
+  watchControls(h).only.click();
   assert.equal(mainRows(h).length, 0);
   h.container.querySelector('.nw-empty button').click();
   assert.equal(watchControls(h).only.getAttribute('aria-pressed'), 'false');
@@ -2151,7 +2153,7 @@ test('summary handles missing text, link fallback and forgets rows that disappea
   assert.equal(h.container.querySelector('.nw-summary').hidden,true);
   h.container.querySelector('.nw-summary-toggle').click();
   choose(h,h.categories,'world'); choose(h,h.categories,'');
-  assert.equal(h.container.querySelector('.nw-summary').hidden,true);
+  assert.equal(h.container.querySelector('.nw-summary').hidden,false);
 });
 
 test('watch toggle stays on toolbar while settings close and disappears with empty keywords', t => {
@@ -2402,4 +2404,82 @@ test('source alone filters topic focus and clearing it restores every topic', t 
     choose(h,h.select,source);
     assert.deepEqual(focusTopicButtons(h).map(button=>button.dataset.topicId),ids);
   }
+});
+
+test('entering a topic disables watch-only and returning restores it', t => {
+  const h=setup(t), id=topicRecord().id;
+  h.message(topicListing([article({title:'AI',topic:id,link:'https://e.com/a'}),
+    article({title:'其他',topic:id,link:'https://e.com/b'})]));
+  saveWatch(h,'AI'); watchControls(h).only.click();
+  assert.equal(mainRows(h).length,1);
+  focusTopicButtons(h)[0].click();
+  assert.equal(watchControls(h).only.getAttribute('aria-pressed'),'false');
+  assert.equal(mainRows(h).length,2);
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(watchControls(h).only.getAttribute('aria-pressed'),'true');
+  assert.equal(mainRows(h).length,1);
+});
+
+test('summary state survives filters and a topic round trip with restored scroll', t => {
+  const h=setup(t), id=topicRecord().id;
+  const body=topicListing([article({title:'原檢視',link:'https://e.com/a'}),article({topic:id,link:'https://e.com/b'})]);
+  h.container.style.overflowY='auto';
+  Object.defineProperties(h.container,{scrollHeight:{value:2000},clientHeight:{value:200}});
+  h.message(body);
+  h.container.querySelector('.nw-summary-toggle').click();
+  h.container.scrollTop=1500;
+  focusTopicButtons(h)[0].click();
+  h.message(body); // Hidden reports must remain in the summary-state set on resend too.
+  h.container.scrollTop=0;
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(h.container.querySelector('.nw-summary').hidden,false);
+  assert.equal(h.container.scrollTop,1500);
+  choose(h,h.select,'乙'); h.message(body); choose(h,h.select,'');
+  assert.equal(h.container.querySelector('.nw-summary').hidden,false);
+  h.message(topicListing(body.items.slice(1))); h.message(body);
+  assert.equal(h.container.querySelector('.nw-summary').hidden,true);
+});
+
+test('disappearing topic restores current report focus when saved topic button is gone', t => {
+  const h=setup(t), id=topicRecord().id;
+  const items=[article({topic:id,link:'https://e.com/a'})];
+  h.message(topicListing(items));
+  focusTopicButtons(h)[0].focus(); focusTopicButtons(h)[0].click();
+  h.container.querySelector('.nw-list a').focus();
+  h.message(listing(items.map(item=>({...item,topic:undefined}))));
+  assert.equal(h.window.document.activeElement,h.container.querySelector('.nw-list a'));
+  assert.equal(h.window.document.activeElement.href,'https://e.com/a');
+});
+
+test('automatic topic return preserves outside focus and scroll while explicit return restores both', t => {
+  const h=setup(t), id=topicRecord().id;
+  const body=topicListing([article({link:'https://e.com/original'}),article({topic:id,link:'https://e.com/topic'})]);
+  h.container.style.overflowY='auto';
+  Object.defineProperties(h.container,{scrollHeight:{value:2000},clientHeight:{value:200}});
+  const outside=h.window.document.createElement('input'); h.window.document.body.append(outside);
+  for(const automatic of [true,false]) {
+    h.message(body);
+    h.container.scrollTop=1500;
+    h.container.querySelector('.nw-list a').focus();
+    focusTopicButtons(h)[0].click();
+    h.container.scrollTop=300; outside.focus();
+    if(automatic) h.message(listing(body.items));
+    else h.container.querySelector('.nw-filter button').click();
+    assert.equal(h.container.scrollTop,automatic?300:1500);
+    assert.equal(h.window.document.activeElement,automatic?outside:h.container.querySelector('.nw-list a'));
+  }
+});
+
+test('summary fallback distinguishes same-link reports and does not persist linkless expansion', t => {
+  const h=setup(t);
+  const body=listing([article({title:'A',source:'甲'}),article({title:'B',source:'甲'}),
+    article({title:'A',source:'乙'}),article({title:'X',link:''}),article({title:'Y',link:''})]);
+  const buttons=()=>[...h.container.querySelectorAll('.nw-summary-toggle')];
+  const hidden=()=>[...h.container.querySelectorAll('.nw-summary')].map(node=>node.hidden);
+  h.message(body);
+  buttons()[0].click(); buttons()[3].click();
+  assert.deepEqual(hidden(),[false,true,true,false,true]);
+  buttons()[3].click(); assert.deepEqual(hidden(),[false,true,true,true,true]);
+  buttons()[3].click(); h.message(body);
+  assert.deepEqual(hidden(),[false,true,true,true,true]);
 });

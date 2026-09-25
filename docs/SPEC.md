@@ -1067,3 +1067,15 @@ cx-mod 以「每天早上看 3 分鐘的使用者」走查提出 5 項（皆不�
 **R24-A publish 與取代的列表一致**：Outbox 以新列表取代佇列中的舊列表時，若佇列中其後有對應舊列表的 `news.fetched` publish，將其 body 的 count/at 更新為新列表的值（仍維持原位置、只送一次）。
 **R24-B 未送出的列表不當作已送出**（實作確認：現有程式已回傳 None，第 12 輪審查的這條低嚴重度判斷有誤；本輪只補測試鎖住行為）：`_send_list` 在 `outbox.put` 回 False 時回傳 None（不更新 last_list、不觸發依賴已送出列表的後續排程）；呼叫端既有對 None 的處理需確認一致。
 - 驗收：單元測試各一（A：阻塞寫出→列表 L1＋publish P1→L2 取代 L1→寫出順序 L2、P1 且 P1 的 count/at 為 L2；B：put 回 False → 回傳 None、last_list 不變）。
+
+### 18.25 第 25 輪（前半獨立審查修正）
+
+第 24 輪結果：publish 同步；R24-B 原已正確只補測試。README 補齊第 13～24 輪。
+**前半獨立審查（第二次，agent，21:5x）**：4 條中度、1 條低度，皆以 happy-dom 腳本重現（scratchpad/h.mjs、t1.mjs、t2.mjs）。
+
+**R25-1 進入話題要關掉只看追蹤**：onFocus 進話題時 `onlyWatched = false`（原值已存於 savedView，返回時還原）。
+**R25-2 摘要展開狀態不因篩選而清掉**：`summaries` 的清理改以「整份 items 仍存在的 key」為準（同 `expanded` 規則），不以目前可見群組為準；返回原檢視後展開狀態與捲動位置一致。
+**R25-3 話題消失時焦點不掉到 body**：自動返回路徑重畫前記下目前焦點身分；還原時先試保存的焦點、再試目前焦點身分，都找不到則不移動（不得落到 body）。
+**R25-4 不搶模組外的焦點**：由補送觸發的自動返回，只有在 `root.contains(document.activeElement)` 或焦點在 body 時才還原焦點與捲動；使用者按鈕觸發的返回照舊。
+**R25-5（低）摘要 key**：沒有事件 id 時 key 用 `link＋source＋title`；link 為空時不記住展開狀態。
+- 驗收：五條各一個前半測試（可直接改寫審查腳本）。

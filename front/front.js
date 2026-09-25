@@ -484,16 +484,21 @@ export default function mount(ctx) {
     return title;
   }
   function summaryKey(group) {
-    return group.id ? `event:${group.id}` : `link:${text(group.reports[0].link)}`;
+    if (group.id) return `event:${group.id}`;
+    const item = group.reports[0], link = text(item.link);
+    return link ? `report:${JSON.stringify([link, text(item.source), text(item.title)])}` : "";
   }
   function onSummary(event) {
     const button = event.target?.closest?.("button.nw-summary-toggle");
     if (!button || !list.contains(button)) return;
     const key = button.dataset.summary;
-    if (summaries.has(key)) summaries.delete(key);
-    else summaries.add(key);
-    button.setAttribute("aria-expanded", String(summaries.has(key)));
-    document.getElementById(button.getAttribute("aria-controls")).hidden = !summaries.has(key);
+    const open = button.getAttribute("aria-expanded") !== "true";
+    if (key) {
+      if (open) summaries.add(key);
+      else summaries.delete(key);
+    }
+    button.setAttribute("aria-expanded", String(open));
+    document.getElementById(button.getAttribute("aria-controls")).hidden = !open;
   }
   function onExpand(event) {
     const button = event.target?.closest?.("button[data-event]");
@@ -613,6 +618,7 @@ export default function mount(ctx) {
       sources.value = "";
       categories.value = "";
       selectedTheme = "";
+      onlyWatched = false;
       selectedTopic = button.dataset.topicId;
       drawItems();
       return;
@@ -793,7 +799,10 @@ export default function mount(ctx) {
     selectedTheme = selectedTheme === button.dataset.topic ? "" : button.dataset.topic;
     drawItems();
   }
-  function returnToView() {
+  function returnToView(automatic = false) {
+    const currentFocus = focusIdentity(document.activeElement);
+    const restorePosition = !automatic || root.contains(document.activeElement)
+      || document.activeElement === document.body;
     const saved = savedView;
     savedView = null;
     selectedTopic = "";
@@ -808,8 +817,8 @@ export default function mount(ctx) {
       selectedTheme = "";
       drawItems(false);
     }
-    if (saved) {
-      restoreFocus(saved.focus);
+    if (saved && restorePosition) {
+      if (!restoreFocus(saved.focus) && automatic) restoreFocus(currentFocus);
       if (saved.scroller?.isConnected) saved.scroller.scrollTop = saved.scrollTop;
     }
   }
@@ -872,7 +881,7 @@ export default function mount(ctx) {
     return null;
   }
   function restoreFocus(identity) {
-    if (!identity) return;
+    if (!identity) return false;
     let target = [...root.querySelectorAll(identity.selector)].find(node => {
       if (identity.href === undefined) return node.dataset[identity.attribute] === identity.value;
       const row = node.closest(".nw-row, .nw-focus-row");
@@ -891,6 +900,7 @@ export default function mount(ctx) {
       row.querySelector(".nw-expand").setAttribute("aria-expanded", "true");
     }
     if (target) target.focus({preventScroll: true});
+    return Boolean(target);
   }
   function drawItems(keepFocus = true) {
     const focused = keepFocus ? focusIdentity(document.activeElement) : null;
@@ -913,8 +923,6 @@ export default function mount(ctx) {
     watchOnly.setAttribute("aria-pressed", String(onlyWatched));
     watchOnly.textContent = `只看追蹤 ${watchedCount}`;  // Events, like the list and status.
     const groups = onlyWatched ? allGroups.filter(group => matches.get(group)) : allGroups;
-    const visibleSummaries = new Set(groups.filter(group => text(group.reports[0].summary)).map(summaryKey));
-    for (const key of summaries) if (!visibleSummaries.has(key)) summaries.delete(key);
     const newGroups = groups.map(group => group.reports.some(isNew));
     // New groups normally form a prefix; the divider closes that prefix only
     // when old groups follow it. New groups outside the prefix keep a badge.
@@ -1019,6 +1027,9 @@ export default function mount(ctx) {
       ? body.model.state : "";
     received = true;
     items = Array.isArray(body.items) ? body.items : [];
+    const presentSummaries = new Set(items.filter(item => item && typeof item === "object")
+      .map(item => summaryKey({id: eventId(item), reports: [item]})).filter(Boolean));
+    for (const key of summaries) if (!presentSummaries.has(key)) summaries.delete(key);
     const rawTopics = Array.isArray(body.topics?.list) ? body.topics.list : [];
     const topicIds = new Set();
     topics = rawTopics.filter(topic => {
@@ -1065,7 +1076,7 @@ export default function mount(ctx) {
       : failed.length > 1 ? `${failureName(failed[0])}等 ${failed.length} 個來源失敗` : "";
     status.title = failed.map(source => `${failureName(source)}${typeof source.error === "string"
       ? `：${Array.from(source.error).slice(0, 80).join("")}` : ""}`).join("\n");
-    if (lostTopic) returnToView();
+    if (lostTopic) returnToView(true);
     else drawItems();
   }
   list.addEventListener("click", onExpand);
