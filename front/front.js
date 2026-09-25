@@ -189,6 +189,8 @@ const css = `
 .nw .nw-new { color: var(--nw-accent); font-size: 12px; font-weight: 700; margin-right: 6px; }
 .nw .nw-topic-new { color: var(--nw-accent); font-size: 12px; margin-top: 4px; }
 .nw .nw-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 5px; font-size: 12px; color: var(--nw-muted); }
+.nw .nw-info { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; min-width: 0; }
+.nw .nw-actions { display: flex; align-items: center; gap: 6px; margin-left: auto; }
 .nw .nw-summary { font-size: 13px; color: var(--nw-muted); line-height: 1.6; margin: 8px 0 0; max-width: 42em; overflow-wrap: anywhere; }
 .nw .nw-summary-label { display: block; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-expand, .nw .nw-summary-toggle { color: var(--nw-muted); background: transparent; padding: 0 5px; font-size: 12px; }
@@ -204,6 +206,7 @@ const css = `
   .nw .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @container (max-width: 419.98px) {
+  .nw .nw-actions { margin-left: 0; }
   .nw .nw-history-long { display: none; }
   .nw .nw-history-short { display: inline; }
   .nw .nw-history-row { grid-template-columns: 7.5ch minmax(0, 1fr) 6em; }
@@ -935,32 +938,35 @@ export default function mount(ctx) {
       const row = make("li", "nw-row");
       if (group.id) row.dataset.event = group.id;
       const meta = make("div", "nw-meta");
-      if (matches.get(group)) meta.append(make("span", "nw-watch", `追蹤：${matches.get(group)}`));
+      const info = make("div", "nw-info");
+      const actions = make("div", "nw-actions");
+      meta.append(info);
+      if (matches.get(group)) info.append(make("span", "nw-watch", `追蹤：${matches.get(group)}`));
       if (analysis?.kind === "politics") {
-        meta.append(make("span", "nw-tag", issueNames.get(analysis.issue)));
+        if (categories.value === "politics") info.append(make("span", "nw-tag", issueNames.get(analysis.issue)));
       } else if (analysis?.kind === "world") {
         const tag = make("span", "nw-tag", regionNames.get(analysis.region));
         if (analysis.trend === "escalation" || analysis.trend === "deescalation") {
           const escalating = analysis.trend === "escalation";
           tag.append(make("span", escalating ? "nw-danger-text" : "nw-calm-text", escalating ? " 升級" : " 緩和"));
         }
-        meta.append(tag);
+        info.append(tag);
       } else if (analysis && analysis.theme !== "other") {
         const direction = arrow(analysis);
         const name = analysis.theme === "macro" ? "大盤" : themeNames.get(analysis.theme);
-        meta.append(make("span", `nw-tag${direction === "▲" ? " nw-up" : direction === "▼" ? " nw-down" : ""}`,
+        info.append(make("span", `nw-tag${direction === "▲" ? " nw-up" : direction === "▼" ? " nw-down" : ""}`,
           name + (direction ? ` ${direction}` : "")));
       }
-      meta.append(make("span", "nw-category", categoryNames.get(category) || "未分類"),
-        make("span", "nw-source", text(item.source)), groupTime(group.reports));
-      appendTone(meta, item);
+      if (!categories.value) info.append(make("span", "nw-category", categoryNames.get(category) || "未分類"));
+      info.append(make("span", "nw-source", text(item.source)), groupTime(group.reports));
+      appendTone(info, item);
       row.append(newsTitle(item, "nw-title", newGroups[index] && index >= prefix), meta);
       if (group.reports.length > 1) {
         const toggle = make("button", "nw-expand", `另 ${group.reports.length - 1} 則報導`);
         toggle.type = "button";
         toggle.dataset.event = group.id;
         toggle.setAttribute("aria-expanded", String(expanded.has(group.id)));
-        meta.append(toggle);
+        actions.append(toggle);
         const reports = make("ul", "nw-reports");
         reports.setAttribute("aria-label", "同事件其他報導");
         reports.hidden = !expanded.has(group.id);
@@ -985,9 +991,10 @@ export default function mount(ctx) {
         button.dataset.summary = key;
         button.setAttribute("aria-expanded", String(summaries.has(key)));
         button.setAttribute("aria-controls", paragraph.id);
-        meta.append(button);
+        actions.append(button);
         meta.after(paragraph);  // Below meta, so the toggle does not move when expanded.
       }
+      if (actions.childElementCount) meta.append(actions);
       list.append(row);
     }
     empty.hidden = groups.length > 0;

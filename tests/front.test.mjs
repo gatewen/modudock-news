@@ -419,7 +419,7 @@ test('invalid analysis is entirely treated as missing and never coerces field ty
   choose(h, h.categories, 'finance');
   assert.doesNotThrow(() => h.message(listing(bad.map(value => financeArticle({analysis: value})))));
   assert.equal(h.container.querySelectorAll('li').length, bad.length);
-  assert.ok([...h.container.querySelectorAll('li')].every(li => li.querySelector('.nw-category').textContent === '財經' && !li.querySelector('.nw-tag')));
+  assert.ok([...h.container.querySelectorAll('li')].every(li => li.querySelector('.nw-category') === null && !li.querySelector('.nw-tag')));
   assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'),
     `正面 0、正反 0、無關 ${bad.length}、負面 0`);
   assert.equal(panel(h).querySelector('.nw-market').title, `無關 0、未明 ${bad.length}`);
@@ -441,7 +441,7 @@ test('analysis panel and prefixes remain text-only with hostile fields', t => {
   assert.equal(h.container.querySelector('a').title, evil);
   assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
   assert.equal(themeButtons(h).length, 1);
-  assert.equal(h.container.querySelectorAll('li')[1].querySelector('.nw-category').textContent, '財經');
+  assert.equal(h.container.querySelectorAll('li')[1].querySelector('.nw-category'), null);
   assert.equal(h.container.querySelectorAll('li')[1].querySelector('.nw-tag'), null);
 });
 
@@ -695,7 +695,7 @@ test('events collapse to earliest report and toggle accessible other reports wit
   assert.deepEqual(mainTitles(h), ['最早', '單則']);
   const row = mainRows(h)[0];
   const button = row.querySelector('.nw-expand');
-  assert.equal(button.parentElement.className, 'nw-meta');
+  assert.equal(button.parentElement.className, 'nw-actions');
   assert.equal(button.parentElement.lastElementChild.className, 'nw-summary-toggle');
   assert.equal(button.textContent, '另 2 則報導');
   assert.equal(button.getAttribute('aria-expanded'), 'false');
@@ -1549,7 +1549,7 @@ test('watch matches title or summary literally and tags group representative wit
     article({title:'不符合', summary:{}}), article({title:{}, summary:null}),
   ]));
   const rows = mainRows(h);
-  assert.equal(rows[0].querySelector('.nw-meta').firstElementChild.textContent, '追蹤：AI');
+  assert.equal(rows[0].querySelector('.nw-info').firstElementChild.textContent, '追蹤：AI');
   assert.equal(rows[0].querySelector('.nw-expand').textContent, '另 1 則報導');
   assert.equal(rows[1].querySelector('.nw-watch').textContent, '追蹤：.*(');
   assert.equal(rows[2].querySelector('.nw-watch').textContent, '追蹤：<img>');
@@ -1683,7 +1683,7 @@ test('history bins are left inclusive, exclude next boundary and include final e
     ['nw-segment nw-positive', 'nw-segment nw-mixed', 'nw-segment nw-idle', 'nw-segment nw-negative']);
   assert.ok(Math.abs(parseFloat(bar.firstElementChild.style.width) - 100 / 6) < 0.001);
   const css = h.container.querySelector('style').textContent;
-  assert.match(css, /@container \(max-width: 419\.98px\)\s*\{\s*\.nw \.nw-history-long \{ display: none; \}\s*\.nw \.nw-history-short \{ display: inline; \}/);
+  assert.match(css, /@container \(max-width: 419\.98px\)\s*\{[\s\S]*?\.nw \.nw-history-long \{ display: none; \}\s*\.nw \.nw-history-short \{ display: inline; \}/);
 });
 
 test('history requires five analyzed events and reports dash for no directional denominator', t => {
@@ -1947,7 +1947,7 @@ test('event time range uses local dates, guessed endpoints and date-only labels'
     const first=eventStory(id,'代表',8,{published:start,time_guessed:guessStart});
     const last=eventStory(id,'子報導',9,{published:end,time_guessed:guessEnd});
     h.message(listing([last,first]));
-    assert.equal(mainRows(h)[0].querySelector('.nw-meta > .nw-time').textContent, expected);
+    assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-time').textContent, expected);
     if (guessStart || guessEnd) assert.match(mainRows(h)[0].querySelector('.nw-time').title, /收錄時間/);
   }
   h.message(listing([eventStory(id,'單則',8,{published:localStamp(25,8)})]));
@@ -1965,12 +1965,12 @@ test('per-report tone appears only in topic filter and validates ids without inh
   h.message(topicListing(reports));
   assert.equal(h.container.querySelector('.nw-tone-tag'),null);
   focusTopicButtons(h)[0].click();
-  assert.equal(mainRows(h)[0].querySelector('.nw-meta > .nw-tone-tag').textContent,'負面');
+  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'負面');
   h.container.querySelector('.nw-expand').click();
   assert.deepEqual([...h.container.querySelectorAll('.nw-report .nw-tone-tag')].map(n=>n.textContent),['正面','正反','中性']);
   assert.equal(h.container.querySelector('img'),null);
   h.message(topicListing(reports.map((item,i)=>i===0?{...item,tone:null}:item)));
-  assert.equal(mainRows(h)[0].querySelector('.nw-meta > .nw-tone-tag'),null);
+  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag'),null);
   assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),'true');
   focusTopicButtons(h)[0].click();
   assert.equal(h.container.querySelector('.nw-tone-tag'),null);
@@ -2274,4 +2274,51 @@ test('return skips removed source and theme options and tolerates vanished focus
   assert.equal(h.select.value,''); assert.equal(h.categories.value,'finance');
   assert.equal(h.container.querySelector('.nw-filter').hidden,true);
   assert.equal(mainRows(h).length,1); assert.equal(calls.length,0);
+});
+
+test('category and political issue tags add information only in appropriate views', t => {
+  const h=setup(t), topic=topicRecord();
+  const political=article({category:'politics',analysis:{kind:'politics',issue:'us_intl'},topic:topic.id});
+  h.message(topicListing([political,financeArticle({topic:topic.id}),worldArticle({topic:topic.id})]));
+  assert.deepEqual(mainRows(h).map(row=>row.querySelector('.nw-category').textContent),['政治','財經','國際']);
+  assert.equal(mainRows(h)[0].querySelector('.nw-tag'),null);
+  assert.equal(mainRows(h)[1].querySelector('.nw-tag').textContent,'記憶體 ▲');
+  assert.ok(mainRows(h)[2].querySelector('.nw-tag'));
+  for(const category of ['politics','finance','world']) {
+    choose(h,h.categories,category);
+    assert.equal(mainRows(h).length,1);
+    assert.equal(mainRows(h)[0].querySelector('.nw-category'),null);
+    assert.ok(mainRows(h)[0].querySelector('.nw-tag'));
+    if(category==='politics') assert.equal(mainRows(h)[0].querySelector('.nw-tag').textContent,'美國與國際');
+  }
+  focusTopicButtons(h)[0].click();
+  assert.equal(mainRows(h)[0].querySelector('.nw-category').textContent,'政治');
+  assert.equal(mainRows(h)[0].querySelector('.nw-tag'),null);
+  assert.equal(mainRows(h)[1].querySelector('.nw-tag').textContent,'記憶體 ▲');
+});
+
+test('row separates ordered information from right-aligned actions with narrow layout fallback', t => {
+  const h=setup(t), topic=topicRecord(), id='111111111111';
+  saveWatch(h,'AI');
+  h.message(topicListing([eventStory(id,'AI 代表',8,{topic:topic.id,tone:'negative'}),
+    eventStory(id,'子報導',9,{topic:topic.id})]));
+  focusTopicButtons(h)[0].click();
+  const row=mainRows(h)[0], meta=row.querySelector('.nw-meta');
+  assert.deepEqual([...meta.children].map(node=>node.className),['nw-info','nw-actions']);
+  const info=meta.firstElementChild, actions=meta.lastElementChild;
+  assert.deepEqual([...info.children].map(node=>node.className.split(' ')[0]),
+    ['nw-watch','nw-tag','nw-category','nw-source','nw-time','nw-tone-tag']);
+  assert.equal(info.querySelector('button'),null);
+  assert.deepEqual([...actions.children].map(node=>node.className),['nw-expand','nw-summary-toggle']);
+  assert.equal(actions.children[0].textContent,'另 1 則報導');
+  assert.equal(actions.children[1].textContent,'摘要');
+  actions.children[0].click(); actions.children[1].click();
+  assert.equal(row.querySelector('.nw-reports').hidden,false);
+  assert.equal(row.querySelector('.nw-summary').hidden,false);
+  const style=h.window.getComputedStyle(actions);
+  assert.equal(style.marginLeft,'auto'); assert.equal(style.gap,'6px');
+  const css=h.container.querySelector('style').textContent;
+  assert.match(css,/@container \(max-width: 419\.98px\)\s*\{\s*\.nw \.nw-actions \{ margin-left: 0; \}/);
+  h.message(listing([article({summary:''})]));
+  assert.equal(mainRows(h)[0].querySelector('.nw-actions'),null);
 });
