@@ -1469,3 +1469,44 @@ class AnalysisCompatibilityTests(unittest.TestCase):
                 scheduler._accept(AnalysisResult({'key': good}))
                 scheduler._accept(AnalysisResult({'key': stale}, round_id=-1))
                 self.assertEqual(scheduler.analysis_cache['key'], good)
+
+
+class RejectedListTests(unittest.TestCase):
+    def test_rejected_list_returns_none_and_preserves_last_successful_list(self):
+        from unittest.mock import Mock
+        sink = Sink()
+        scheduler = Scheduler([{'name':'source', 'url':'unused'}], None, sink, 1)
+        previous = scheduler._emit([Cache()], [])
+        self.assertIsNotNone(previous)
+        saved = deepcopy(scheduler.last_list)
+        scheduler.last_topic_seeds = ('previous-seed',)
+        sink.put = Mock(return_value=False)
+        for publish in (False, True):
+            with self.subTest(publish=publish):
+                packet = deepcopy(previous)
+                packet['body']['at'] = 'not-sent'
+                self.assertIsNone(scheduler._send_list(packet, publish=publish))
+                self.assertEqual(scheduler.last_list, saved)
+                self.assertEqual(scheduler.last_topic_seeds, ('previous-seed',))
+                sink.put.assert_called_once()  # No publish follows a rejected list.
+                sink.put.reset_mock()
+        self.assertIsNone(scheduler._emit([Cache()], []))
+        self.assertEqual(scheduler.last_list, saved)
+
+    def test_rejected_initial_list_does_not_schedule_model_work(self):
+        from unittest.mock import Mock
+        sink = Mock()
+        sink.put.return_value = False
+        scheduler = Scheduler([{'name':'source', 'url':'unused'}], FunctionFetcher(lambda *_: ok()), sink, 1)
+        scheduler._enqueue_classification = Mock()
+        scheduler.start()
+        try:
+            eventually(lambda: scheduler.completed == 1)
+            self.assertIsNone(scheduler.last_list)
+            scheduler._enqueue_classification.assert_not_called()
+            sink.put.assert_called_once()
+        finally:
+            scheduler.stop()
+            for worker in scheduler.workers + [scheduler.coordinator]:
+                worker.join(2)
+                self.assertFalse(worker.is_alive())

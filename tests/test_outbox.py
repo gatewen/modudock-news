@@ -77,6 +77,27 @@ class OutboxCoalescingTests(unittest.TestCase):
         self.assertFalse(self.outbox.put(self.listing(11)))
         self.assertEqual(self.drain(3),[self.listing(0),ready,terminal])
 
+    def test_replaced_list_updates_its_following_publish_in_place(self):
+        first = self.listing(1)
+        first['body'].update(items=[{'title': 'old'}], at='first')
+        second = self.listing(2)
+        second['body'].update(items=[{'title': 'new'}, {'title': 'another'}], at='second')
+        publish = {'t':'publish', 'seq':1, 'topic':'news.fetched', 'body':{'count':1, 'at':'first'}}
+        unrelated = {**publish, 'topic':'other.topic'}
+        earlier = {**publish, 'body':{'count':1, 'at':'earlier'}}
+        ready = {'t':'ready', 'seq':1}
+        for packet in [earlier, first, ready, unrelated, publish]:
+            self.assertTrue(self.outbox.put(packet))
+        self.assertTrue(self.outbox.put(second))
+        # Replacing again must match the already updated notification.
+        final = self.listing(3)
+        final['body'].update(items=[], at='final')
+        self.assertTrue(self.outbox.put(final))
+        self.assertEqual(self.outbox.queue.qsize(), 5)
+        updated = {**publish, 'body':{'count':0, 'at':'final'}}
+        self.assertEqual(self.drain(6), [self.listing(0), earlier, final, ready, unrelated, updated])
+        self.assertEqual(publish['body'], {'count':1, 'at':'first'})
+
     def test_full_queue_without_list_uses_original_drop_and_control_rules(self):
         for i in range(32): self.assertTrue(self.outbox.put({'t':'publish','seq':1,'body':{'i':i}}))
         self.assertFalse(self.outbox.put(self.listing(1)))

@@ -137,6 +137,17 @@ class Outbox:
                 with self.queue.mutex:
                     for index, (queued, _, _) in enumerate(self.queue.queue):
                         if self._is_list(queued):
+                            for following in range(index + 1, len(self.queue.queue)):
+                                notice, _, terminal = self.queue.queue[following]
+                                body = notice.get('body')
+                                if (notice.get('t') == 'publish' and notice.get('topic') == 'news.fetched'
+                                        and notice.get('seq') == queued.get('seq') and isinstance(body, dict)
+                                        and body.get('at') == queued['body'].get('at')
+                                        and body.get('count') == len(queued['body']['items'])):
+                                    notice = {**notice, 'body': {**body,
+                                        'count': len(packet['body']['items']), 'at': packet['body'].get('at')}}
+                                    self.queue.queue[following] = (notice, self.encode(notice), terminal)
+                                    break
                             self.queue.queue[index] = (packet, data, False)
                             return True
             try:
