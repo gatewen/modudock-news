@@ -1403,7 +1403,8 @@ test('new topic badge comes from any member and topic listeners are inert after 
   const body = topicListing([article({title:topic.title, topic:topic.id, published:'2026-09-23T00:00:00Z'}),
     article({title:'後續', topic:topic.id, published:'2026-09-25T00:00:00Z'})]);
   h.message(body);
-  assert.equal(focusArea(h).querySelectorAll('.nw-new').length, 1);
+  assert.equal(focusArea(h).querySelectorAll('.nw-title > .nw-new').length, 1);
+  assert.equal(focusArea(h).querySelectorAll('.nw-topic-latest > .nw-new').length, 1);
   focusTopicButtons(h)[0].click();
   const retained = focusTopicButtons(h)[0], clear = h.container.querySelector('.nw-filter button');
   h.handle.unmount();
@@ -2224,7 +2225,8 @@ test('topic progress counts new events with old representatives and coexists wit
   assert.equal(hint.textContent,'上次之後新增 2 個事件');
   assert.equal(hint.previousElementSibling.className,'nw-tone');
   h.message({...body,topics:{list:[topicRecord()]}});
-  assert.equal(h.container.querySelector('.nw-topic-new').previousElementSibling.className,'nw-title');
+  assert.equal(h.container.querySelector('.nw-topic-new').previousElementSibling.className,'nw-hint nw-topic-latest');
+  assert.equal(h.container.querySelector('.nw-topic-latest').previousElementSibling.className,'nw-title');
   h.message({...body,items:reports.map(item=>({...item,published:seenAt}))});
   assert.equal(h.container.querySelector('.nw-topic-new'),null);
 });
@@ -2710,3 +2712,64 @@ for (const outside of ['input', 'body']) {
     assert.equal(h.window.document.activeElement, target);
   });
 }
+
+test('topic latest selects newest member across filters and renders before tone with safe ellipsis', t => {
+  const h = setup(t), topic = topicRecord({count:5, tone:toneCounts({neutral:5})});
+  const title = '<img src=x onerror=alert(1)>' + '最新進展'.repeat(100);
+  const seed = article({title:topic.title, topic:topic.id, category:'finance', published:'2026-09-24T08:00:00Z'});
+  const newest = article({title, topic:topic.id, source:'乙', category:'world', published:'2026-09-24T12:00:00Z'});
+  const middle = article({title:'較舊', topic:topic.id, published:'2026-09-24T10:00:00Z'});
+  const outside = article({title:'不屬於話題', published:'2026-09-25T12:00:00Z'});
+  h.message(topicListing([newest, seed, outside, middle], [topic]));
+  choose(h, h.categories, 'finance');
+  choose(h, h.select, '甲');
+  const row = h.container.querySelector('.nw-topic-latest');
+  assert.equal(row.textContent, `最新：${title}`);
+  assert.equal(row.title, title);
+  assert.equal(row.previousElementSibling.className, 'nw-title');
+  assert.equal(row.nextElementSibling.className, 'nw-tone');
+  assert.equal(row.querySelector('img'), null);
+  const style = h.window.getComputedStyle(row);
+  assert.equal(style.whiteSpace, 'nowrap');
+  assert.equal(style.overflow, 'hidden');
+  assert.equal(style.textOverflow, 'ellipsis');
+  assert.equal(h.window.getComputedStyle(row.parentElement).minWidth, '0');
+  h.message(topicListing([seed, middle], [topic])); // Same at: latest headline is replaced.
+  assert.equal(h.container.querySelector('.nw-topic-latest').textContent, '最新：較舊');
+});
+
+test('topic latest is absent for seed title, no dated member or invalid title', t => {
+  const h = setup(t), topic = topicRecord();
+  const seed = article({topic:topic.id, title:topic.title, published:'2026-09-24T12:00:00Z'});
+  for (const items of [[], [seed], [seed, {...seed, title:'較舊', published:'2026-09-24T08:00:00Z'}],
+    [article({topic:topic.id, published:'bad'})], [article({topic:topic.id, published:{}})],
+    [{...seed, title:{}}], [{...seed, title:''}]]) {
+    h.message(topicListing(items, [topic]));
+    assert.equal(h.container.querySelector('.nw-topic-latest'), null);
+  }
+});
+
+test('topic latest new marker uses lastSeen strictly and requires a saved baseline', t => {
+  const baseline = '2026-09-24T10:00:00Z';
+  for (const saved of [false, true]) {
+    const h = saved ? setup(t, withSeen(baseline)) : setup(t);
+    const topic = topicRecord();
+    for (const published of ['2026-09-24T09:00:00Z', baseline, '2026-09-24T10:00:01Z']) {
+      h.message(topicListing([article({topic:topic.id, title:'新進展', published})]));
+      const row = h.container.querySelector('.nw-topic-latest');
+      const marked = saved && Date.parse(published) > Date.parse(baseline);
+      assert.equal(Boolean(row.querySelector('.nw-new')), marked);
+      if (marked) assert.equal(row.firstElementChild.textContent, '新');
+      assert.equal(row.title, '新進展');
+    }
+  }
+});
+
+test('topic latest line is hidden when the newest report belongs to the seed event', t => {
+  const h = setup(t), id = topicRecord().id, ev = 'abcabcabcabc';
+  h.message(topicListing([
+    article({topic:id, title:topicRecord().title, event:ev, event_size:2, published:'2026-09-24T08:00:00Z', link:'https://e.com/a'}),
+    article({topic:id, title:'同一事件另一家的寫法', event:ev, event_size:2, published:'2026-09-24T09:00:00Z', link:'https://e.com/b'}),
+  ], [topicRecord()]));
+  assert.equal(h.container.querySelector('.nw-topic-latest'), null);
+});

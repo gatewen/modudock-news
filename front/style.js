@@ -53,6 +53,7 @@ export const css = `
 .nw .nw-focus-count[data-topic-id][aria-pressed="true"], .nw .nw-watch-only[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 3px 0 0 var(--nw-accent); }
 .nw .nw-focus-short { display: none; }
 .nw .nw-focus-copy { min-width: 0; }
+.nw .nw-topic-latest { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nw .nw-tone { margin-top: 6px; }
 .nw .nw-bar.nw-tone-bar { height: 4px; margin-bottom: 4px; }
 .nw .nw-tone-negative { background: var(--nw-tone-neg); }

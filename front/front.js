@@ -370,6 +370,22 @@ export default function mount(ctx) {
           make("span", "nw-focus-short", `${topic.sources} 家`));
         const copy = make("div", "nw-focus-copy");
         copy.append(newsTitle(representative || {title: topic.title}, "nw-title", members.some(isNew)));
+        let latest = null, latestTime = -Infinity;
+        for (const member of members) {
+          const stamp = Date.parse(text(member.published));
+          if (Number.isFinite(stamp) && stamp > latestTime) {
+            latest = member;
+            latestTime = stamp;
+          }
+        }
+        // Another outlet's copy of the seed event is not a new development.
+        const sameEvent = latest && representative && eventId(latest) && eventId(latest) === eventId(representative);
+        if (latest && text(latest.title) && latest.title !== topic.title && !sameEvent) {
+          const update = make("div", "nw-hint nw-topic-latest", `最新：${latest.title}`);
+          update.title = latest.title;
+          if (isNew(latest)) update.prepend(make("span", "nw-new", "新"));
+          copy.append(update);
+        }
         const tone = toneSummary(topic);
         if (tone) copy.append(tone);
         const newEvents = groupItems(members).filter(group => group.reports.some(isNew)).length;
