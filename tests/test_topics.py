@@ -37,6 +37,12 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn('半導體產業', terms)
         self.assertEqual(words('a 1'), set())
 
+    def test_numeric_tokens_excluded_but_mixed_alphanumeric_kept(self):
+        self.assertEqual(words('2026 11 123456 a11 H200 b2b AI'), {'A11','H200','B2B','AI'})
+        items, groups = snapshot([story('candidate', '2026')],
+                                seeds=[story(f's{i}', '2026 訪美', source) for i, source in enumerate('ABC')])
+        self.assertEqual(plan(items, groups, {}, ['A','B','C'])[1], [])
+
     def test_feature_df_boundary_and_alias_recall(self):
         items, groups = snapshot([story('candidate', '特朗普訪美')], size=40)
         topics, pending = plan(items, groups, {}, ['A', 'B', 'C'])

@@ -28,7 +28,7 @@ CRITERIA = {
 
 def words(title):
     title = title.replace("特朗普", "川普").replace("特習", "川習")
-    result = set(re.findall(r"[A-Z0-9]{2,}", title.upper()))
+    result = {word for word in re.findall(r"[A-Z0-9]{2,}", title.upper()) if not word.isdigit()}
     for run in re.findall(r"[\u3400-\u4dbf\u4e00-\u9fff\U00020000-\U0003134f]+", title):
         for size in (2, 3, 4):
             result.update(run[i:i + size] for i in range(len(run) - size + 1))

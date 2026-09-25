@@ -131,6 +131,14 @@ class Outbox:
         with self.lock:
             if self.closed:
                 return False
+            if self._is_list(packet):
+                # The writer owns any packet already removed by get(). Only
+                # queued lists can be replaced, preserving all other positions.
+                with self.queue.mutex:
+                    for index, (queued, _, _) in enumerate(self.queue.queue):
+                        if self._is_list(queued):
+                            self.queue.queue[index] = (packet, data, False)
+                            return True
             try:
                 self.queue.put_nowait((packet, data, False))
                 return True
@@ -138,6 +146,10 @@ class Outbox:
                 if packet["t"] in BUSINESS:
                     return False
                 raise RuntimeError("control outbox full")
+
+    @staticmethod
+    def _is_list(packet):
+        return packet.get('t') == 'msg' and isinstance(packet.get('body'), dict) and packet['body'].get('op') == 'list'
 
     def close_with(self, terminal=None):
         """Keep prior control packets; discard queued business, then seal.

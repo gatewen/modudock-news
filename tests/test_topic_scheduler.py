@@ -72,6 +72,9 @@ class TopicSchedulerTests(unittest.TestCase):
             self.assertTrue(entered.wait(2))
             with s.cv:
                 self.assertGreater(s.last_list['body']['events']['pending'], 0)
+                self.assertEqual(s.last_list['body']['topics']['list'], [])
+                self.assertEqual(s.last_list['body']['topics']['pending'], 0)
+                self.assertTrue(all('topic' not in item for item in s.last_list['body']['items']))
                 self.assertTrue(s.topic_jobs.empty())
                 self.assertFalse(s.topic_in_flight)
             gate.set()
@@ -242,3 +245,45 @@ class TopicSchedulerTests(unittest.TestCase):
             self.assertEqual(s.last_topic_seeds, (older['link'],))
             s.stop()
             self.assertEqual(s.last_topic_seeds, (older['link'],))
+
+    def test_pending_events_retain_only_previous_members_and_recount_sources_tone(self):
+        old_member=story('one','ALPHA BETA','D')
+        items, groups=snapshot([old_member])
+        with server(response) as (url, _):
+            s, _=self.make(url,items)
+            s.topic_cache[items[0]['link'],old_member['link']]=True
+            s.tone_cache.update({items[0]['link']:'positive',items[1]['link']:'negative',
+                                 items[2]['link']:'negative',old_member['link']:'neutral'})
+            first=s._emit(s.caches,[])
+            old=first['body']['topics']['list'][0]
+            self.assertEqual((old['sources'],old['count']),(4,4))
+            added=[story(f'new{i}','全新話題 OMEGA',source) for i,source in enumerate('DEF')]
+            current=[i for i in items if i['link']!=items[2]['link']]+added
+            groups.update({i['link']:{'event':'new-event'} for i in added})
+            with s.cv:
+                packet=s._decorate_topics({'body':{'items':deepcopy(current),'events':{'pending':3}}},groups)
+            self.assertEqual(packet['body']['topics']['pending'],0)
+            kept=packet['body']['topics']['list']
+            self.assertEqual(len(kept),1)
+            self.assertEqual((kept[0]['id'],kept[0]['title']),(old['id'],old['title']))
+            self.assertEqual((kept[0]['sources'],kept[0]['count']),(3,3))
+            self.assertEqual(kept[0]['tone'],{'positive':1,'negative':1,'neutral':1,'mixed':0})
+            self.assertTrue(all('topic' not in i for i in packet['body']['items'] if i['link'].split('/')[-1].startswith('new')))
+            s.last_list=deepcopy(packet)
+            with s.cv:
+                packet['body']['events']['pending']=0
+                settled=s._decorate_topics(packet,groups)
+            self.assertIn('全新話題 OMEGA',[t['title'] for t in settled['body']['topics']['list']])
+
+    def test_pending_events_drop_topic_below_three_surviving_sources(self):
+        items, groups=snapshot()
+        with server(response) as (url, _):
+            s, _=self.make(url,items)
+            s._emit(s.caches,[])
+            self.assertEqual(len(s.last_list['body']['topics']['list']),1)
+            remaining=[i for i in s.last_list['body']['items'] if i['source']!='C']
+            with s.cv:
+                packet=s._decorate_topics({'body':{'items':remaining,'events':{'pending':1}}},groups)
+            self.assertEqual(packet['body']['topics']['list'],[])
+            self.assertEqual(packet['body']['topics']['pending'],0)
+            self.assertTrue(all('topic' not in i for i in packet['body']['items']))

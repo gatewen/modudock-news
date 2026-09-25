@@ -424,7 +424,20 @@ class Scheduler:
 
     def _decorate_topics(self, packet, groups):
         body = packet['body']
-        topics, pending = self._topic_plan(packet, groups)
+        if body['events']['pending'] > 0:
+            # Unsettled event groups must not replace the visible topics.
+            # Recount only surviving members, using the last admitted list.
+            previous = self.last_list['body'] if self.last_list is not None else {}
+            previous_members = {dedup_key(item['link']): item.get('topic') for item in previous.get('items', [])}
+            topics, pending = [], []
+            for topic in previous.get('topics', {}).get('list', []):
+                members = [item for item in body['items'] if previous_members.get(dedup_key(item['link'])) == topic['id']]
+                sources = len({item['source'] for item in members})
+                if sources >= 3:
+                    topics.append({'id': topic['id'], 'title': topic['title'], 'sources': sources,
+                                   'count': len(members), 'keys': [dedup_key(item['link']) for item in members]})
+        else:
+            topics, pending = self._topic_plan(packet, groups)
         membership = {key: topic['id'] for topic in topics for key in topic['keys']}
         for item in body['items']:
             item.pop('topic', None)
