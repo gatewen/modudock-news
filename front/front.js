@@ -100,6 +100,7 @@ const css = `
 .nw .nw-focus-list { display: grid; gap: 10px; }
 .nw .nw-focus-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .nw .nw-focus-count { font-size: 12px; white-space: nowrap; }
+.nw .nw-focus-count[data-topic-id][aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 3px 0 0 var(--nw-accent); }
 .nw .nw-focus-short { display: none; }
 .nw .nw-sample { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 18px; color: var(--nw-muted); font-size: 12px; }
 .nw .nw-pending { margin-left: auto; }
@@ -298,6 +299,8 @@ export default function mount(ctx) {
   let items = [];
   let received = false;
   let selectedTheme = "";
+  let selectedTopic = "";
+  let topics = [];
   let analysisEnabled = true;
   let eventsPending = 0;
   let updatedText = "", failedText = "", classificationText = "";
@@ -374,6 +377,25 @@ export default function mount(ctx) {
     button.closest(".nw-row").querySelector(".nw-reports").hidden = !expanded.has(id);
   }
   function drawFocus(groups) {
+    if (topics.length) {
+      focus.hidden = false;
+      focusList.replaceChildren();
+      for (const topic of topics) {
+        const members = items.filter(item => item && item.topic === topic.id);
+        const representative = members.find(item => item.title === topic.title);
+        const row = make("div", "nw-focus-row");
+        const button = make("button", "nw-focus-count");
+        button.type = "button";
+        button.dataset.topicId = topic.id;
+        button.setAttribute("aria-pressed", String(selectedTopic === topic.id));
+        button.setAttribute("aria-label", `篩選話題：${topic.title}，${topic.sources} 家媒體・${topic.count} 則`);
+        button.append(make("span", "nw-focus-long", `${topic.sources} 家媒體・${topic.count} 則`),
+          make("span", "nw-focus-short", `${topic.sources} 家`));
+        row.append(newsTitle(representative || {title: topic.title}, "nw-title", members.some(isNew)), button);
+        focusList.append(row);
+      }
+      return;
+    }
     const ranked = groups.map(group => ({...group,
       count: new Set(group.reports.map(item => text(item.source)).filter(Boolean)).size,
       latest: Math.max(...group.reports.map(item => {
@@ -398,8 +420,16 @@ export default function mount(ctx) {
     }
   }
   function onFocus(event) {
-    const button = event.target?.closest?.("button[data-event]");
+    const button = event.target?.closest?.("button[data-event], button[data-topic-id]");
     if (!button || !focusList.contains(button)) return;
+    if (button.dataset.topicId) {
+      sources.value = "";
+      categories.value = "";
+      selectedTheme = "";
+      selectedTopic = selectedTopic === button.dataset.topicId ? "" : button.dataset.topicId;
+      drawItems();
+      return;
+    }
     const target = [...list.querySelectorAll(".nw-expand")].find(node => node.dataset.event === button.dataset.event);
     if (!target) return;
     if (!expanded.has(button.dataset.event)) target.click();
@@ -413,6 +443,14 @@ export default function mount(ctx) {
     clearTheme.setAttribute("aria-label", world ? "取消地區篩選" : "取消題材篩選");
     themeFilter.hidden = panel.hidden || !selectedTheme;
     themeLabel.textContent = selectedTheme ? `已篩選：${topicNames.get(selectedTheme)}` : "";
+    clearTheme.textContent = "清除";
+    if (selectedTopic) {
+      const title = Array.from(topics.find(topic => topic.id === selectedTopic).title);
+      themeFilter.hidden = false;
+      themeLabel.textContent = `話題：${title.slice(0, 24).join("")}${title.length > 24 ? "…" : ""}`;
+      clearTheme.textContent = "取消話題篩選";
+      clearTheme.setAttribute("aria-label", "取消話題篩選");
+    }
     if (panel.hidden) return;
     signalHeading.textContent = world ? "局勢走向" : "股市訊號";
     rankingTitle.textContent = world ? "地區" : "題材";
@@ -508,6 +546,11 @@ export default function mount(ctx) {
   }
   function onClearTheme() {
     selectedTheme = "";
+    selectedTopic = "";
+    drawItems();
+  }
+  function onSourceOrCategory() {
+    selectedTopic = "";
     drawItems();
   }
   function drawItems() {
@@ -515,7 +558,8 @@ export default function mount(ctx) {
         || (selectedTheme && selectedTheme.startsWith("region:") !== (categories.value === "world"))) selectedTheme = "";
     const scoped = items.filter(item => item && typeof item === "object"
       && (!sources.value || text(item.source) === sources.value)
-      && (!categories.value || text(item.category) === categories.value));
+      && (!categories.value || text(item.category) === categories.value)
+      && (!selectedTopic || item.topic === selectedTopic));
     drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
     list.replaceChildren();
     const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
@@ -576,11 +620,22 @@ export default function mount(ctx) {
     sources.value = "";
     categories.value = "";
     selectedTheme = "";
+    selectedTopic = "";
     drawItems();
   }
   function renderList(body) {
     received = true;
     items = Array.isArray(body.items) ? body.items : [];
+    const rawTopics = Array.isArray(body.topics?.list) ? body.topics.list : [];
+    const topicIds = new Set();
+    topics = rawTopics.filter(topic => {
+      if (!topic || typeof topic.id !== "string" || topic.id.length !== 12 || !/^[0-9a-f]{12}$/i.test(topic.id)
+          || typeof topic.title !== "string" || !Number.isInteger(topic.sources) || topic.sources < 3
+          || !Number.isInteger(topic.count) || topic.count < 1 || topicIds.has(topic.id)) return false;
+      topicIds.add(topic.id);
+      return true;
+    }).slice(0, 5);
+    if (!topics.some(topic => topic.id === selectedTopic)) selectedTopic = "";
     const published = items.map(item => Date.parse(text(item?.published))).filter(Number.isFinite);
     latestPublished = published.length ? Math.max(...published) : null;
     const presentEvents = new Set(items.filter(item => item && typeof item === "object").map(eventId).filter(Boolean));
@@ -618,8 +673,8 @@ export default function mount(ctx) {
   ranking.addEventListener("click", onTheme);
   clearTheme.addEventListener("click", onClearTheme);
   refresh.addEventListener("click", onRefresh);
-  sources.addEventListener("change", drawItems);
-  categories.addEventListener("change", drawItems);
+  sources.addEventListener("change", onSourceOrCategory);
+  categories.addEventListener("change", onSourceOrCategory);
   view.addEventListener("pagehide", persistLastSeen);
   ctx.channel.onMessage((body) => {
     if (!disposed && body && body.op === "list") renderList(body);
@@ -640,8 +695,8 @@ export default function mount(ctx) {
       up = false;
       refresh.disabled = true;
       refresh.removeEventListener("click", onRefresh);
-      sources.removeEventListener("change", drawItems);
-      categories.removeEventListener("change", drawItems);
+      sources.removeEventListener("change", onSourceOrCategory);
+      categories.removeEventListener("change", onSourceOrCategory);
       list.removeEventListener("click", onExpand);
       focusList.removeEventListener("click", onFocus);
       expanded.clear();
@@ -650,6 +705,8 @@ export default function mount(ctx) {
       ranking.removeEventListener("click", onTheme);
       clearTheme.removeEventListener("click", onClearTheme);
       selectedTheme = "";
+      selectedTopic = "";
+      topics = [];
       items = [];
       root.remove();
     },

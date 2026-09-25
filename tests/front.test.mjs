@@ -1280,3 +1280,124 @@ test('empty or invalid lists never persist invalid dates and preserve existing b
     assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), baseline);
   }
 });
+
+const topicRecord = (overrides = {}) => ({id:'abcdef123456', title:'話題標題', sources:3, count:4, ...overrides});
+const topicListing = (items, records = [topicRecord()]) => ({...listing(items), topics:{pending:0, list:records}});
+const focusTopicButtons = h => [...focusArea(h).querySelectorAll('button[data-topic-id]')];
+
+test('topic records require valid fields, take five valid unique entries, and fall back to event focus', t => {
+  const h = setup(t);
+  const invalid = [null, {}, topicRecord({id:'abcdef123456\n'}), topicRecord({id:'zzzdef123456'}),
+    topicRecord({id:123}), topicRecord({title:{}}), topicRecord({sources:2}), topicRecord({sources:3.5}),
+    topicRecord({sources:'3'}), topicRecord({count:0}), topicRecord({count:NaN}), topicRecord({count:true})];
+  const reports = focusReports('111111111111', 3);
+  h.message(topicListing(reports, invalid));
+  assert.equal(focusTopicButtons(h).length, 0);
+  assert.equal(focusButtons(h)[0].dataset.event, '111111111111');
+  const good = Array.from({length:6}, (_,i) => topicRecord({id:String(i).padStart(12,'0')}));
+  h.message(topicListing(reports, [...invalid, good[0], good[0], ...good.slice(1)]));
+  assert.deepEqual(focusTopicButtons(h).map(b => b.dataset.topicId), good.slice(0,5).map(t => t.id));
+  assert.equal(focusArea(h).querySelector('button[data-event]'), null);
+  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent, '3 家媒體・4 則');
+  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-short').textContent, '3 家');
+  h.message({...listing(reports), topics:{list:{}}});
+  assert.equal(focusButtons(h)[0].dataset.event, '111111111111');
+  h.message(topicListing([], invalid));
+  assert.equal(focusArea(h).hidden, true);
+});
+
+test('topic title links require exact title in that topic and retain URL and text defenses', t => {
+  const h = setup(t), topic = topicRecord();
+  h.message(topicListing([article({title:topic.title, topic:'111111111111', link:'https://wrong.example/'})]));
+  assert.equal(focusArea(h).querySelector('a'), null);
+  const matching = article({title:topic.title, topic:topic.id, link:'https://example.com/right', summary:'摘要'});
+  h.message(topicListing([matching]));
+  const link = focusArea(h).querySelector('a');
+  assert.equal(link.href, matching.link); assert.equal(link.target, '_blank');
+  assert.equal(link.rel, 'noopener noreferrer'); assert.equal(link.title, '摘要');
+  const evil = '<img src=x onerror=alert(1)>';
+  h.message(topicListing([{...matching, title:evil, link:'javascript:alert(1)'}], [topicRecord({title:evil})]));
+  assert.equal(focusArea(h).querySelector('img'), null);
+  assert.equal(focusArea(h).querySelector('a'), null);
+  assert.equal(focusArea(h).querySelector('.nw-title').textContent, evil);
+});
+
+test('topic click resets other filters, keeps event grouping, toggles and survives same-at replacement', t => {
+  const h = setup(t), id = topicRecord().id;
+  const reports = [...focusReports('111111111111', 3, 10, {topic:id}),
+    article({title:'另一事件', topic:id, category:'world'}), article({title:'外面', category:'politics'})];
+  const body = topicListing(reports);
+  h.message(body);
+  choose(h, h.categories, 'finance');
+  themeButton(h, 'memory').click();
+  choose(h, h.select, '甲');
+  focusTopicButtons(h)[0].click();
+  assert.equal(h.categories.value, ''); assert.equal(h.select.value, '');
+  assert.equal(h.container.querySelector('.nw-panel').hidden, true);
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(mainTitles(h), ['111111111111-0', '另一事件']);
+  assert.equal(mainRows(h)[0].querySelector('.nw-expand').textContent, '另 2 則報導');
+  assert.equal(h.container.querySelector('.nw-filter').hidden, false);
+  assert.equal(h.container.querySelector('.nw-filter span').textContent, '話題：話題標題');
+  h.message(body);
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'true');
+  focusTopicButtons(h)[0].click();
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'false');
+  assert.equal(mainRows(h).length, 3);
+  assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  choose(h, h.categories, 'finance');
+  assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'false');
+  const css = h.container.querySelector('style').textContent;
+  assert.match(css, /\.nw \.nw-focus-count\[data-topic-id\]\[aria-pressed="true"\] \{ border-color: var\(--nw-accent\); box-shadow: inset 3px 0 0 var\(--nw-accent\); \}/);
+});
+
+test('topic filter cancels via clear button, source change, category change and empty clear all', t => {
+  const h = setup(t), id = topicRecord().id;
+  const body = topicListing([article({topic:id}), article({title:'外面', source:'乙', category:'politics'})]);
+  h.message(body);
+  for (const cancel of [
+    () => h.container.querySelector('[aria-label="取消話題篩選"]').click(),
+    () => choose(h, h.select, '乙'),
+    () => choose(h, h.categories, 'politics'),
+  ]) {
+    focusTopicButtons(h)[0].click();
+    assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'true');
+    cancel();
+    assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'false');
+    assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  }
+  h.message(topicListing([article({title:'外面'})]));
+  focusTopicButtons(h)[0].click();
+  assert.equal(mainRows(h).length, 0);
+  h.container.querySelector('.nw-empty button').click();
+  assert.equal(mainRows(h).length, 1);
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'), 'false');
+});
+
+test('topic disappears or becomes invalid on replacement cancels selection and truncation uses 24 characters', t => {
+  const h = setup(t), id = topicRecord().id;
+  const longTitle = '𠮷'.repeat(25);
+  h.message(topicListing([article({topic:id}), article({title:'外面'})], [topicRecord({title:longTitle})]));
+  focusTopicButtons(h)[0].click();
+  assert.equal(h.container.querySelector('.nw-filter span').textContent, `話題：${'𠮷'.repeat(24)}…`);
+  h.message(topicListing([article({topic:id}), article({title:'外面'})], [topicRecord({title:'𠮷'.repeat(24)})]));
+  assert.equal(h.container.querySelector('.nw-filter span').textContent, `話題：${'𠮷'.repeat(24)}`);
+  h.message(topicListing([article({topic:id}), article({title:'外面'})], [topicRecord({sources:2})]));
+  assert.equal(mainRows(h).length, 2);
+  assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  assert.equal(focusArea(h).hidden, true);
+});
+
+test('new topic badge comes from any member and topic listeners are inert after unmount', t => {
+  const h = setup(t, withSeen(seenAt)), topic = topicRecord();
+  const body = topicListing([article({title:topic.title, topic:topic.id, published:'2026-09-23T00:00:00Z'}),
+    article({title:'後續', topic:topic.id, published:'2026-09-25T00:00:00Z'})]);
+  h.message(body);
+  assert.equal(focusArea(h).querySelectorAll('.nw-new').length, 1);
+  focusTopicButtons(h)[0].click();
+  const retained = focusTopicButtons(h)[0], clear = h.container.querySelector('[aria-label="取消話題篩選"]');
+  h.handle.unmount();
+  retained.click(); clear.click();
+  assert.equal(h.container.children.length, 0);
+  assert.equal(retained.getAttribute('aria-pressed'), 'true');
+});
