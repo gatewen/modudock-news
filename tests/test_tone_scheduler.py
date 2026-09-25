@@ -187,10 +187,30 @@ class ToneSchedulerTests(unittest.TestCase):
             worst['body']['topics']={'pending':300,'tone_pending':300,'list':[
                 {'id':'f'*12,'title':'\U0010ffff'*300,'sources':300,'count':300,
                  'tone':{k:300 for k in ['positive','negative','neutral','mixed']}} for _ in range(5)]}
-            for item in worst['body']['items']: item['topic']='f'*12
+            for item in worst['body']['items']:
+                item['topic']='f'*12
+                item['tone']='negative'
             self.assertLessEqual(len(packet_bytes(worst)),MAX_PACKET)
             with s.cv:
                 update=s._accept(ToneResult({i['link']:'positive' for i in first['body']['items']}))
             second=s._send_list(update)
             self.assertEqual([i['link'] for i in first['body']['items']], [i['link'] for i in second['body']['items']])
             self.assertEqual(second['body']['topics']['tone_pending'],0)
+
+    def test_item_tone_only_for_current_members_with_cached_results(self):
+        items, _ = snapshot()
+        s, _ = self.make('http://unused.invalid', items)
+        s.tone_cache.update({items[0]['link']: 'negative', items[-1]['link']: 'positive'})
+        raw = {'t': 'msg', 'seq': 1, 'body': {'items': items}}
+        with s.cv:
+            packet = s._decorate(raw)
+        decorated = packet['body']['items']
+        self.assertEqual(decorated[0]['tone'], 'negative')
+        self.assertNotIn('tone', decorated[1])
+        self.assertNotIn('tone', decorated[-1])
+        # A previously decorated item must lose its tone when its topic disappears.
+        packet['body']['items'] = [decorated[0]]
+        with s.cv:
+            packet = s._decorate(packet)
+        self.assertNotIn('topic', packet['body']['items'][0])
+        self.assertNotIn('tone', packet['body']['items'][0])

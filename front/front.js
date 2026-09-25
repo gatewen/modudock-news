@@ -113,6 +113,11 @@ const css = `
 .nw .nw-tone-positive { background: var(--nw-accent); }
 .nw .nw-tone-mixed { background: var(--nw-mixed); }
 .nw .nw-tone-neutral { background: var(--nw-idle); }
+.nw .nw-tone-tag { font-size: 12px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; }
+.nw .nw-tone-tag-positive { color: var(--nw-accent); }
+.nw .nw-tone-tag-negative { color: var(--nw-danger); }
+.nw .nw-tone-tag-mixed { color: var(--nw-mixed); }
+.nw .nw-tone-tag-neutral { color: var(--nw-muted); }
 .nw .nw-sample { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 18px; color: var(--nw-muted); font-size: 12px; }
 .nw .nw-pending { margin-left: auto; }
 .nw .nw-warning { flex-basis: 100%; }
@@ -393,6 +398,26 @@ export default function mount(ctx) {
   }
   function onRefresh() {
     if (up && !disposed) ctx.channel.send({ op: "refresh" });
+  }
+  function groupTime(reports) {
+    const valid = reports.filter(item => Number.isFinite(Date.parse(text(item.published))));
+    const first = valid[0], last = valid.at(-1);
+    if (valid.length < 2 || Date.parse(first.published) === Date.parse(last.published)) return newsTime(reports[0]);
+    const node = newsTime(first), end = newsTime(last);
+    const startDate = new Date(first.published), endDate = new Date(last.published);
+    const sameDay = startDate.getFullYear() === endDate.getFullYear()
+      && startDate.getMonth() === endDate.getMonth() && startDate.getDate() === endDate.getDate();
+    const dateOnly = endDate.getHours() === 0 && endDate.getMinutes() === 0 && endDate.getSeconds() === 0;
+    const endLabel = sameDay && !dateOnly
+      ? `${last.time_guessed === true ? "約" : ""}${localTime(last.published)}` : end.textContent;
+    node.textContent += `–${endLabel}`;
+    if (end.title) node.title = end.title;
+    return node;
+  }
+  function appendTone(meta, item) {
+    const names = new Map([["positive", "正面"], ["negative", "負面"], ["mixed", "正反"], ["neutral", "中性"]]);
+    if (selectedTopic && typeof item.tone === "string" && names.has(item.tone))
+      meta.append(make("span", `nw-tone-tag nw-tone-tag-${item.tone}`, names.get(item.tone)));
   }
   function groupItems(scoped) {
     const groups = new Map();
@@ -818,7 +843,8 @@ export default function mount(ctx) {
           name + (direction ? ` ${direction}` : "")));
       }
       meta.append(make("span", "nw-category", categoryNames.get(category) || "未分類"),
-        make("span", "nw-source", text(item.source)), newsTime(item));
+        make("span", "nw-source", text(item.source)), groupTime(group.reports));
+      appendTone(meta, item);
       row.append(newsTitle(item, "nw-title", newGroups[index] && index >= prefix), meta);
       if (group.reports.length > 1) {
         const toggle = make("button", "nw-expand", `另 ${group.reports.length - 1} 則報導`);
@@ -833,6 +859,7 @@ export default function mount(ctx) {
           const entry = make("li", "nw-report");
           const details = make("div", "nw-report-meta");
           details.append(make("span", "nw-source", text(report.source)), newsTime(report));
+          appendTone(details, report);
           entry.append(newsTitle(report, "nw-report-title", false), details);
           reports.append(entry);
         }

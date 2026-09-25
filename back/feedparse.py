@@ -39,6 +39,7 @@ TOPICS_RESERVE = len(json.dumps({'pending': MAX_ITEMS_LIST, 'tone_pending': MAX_
      'tone': {tone: MAX_ITEMS_LIST for tone in ('positive', 'negative', 'neutral', 'mixed')}}
     for _ in range(5)]}, ensure_ascii=True))
 TOPIC_FIELD_RESERVE = len(', "topic": "' + 'f' * 12 + '"')
+TONE_FIELD_RESERVE = len(', "tone": "negative"')
 ATOM = "http://www.w3.org/2005/Atom"
 
 
@@ -292,6 +293,8 @@ def fit_packet(packet):
         if 'topics' in body:
             reserved += max(0, TOPICS_RESERVE - len(json.dumps(body['topics'], ensure_ascii=True)))
             reserved += sum(TOPIC_FIELD_RESERVE for item in items if 'topic' not in item)
+            reserved += sum(TONE_FIELD_RESERVE if 'tone' not in item else
+                            max(0, len('negative') - len(item['tone'])) for item in items)
         if len(packet_bytes(result)) + reserved <= MAX_PACKET:
             return result
         if not items:

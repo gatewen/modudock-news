@@ -441,9 +441,12 @@ class Scheduler:
         membership = {key: topic['id'] for topic in topics for key in topic['keys']}
         for item in body['items']:
             item.pop('topic', None)
+            item.pop('tone', None)
             key = dedup_key(item['link'])
             if key in membership:
                 item['topic'] = membership[key]
+                if key in self.tone_cache:
+                    item['tone'] = self.tone_cache[key]
         for topic in topics:
             topic['tone'] = {tone: sum(self.tone_cache.get(key) == tone for key in topic['keys'])
                              for tone in TONE_CRITERIA}

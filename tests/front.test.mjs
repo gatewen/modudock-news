@@ -1076,9 +1076,9 @@ test('news times use local calendar today, yesterday and guessed markers, includ
   ]));
   const times = [...h.container.querySelectorAll('.nw-time')];
   assert.deepEqual(times.map(node => node.textContent), ['00:05', '12/31 23:55', '約00:05',
-    '12/31 23:55', '約00:05', '00:05']);
-  for (const index of [2, 4]) assert.equal(times[index].title, '來源沒有提供發布時間，以收錄時間代替');
-  for (const index of [0, 1, 3, 5]) assert.equal(times[index].title, '');
+    '12/31 23:55–約00:05', '約00:05', '00:05']);
+  for (const index of [2, 3, 4]) assert.equal(times[index].title, '來源沒有提供發布時間，以收錄時間代替');
+  for (const index of [0, 1, 5]) assert.equal(times[index].title, '');
   h.container.querySelector('.nw-expand').click();
   assert.equal(h.container.querySelector('.nw-reports .nw-time').textContent, '約00:05');
 });
@@ -1183,7 +1183,7 @@ test('local midnight shows date only, including today guessed and expanded repor
     article({published:new Date(2026, 0, 1, 0, 0, 1).toISOString()}),
   ]));
   const nodes = [...h.container.querySelectorAll('.nw-time')];
-  assert.deepEqual(nodes.map(n => n.textContent), ['今天','12/31','約今天','約12/31','今天','00:00']);
+  assert.deepEqual(nodes.map(n => n.textContent), ['今天','12/31','約今天','約12/31–今天','今天','00:00']);
   assert.equal(nodes[2].title, '來源沒有提供發布時間，以收錄時間代替');
   assert.equal(nodes[3].title, nodes[2].title);
 });
@@ -1922,4 +1922,51 @@ test('an old group at the top suppresses the divider and new groups keep their m
     eventStory('000000000003', '新乙', 12)]));
   assert.equal(divider(h), null);
   assert.equal(h.container.querySelectorAll('.nw-list .nw-row .nw-new').length, 2);
+});
+
+const localStamp = (day, hour, minute=0) => new Date(2026,8,day,hour,minute).toISOString();
+test('event time range uses local dates, guessed endpoints and date-only labels', t => {
+  t.mock.timers.enable({apis:['Date'], now:new Date(2026,8,25,23)});
+  const h = setup(t), id='111111111111';
+  const cases = [
+    [localStamp(25,8), localStamp(25,20,20), false, false, '08:00–20:20'],
+    [localStamp(24,8), localStamp(24,20), false, false, '9/24 08:00–20:00'],
+    [localStamp(24,23), localStamp(25,1), false, false, '9/24 23:00–01:00'],
+    [localStamp(23,23), localStamp(24,1), false, false, '9/23 23:00–9/24 01:00'],
+    [localStamp(25,8), localStamp(25,20), true, true, '約08:00–約20:00'],
+    [localStamp(25,0), localStamp(25,20), false, false, '今天–20:00'],
+    [localStamp(24,0), localStamp(25,0), false, true, '9/24–約今天'],
+    [localStamp(25,8), localStamp(25,8), false, false, '08:00'],
+  ];
+  for (const [start,end,guessStart,guessEnd,expected] of cases) {
+    const first=eventStory(id,'代表',8,{published:start,time_guessed:guessStart});
+    const last=eventStory(id,'子報導',9,{published:end,time_guessed:guessEnd});
+    h.message(listing([last,first]));
+    assert.equal(mainRows(h)[0].querySelector('.nw-meta > .nw-time').textContent, expected);
+    if (guessStart || guessEnd) assert.match(mainRows(h)[0].querySelector('.nw-time').title, /收錄時間/);
+  }
+  h.message(listing([eventStory(id,'單則',8,{published:localStamp(25,8)})]));
+  assert.equal(mainRows(h)[0].querySelector('.nw-time').textContent,'08:00');
+  h.message(listing([eventStory(id,'先',8,{published:localStamp(25,8)}),
+    eventStory(id,'後',9,{published:localStamp(25,9)})]));
+  h.container.querySelector('.nw-expand').click();
+  assert.equal(h.container.querySelector('.nw-report .nw-time').textContent,'09:00');
+});
+
+test('per-report tone appears only in topic filter and validates ids without inheriting child tone', t => {
+  const h=setup(t), topic=topicRecord(), id='111111111111';
+  const tones=['negative','positive','mixed','neutral',{},'__proto__','<img>',null];
+  const reports=tones.map((tone,i)=>eventStory(id,`報導${i}`,8+i,{topic:topic.id,tone}));
+  h.message(topicListing(reports));
+  assert.equal(h.container.querySelector('.nw-tone-tag'),null);
+  focusTopicButtons(h)[0].click();
+  assert.equal(mainRows(h)[0].querySelector('.nw-meta > .nw-tone-tag').textContent,'負面');
+  h.container.querySelector('.nw-expand').click();
+  assert.deepEqual([...h.container.querySelectorAll('.nw-report .nw-tone-tag')].map(n=>n.textContent),['正面','正反','中性']);
+  assert.equal(h.container.querySelector('img'),null);
+  h.message(topicListing(reports.map((item,i)=>i===0?{...item,tone:null}:item)));
+  assert.equal(mainRows(h)[0].querySelector('.nw-meta > .nw-tone-tag'),null);
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),'true');
+  focusTopicButtons(h)[0].click();
+  assert.equal(h.container.querySelector('.nw-tone-tag'),null);
 });
