@@ -1225,7 +1225,7 @@ test('new markers use frozen mount baseline, include focus and grouped reports, 
   assert.equal(h.container.querySelector('.nw-new'), null);
   assert.ok(!h.container.querySelector('[role=status]').textContent.includes('則新'));
   h.handle.unmount();
-  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2026-09-25T00:00:00.000Z'); // Whole list, not filtered scope.
+  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2099-01-01T00:00:00.000Z'); // Persistence respects the newer stored value; display still uses frozen L.
 });
 
 test('malformed stored JSON dates and nonstrings are treated as no baseline', t => {
@@ -1746,4 +1746,84 @@ test('history falls back to current time for missing or invalid at and stays fix
   t.mock.timers.tick(7 * 3600000);
   themeButton(h, 'memory').click();
   assert.equal(h.container.querySelector('.nw-history').textContent, before);
+});
+
+for (const kind of ['topic', 'event']) {
+  test(`focus ${kind} title link survives identical replacement`, t => {
+    const h = setup(t), reports = focusReports('111111111111', 3, 10, {topic:topicRecord().id});
+    const body = kind === 'topic' ? topicListing(reports, [topicRecord({title:reports[0].title})]) : listing(reports);
+    h.message(body);
+    const before = h.container.querySelector('.nw-focus-row a');
+    before.focus();
+    const calls = [], original = h.window.HTMLElement.prototype.focus;
+    t.mock.method(h.window.HTMLElement.prototype, 'focus', function(options) {
+      calls.push(options); return original.call(this, options);
+    });
+    h.message(body);
+    const after = h.container.querySelector('.nw-focus-row a');
+    assert.notEqual(after, before);
+    assert.equal(h.window.document.activeElement, after);
+    assert.deepEqual(calls, [{preventScroll:true}]);
+  });
+}
+
+test('merged focused report follows unique href and opens its new group with synchronized aria', t => {
+  const h = setup(t);
+  const a = eventStory('111111111111', '較早', 8, {link:'https://example.com/a'});
+  const b = eventStory('222222222222', '正在讀', 9, {link:'https://example.com/b'});
+  h.message(listing([a,b]));
+  h.container.querySelector('a[href="https://example.com/b"]').focus();
+  const merged = listing([a, {...b,event:a.event}]);
+  h.message(merged);
+  const target = h.container.querySelector('a[href="https://example.com/b"]');
+  assert.equal(h.window.document.activeElement, target);
+  assert.equal(target.closest('.nw-reports').hidden, false);
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'), 'true');
+  h.message(merged);
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'), 'true');
+  assert.equal(h.window.document.activeElement.href, b.link);
+  const calls = [];
+  t.mock.method(h.window.HTMLElement.prototype, 'focus', function() { calls.push(this); });
+  h.message(listing([a]));
+  assert.equal(calls.length, 0); // Removed report must not send focus to its former representative.
+});
+
+test('focus href fallback refuses ambiguous links after event identity changes', t => {
+  const h = setup(t), link = 'https://example.com/shared';
+  h.message(listing([eventStory('111111111111', '原報導', 8, {link})]));
+  h.container.querySelector('.nw-list a').focus();
+  const calls = [];
+  t.mock.method(h.window.HTMLElement.prototype, 'focus', function() { calls.push(this); });
+  h.message(listing([eventStory('222222222222', '甲', 8, {link}), eventStory('333333333333', '乙', 9, {link})]));
+  assert.equal(calls.length, 0);
+});
+
+test('stale instance unmount cannot overwrite newer lastSeen saved by another instance', t => {
+  const h = setup(t, withSeen('2026-09-24T07:00:00Z'));
+  const container = h.window.document.createElement('div');
+  h.window.document.body.append(container);
+  let message;
+  const second = mount({container, channel:{onMessage(fn) { message = fn; }, send() {}}, onUp() {}, report() {}});
+  h.message(listing([article({published:'2026-09-24T12:00:00Z'})]));
+  message(listing([article({published:'2026-09-24T08:00:00Z'})]));
+  h.handle.unmount();
+  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2026-09-24T12:00:00.000Z');
+  second.unmount();
+  assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2026-09-24T12:00:00.000Z');
+});
+
+test('lastSeen reread ignores invalid values and read errors during persistence', t => {
+  for (const stored of ['{bad', '{}', '"not a date"']) {
+    const h = setup(t, withSeen('2026-09-24T07:00:00Z'));
+    h.message(listing([article({published:'2026-09-24T08:00:00Z'})]));
+    h.window.localStorage.setItem(seenKey, stored);
+    h.window.dispatchEvent(new h.window.Event('pagehide'));
+    assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2026-09-24T08:00:00.000Z');
+    h.handle.unmount();
+  }
+  const h = setup(t, withSeen('2026-09-24T07:00:00Z'));
+  h.message(listing([article({published:'2026-09-24T08:00:00Z'})]));
+  Object.defineProperty(h.window, 'localStorage', {configurable:true, get() { throw new Error('blocked'); }});
+  assert.doesNotThrow(() => h.handle.unmount());
+  assert.equal(h.container.childElementCount, 0);
 });

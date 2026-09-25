@@ -227,8 +227,11 @@ export default function mount(ctx) {
   const lastSeen = Number.isFinite(parsedLastSeen) ? parsedLastSeen : null;
   let latestPublished = null;
   function persistLastSeen() {
+    const stored = loadState("lastSeen");
+    const current = typeof stored === "string" ? Date.parse(stored) : NaN;
     // A feed's future timestamp must not hide everything as "not new" later.
-    const latest = Math.max(lastSeen ?? -Infinity, Math.min(latestPublished ?? -Infinity, Date.now()));
+    const latest = Math.max(Number.isFinite(current) ? current : -Infinity,
+      lastSeen ?? -Infinity, Math.min(latestPublished ?? -Infinity, Date.now()));
     if (Number.isFinite(latest)) saveState("lastSeen", new Date(latest).toISOString());
   }
   const make = (tag, className, text = "") => {
@@ -463,6 +466,7 @@ export default function mount(ctx) {
         const members = items.filter(item => item && item.topic === topic.id);
         const representative = members.find(item => item.title === topic.title);
         const row = make("div", "nw-focus-row");
+        row.dataset.topicId = topic.id;
         const button = make("button", "nw-focus-count");
         button.type = "button";
         button.dataset.topicId = topic.id;
@@ -492,6 +496,7 @@ export default function mount(ctx) {
     focusList.replaceChildren();
     for (const group of ranked) {
       const row = make("div", "nw-focus-row");
+      row.dataset.event = group.id;
       const button = make("button", "nw-focus-count");
       button.type = "button";
       button.dataset.event = group.id;
@@ -719,6 +724,11 @@ export default function mount(ctx) {
     if (node.matches(".nw-list a")) return {
       selector: ".nw-list a", href: node.href, event: node.closest(".nw-row")?.dataset.event || "",
     };
+    if (node.matches(".nw-focus-row a")) {
+      const row = node.closest(".nw-focus-row");
+      return {selector: ".nw-focus-row a", href: node.href,
+        event: row.dataset.event || "", topic: row.dataset.topicId || ""};
+    }
     for (const [selector, attribute] of [[".nw-list .nw-expand", "event"],
       [".nw-focus-count[data-event]", "event"], [".nw-focus-count[data-topic-id]", "topicId"],
       [".nw-theme[data-topic]", "topic"]]) {
@@ -728,9 +738,23 @@ export default function mount(ctx) {
   }
   function restoreFocus(identity) {
     if (!identity) return;
-    const target = [...root.querySelectorAll(identity.selector)].find(node => identity.href !== undefined
-      ? node.href === identity.href && (node.closest(".nw-row")?.dataset.event || "") === identity.event
-      : node.dataset[identity.attribute] === identity.value);
+    let target = [...root.querySelectorAll(identity.selector)].find(node => {
+      if (identity.href === undefined) return node.dataset[identity.attribute] === identity.value;
+      const row = node.closest(".nw-row, .nw-focus-row");
+      return node.href === identity.href && (row?.dataset.event || "") === identity.event
+        && (identity.topic === undefined || (row?.dataset.topicId || "") === identity.topic);
+    });
+    if (!target && identity.href !== undefined) {
+      const matches = [...list.querySelectorAll("a")].filter(node => node.href === identity.href);
+      if (matches.length === 1) target = matches[0];
+    }
+    const reports = target?.closest(".nw-reports");
+    if (reports?.hidden) {
+      const row = reports.closest(".nw-row");
+      expanded.add(row.dataset.event);
+      reports.hidden = false;
+      row.querySelector(".nw-expand").setAttribute("aria-expanded", "true");
+    }
     if (target) target.focus({preventScroll: true});
   }
   function drawItems() {
