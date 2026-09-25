@@ -18,11 +18,13 @@ if __package__:
     from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from .events import candidate_pairs, group_events, _fits as pairs_fit
+    from .topics import plan as topic_plan, TopicPair, fits as topics_fit
 else:
     from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from classify import CRITERIA, MAX_ITEMS, MAX_CHARS
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from events import candidate_pairs, group_events, _fits as pairs_fit
+    from topics import plan as topic_plan, TopicPair, fits as topics_fit
 
 
 @dataclass
@@ -57,6 +59,13 @@ class EventResult:
 
 
 @dataclass
+class TopicResult:
+    matches: dict = field(default_factory=dict)
+    finished: tuple = ()
+    round_id: int = 0
+
+
+@dataclass
 class AnalysisResult:
     analyses: dict = field(default_factory=dict)
     finished: tuple = ()
@@ -75,7 +84,7 @@ class ClassifyResult:
 class Scheduler:
     def __init__(self, feeds, fetcher, outbox, seq, *, interval=600,
                  source_timeout=30, round_timeout=60, clock=time.monotonic,
-                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None):
+                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None, topic_matcher=None):
         if not 1 <= len(feeds) <= 32 or min(interval, source_timeout, round_timeout) <= 0:
             raise ValueError("invalid scheduler limits")
         self.feeds, self.fetcher, self.outbox, self.seq = deepcopy(feeds), fetcher, outbox, seq
@@ -87,6 +96,11 @@ class Scheduler:
         self.classifier = classifier
         self.analyzer = analyzer
         self.matcher = matcher
+        self.topic_matcher = topic_matcher
+        self.topic_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
+        self.topic_cache = OrderedDict()
+        self.topic_in_flight = set()
+        self.model_work = None
         self.event_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST * 2)
         self.event_cache = OrderedDict()
         self.event_in_flight = set()
@@ -193,7 +207,7 @@ class Scheduler:
                 self.cv.notify_all()
 
     def _classify_enabled(self):
-        clients = [client for client in (self.classifier, self.analyzer, self.matcher) if client is not None]
+        clients = [client for client in (self.classifier, self.analyzer, self.matcher, self.topic_matcher) if client is not None]
         if any(not client.enabled for client in clients):
             for client in clients:
                 client.enabled = False
@@ -206,6 +220,7 @@ class Scheduler:
             if self.stopping or not self._classify_enabled():
                 return
             work = ModelRound(self.round_id)
+            self.model_work = work
             for item in packet["body"]["items"]:
                 key = dedup_key(item["link"])
                 self._enqueue_analysis(work, (key, item["title"], item["summary"]))
@@ -225,6 +240,7 @@ class Scheduler:
                     except queue.Full:
                         continue
                     self.event_in_flight.add(pair.key)
+            self._enqueue_topics(packet)
             self.cv.notify_all()
 
     def _submit_classification(self, result):
@@ -273,20 +289,22 @@ class Scheduler:
         while True:
             with self.cv:
                 while not self.stopping and (
-                    (self.classify_jobs.empty() and self.analysis_jobs.empty() and self.event_jobs.empty())
+                    (self.classify_jobs.empty() and self.analysis_jobs.empty() and self.event_jobs.empty() and self.topic_jobs.empty())
                     or any(isinstance(result, ClassifyResult) for result in self.results)
                 ):
                     self.cv.wait()
                 if self.stopping:
                     return
                 jobs = (self.classify_jobs if not self.classify_jobs.empty() else
-                        self.analysis_jobs if not self.analysis_jobs.empty() else self.event_jobs)
+                        self.analysis_jobs if not self.analysis_jobs.empty() else
+                        self.event_jobs if not self.event_jobs.empty() else self.topic_jobs)
+                topic_matching = jobs is self.topic_jobs
                 matching = jobs is self.event_jobs
                 analyzing = jobs is self.analysis_jobs
                 work, item = jobs.get_nowait()
                 kind = analysis_kind(self.classify_cache.get(item[0], "")) if analyzing else None
                 batch = [item]
-                chars = 0 if matching else len(item[1]) + len(item[2])
+                chars = 0 if matching or topic_matching else len(item[1]) + len(item[2])
                 if analyzing:
                     # Leave other kinds in their original positions/order.
                     # cv owns admission; the queue mutex protects its storage.
@@ -306,12 +324,13 @@ class Scheduler:
                             chars += size
                             del jobs.queue[index]
                         jobs.not_full.notify_all()
-                while not analyzing and not jobs.empty() and (matching or len(batch) < MAX_ITEMS):
+                while not analyzing and not jobs.empty() and (matching or topic_matching or len(batch) < MAX_ITEMS):
                     with jobs.mutex:
                         next_work, next_item = jobs.queue[0]
-                    size = 0 if matching else len(next_item[1]) + len(next_item[2])
+                    size = 0 if matching or topic_matching else len(next_item[1]) + len(next_item[2])
                     if (next_work is not work
                             or (matching and not pairs_fit(batch + [next_item]))
+                            or (topic_matching and not topics_fit(batch + [next_item]))
                             or chars + size > MAX_CHARS):
                         break
                     batch.append(jobs.get_nowait()[1])
@@ -322,15 +341,17 @@ class Scheduler:
             result = None
             if allowed:
                 try:
-                    result = (self.matcher.match(batch) if matching else
+                    result = (self.topic_matcher.match(batch) if topic_matching else self.matcher.match(batch) if matching else
                               self.analyzer.analyze(batch, kind=kind) if analyzing else self.classifier.classify(batch))
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
             with self.cv:
                 if result is None:
                     work.failed = True
-            keys = tuple(pair.key for pair in batch) if matching else tuple(key for key, _, _ in batch)
-            if matching:
+            keys = tuple(pair.key for pair in batch) if matching or topic_matching else tuple(key for key, _, _ in batch)
+            if topic_matching:
+                candidate = TopicResult(result or {}, keys, work.round_id)
+            elif matching:
                 candidate = EventResult(result or {}, keys, work.round_id)
             elif analyzing:
                 candidate = AnalysisResult(result or {}, keys, work.round_id)
@@ -375,7 +396,46 @@ class Scheduler:
             item.update(groups[dedup_key(item["link"])])
         body["events"] = {"pending": sum(not pair.automatic and pair.key not in self.event_cache for pair in pairs)
                           if self._classify_enabled() and self.matcher is not None else 0}
+        return self._decorate_topics(packet, groups)
+
+    def _topic_plan(self, packet, groups=None):
+        items = packet['body']['items']
+        if groups is None:
+            groups = {dedup_key(i['link']): {'event': i['event']} for i in items}
+        return topic_plan(items, groups, self.topic_cache, [f['name'] for f in self.feeds])
+
+    def _decorate_topics(self, packet, groups):
+        body = packet['body']
+        topics, pending = self._topic_plan(packet, groups)
+        membership = {key: topic['id'] for topic in topics for key in topic['keys']}
+        for item in body['items']:
+            item.pop('topic', None)
+            key = dedup_key(item['link'])
+            if key in membership:
+                item['topic'] = membership[key]
+        body['topics'] = {'pending': len(pending) if self._classify_enabled()
+                          and self.topic_matcher is not None and body['events']['pending'] == 0 else 0,
+                          'list': [{k: v for k, v in topic.items() if k != 'keys'} for topic in topics]}
         return packet
+
+    def _enqueue_topics(self, packet):
+        # Coordinator only. Reuse this list's admission budget across snowball steps.
+        work = self.model_work
+        if (self.topic_matcher is None or work is None or self.stopping or work.failed
+                or not self._classify_enabled() or packet['body']['events']['pending'] != 0
+                or (work.deadline is not None and self.model_clock() >= work.deadline)):
+            return
+        _, pending = self._topic_plan(packet)
+        records = {dedup_key(i['link']): (dedup_key(i['link']), i['title'], i['summary']) for i in packet['body']['items']}
+        for seed, key in pending:
+            if (seed, key) in self.topic_in_flight:
+                continue
+            try:
+                self.topic_jobs.put_nowait((work, TopicPair(records[seed], records[key])))
+            except queue.Full:
+                break
+            self.topic_in_flight.add((seed, key))
+        self.cv.notify_all()
 
     def _model_resend(self, accepted):
         if not self.active and self.last_list is not None:
@@ -389,12 +449,32 @@ class Scheduler:
         # Called only under cv by the coordinator. A worker produces exactly
         # one candidate per job; the generation check is the ownership guard.
         self.processed_results += 1
+        if isinstance(candidate, TopicResult):
+            self.topic_in_flight.difference_update(candidate.finished)
+            self.topic_in_flight.difference_update(candidate.matches)
+            for key, same in candidate.matches.items():
+                if isinstance(key, tuple) and len(key) == 2 and type(same) is bool:
+                    self.topic_cache[key] = same
+                    if len(self.topic_cache) > 20000:
+                        self.topic_cache.popitem(last=False)
+            if not self.active and self.last_list is not None:
+                packet = self._decorate(self.last_list)
+                self._enqueue_topics(packet)
+                old, new = self.last_list['body'], packet['body']
+                changed = (old.get('topics', {}).get('list') != new['topics']['list']
+                           or [i.get('topic') for i in old['items']] != [i.get('topic') for i in new['items']])
+                cleared = old.get('topics', {}).get('pending', 0) > 0 and new['topics']['pending'] == 0
+                if changed or cleared:
+                    return packet
+                return self._model_resend(set())
+            return None
         if isinstance(candidate, EventResult):
             self.event_in_flight.difference_update(candidate.finished)
             self.event_in_flight.difference_update(candidate.matches)
             self._cache_events(candidate.matches)
             if not self.active and self.last_list is not None:
                 packet = self._decorate(self.last_list)
+                self._enqueue_topics(packet)
                 old = [(i["event"], i["event_size"]) for i in self.last_list["body"]["items"]]
                 new = [(i["event"], i["event_size"]) for i in packet["body"]["items"]]
                 pending_cleared = (self.last_list["body"]["events"]["pending"] > 0

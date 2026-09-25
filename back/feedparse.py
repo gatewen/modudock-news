@@ -33,6 +33,11 @@ MAX_ANALYSIS = max((MAX_ANALYSIS, MAX_WORLD_ANALYSIS), key=lambda value: len(jso
 ANALYSIS_RESERVE = len(json.dumps(MAX_ANALYSIS)) - len(json.dumps(None))
 MAX_ITEMS_LIST = 300
 MAX_PACKET = 900 * 1024
+# Titles can contain 300 non-BMP code points (12 ASCII bytes each on wire).
+TOPICS_RESERVE = len(json.dumps({'pending': MAX_ITEMS_LIST, 'list': [
+    {'id': 'f' * 12, 'title': '\U0010ffff' * 300, 'sources': MAX_ITEMS_LIST, 'count': MAX_ITEMS_LIST}
+    for _ in range(5)]}, ensure_ascii=True))
+TOPIC_FIELD_RESERVE = len(', "topic": "' + 'f' * 12 + '"')
 ATOM = "http://www.w3.org/2005/Atom"
 
 
@@ -283,6 +288,9 @@ def fit_packet(packet):
                         if "analysis" in item and item["analysis"] is None
                         and item.get("category") in ANALYSIS_CATEGORIES | {""})
         reserved += sum(3 - len(str(item["event_size"])) for item in items if "event_size" in item)
+        if 'topics' in body:
+            reserved += max(0, TOPICS_RESERVE - len(json.dumps(body['topics'], ensure_ascii=True)))
+            reserved += sum(TOPIC_FIELD_RESERVE for item in items if 'topic' not in item)
         if len(packet_bytes(result)) + reserved <= MAX_PACKET:
             return result
         if not items:

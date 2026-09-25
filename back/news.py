@@ -13,12 +13,14 @@ from xml.parsers import expat
 
 if __package__:
     from .events import EventMatcher
+    from .topics import TopicMatcher
     from .analyze import Analyzer
     from .classify import Classifier
     from .fetch import Fetcher
     from .scheduler import Scheduler
 else:
     from events import EventMatcher
+    from topics import TopicMatcher
     from analyze import Analyzer
     from classify import Classifier
     from fetch import Fetcher
@@ -218,6 +220,7 @@ def main(argv=None, scheduler_factory=Scheduler):
     classifier = Classifier(**classify_options)
     analyzer = Analyzer(shared=classifier)
     matcher = EventMatcher(shared=classifier)
+    topic_matcher = TopicMatcher(shared=classifier)
     feeds, error = preflight(feeds_path)
     hooks.mark("preflight-complete")
     outbox = Outbox(sys.stdout.buffer, hooks)
@@ -263,7 +266,7 @@ def main(argv=None, scheduler_factory=Scheduler):
                 options = {}
                 if hooks.directory:
                     options = json.loads(os.environ.get("NEWS_TEST_SCHEDULER", "{}"))
-                scheduler = scheduler_factory(feeds, fetcher, outbox, seq, classifier=classifier, analyzer=analyzer, matcher=matcher, **options)
+                scheduler = scheduler_factory(feeds, fetcher, outbox, seq, classifier=classifier, analyzer=analyzer, matcher=matcher, topic_matcher=topic_matcher, **options)
                 scheduler.start()
             hooks.on_up(outbox, seq)
         elif kind == "msg" and running:
