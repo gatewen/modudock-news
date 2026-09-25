@@ -263,7 +263,7 @@ test('analysis panel appears only for finance or tech between toolbar and list',
     assert.equal(panel(h).hidden, !['finance', 'tech'].includes(category));
   }
   assert.equal(panel(h).nextElementSibling.className, 'nw-filter');
-  assert.equal(panel(h).nextElementSibling.nextElementSibling, h.container.querySelector('ul'));
+  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling, h.container.querySelector('ul'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
   assert.equal(panel(h).children.length, 6);
@@ -1102,7 +1102,7 @@ test('focus requires three distinct named sources, ranks by count latest time an
   assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['000000000001', '000000000002',
     '000000000003', '000000000004', '000000000005']);
   assert.equal(described(h, focusButtons(h)[0]), '展開同事件的其他報導');
-  assert.equal(focusButtons(h)[0].querySelector('.nw-focus-long').textContent, '4 家媒體');
+  assert.equal(focusButtons(h)[0].querySelector('.nw-focus-long').textContent, '看同事件・4 家');
   assert.equal(focusButtons(h)[0].querySelector('.nw-focus-short').textContent, '4 家');
   assert.equal(focusArea(h).querySelector('a').textContent, '000000000001-0');
   assert.equal(h.window.document.getElementById(focusArea(h).getAttribute('aria-labelledby')).textContent, '焦點');
@@ -1199,7 +1199,7 @@ test('first visit has no new markers and only saves latest valid publication on 
   h.message(listing([article({published:'2026-09-25T00:00:00Z'}), article({published:'bad'}),
     article({published:'2026-09-24T00:00:00Z'})]));
   assert.equal(h.container.querySelector('.nw-new'), null);
-  assert.ok(!h.container.querySelector('[role=status]').textContent.includes('則新'));
+  assert.ok(!h.container.querySelector('[role=status]').textContent.includes('新增'));
   assert.equal(h.window.localStorage.getItem(seenKey), null);
   h.handle.unmount();
   assert.equal(h.window.localStorage.getItem(seenKey), JSON.stringify('2026-09-25T00:00:00.000Z'));
@@ -1217,15 +1217,15 @@ test('new markers use frozen mount baseline, include focus and grouped reports, 
   assert.equal(focusArea(h).querySelector('.nw-title .nw-new').textContent, '新');
   assert.equal(mainRows(h)[0].querySelectorAll('.nw-report-title .nw-new').length, 0);
   assert.equal(mainRows(h)[1].querySelector('.nw-new'), null); // Equal is not new.
-  assert.match(h.container.querySelector('[role=status]').textContent, /更新 · 2 則新/);
+  assert.match(h.container.querySelector('[role=status]').textContent, /更新 · 新增 2 個事件/);
   h.window.localStorage.setItem(seenKey, JSON.stringify('2099-01-01T00:00:00Z'));
   h.message(body); // Same-at replacement must not re-read or advance L.
-  assert.match(h.container.querySelector('[role=status]').textContent, /2 則新/);
+  assert.match(h.container.querySelector('[role=status]').textContent, /新增 2 個事件/);
   choose(h, h.categories, 'finance');
-  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新/);
+  assert.match(h.container.querySelector('[role=status]').textContent, /新增 1 個事件/);
   choose(h, h.select, '媒體0');
   assert.equal(h.container.querySelector('.nw-new'), null);
-  assert.ok(!h.container.querySelector('[role=status]').textContent.includes('則新'));
+  assert.ok(!h.container.querySelector('[role=status]').textContent.includes('新增'));
   h.handle.unmount();
   assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2099-01-01T00:00:00.000Z'); // Persistence respects the newer stored value; display still uses frozen L.
 });
@@ -1235,7 +1235,7 @@ test('malformed stored JSON dates and nonstrings are treated as no baseline', t 
     const h = setup(t, window => window.localStorage.setItem(seenKey, raw));
     h.message(listing([article({published:'2026-09-25T00:00:00Z'})]));
     assert.equal(h.container.querySelector('.nw-new'), null, raw);
-    assert.ok(!h.container.querySelector('[role=status]').textContent.includes('則新'), raw);
+    assert.ok(!h.container.querySelector('[role=status]').textContent.includes('新增'), raw);
     h.handle.unmount();
   }
 });
@@ -1265,7 +1265,7 @@ test('pagehide and unmount save max of baseline and current list candidate, with
   assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), seenAt);
   h.window.dispatchEvent(new h.window.Event('pagehide'));
   assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2026-09-25T00:00:00.000Z');
-  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新/);
+  assert.match(h.container.querySelector('[role=status]').textContent, /新增 1 個事件/);
   assert.equal(h.container.querySelector('.nw-new'), null);
   h.handle.unmount();
   h.window.localStorage.setItem(seenKey, JSON.stringify('sentinel'));
@@ -1301,7 +1301,7 @@ test('topic records require valid fields, take five valid unique entries, and fa
   h.message(topicListing(reports, [...invalid, good[0], good[0], ...good.slice(1)]));
   assert.deepEqual(focusTopicButtons(h).map(b => b.dataset.topicId), good.slice(0,5).map(t => t.id));
   assert.equal(focusArea(h).querySelector('button[data-event]'), null);
-  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent, '3 家媒體・4 則');
+  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent, '看話題・3 家');
   assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-short').textContent, '3 家');
   h.message({...listing(reports), topics:{list:{}}});
   assert.equal(focusButtons(h)[0].dataset.event, '111111111111');
@@ -1570,7 +1570,7 @@ test('watch toolbar button counts events without duplicating the status', t => {
   saveWatch(h, 'AI');
   h.message(listing([eventStory('111111111111', 'AI', 11), eventStory('111111111111', 'ai', 12)]));
   assert.equal(watchControls(h).only.textContent, '只看追蹤 1');
-  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新/);
+  assert.match(h.container.querySelector('[role=status]').textContent, /新增 1 個事件/);
 });
 
 test('watch filter combines with source category theme and topic and survives replacement', t => {
@@ -1583,14 +1583,15 @@ test('watch filter combines with source category theme and topic and survives re
     article({title:'AI 國際', category:'world'}), financeArticle({title:'普通'}),
   ]);
   h.message(body);
-  watchControls(h).only.click();
   choose(h, h.categories, 'finance');
   choose(h, h.select, '甲');
   themeButton(h, 'memory').click();
+  watchControls(h).only.click();
   assert.deepEqual(mainTitles(h), ['AI 記憶體']);
   h.message(body);
   assert.deepEqual(mainTitles(h), ['AI 記憶體']);
   assert.equal(watchControls(h).only.getAttribute('aria-pressed'), 'true');
+  watchControls(h).only.click();
   focusTopicButtons(h)[0].click();
   assert.deepEqual(mainTitles(h), ['AI 記憶體']);
   h.message(body);
@@ -1666,7 +1667,7 @@ const hhmm = stamp => {
 
 for (const category of ['finance', 'tech', 'world']) {
   test(`${category} history collapses with three insufficient bins and restores at two`, t => {
-    const h = setup(t);
+    const h = setup(t, w=>w.localStorage.setItem("modudock.module.news.history", "true"));
     const report = hour => timedArticle(hour, {category,
       analysis: category === 'world' ? worldAnalysis() : analysis()});
     const enough = Array.from({length:5}, () => report(-22));
@@ -1679,9 +1680,9 @@ for (const category of ['finance', 'tech', 'world']) {
     // A same-at replacement must remove old rows, not merely append a hint.
     h.message(historyList([...enough, ...nearly, {...report(-16), analysis:null}]));
     const history = h.container.querySelector('.nw-history');
-    assert.equal(history.querySelector('.nw-heading').textContent, '近 24 小時');
+    assert.equal(history.querySelector('.nw-heading').textContent, '近 24 小時變化');
     assert.equal(history.querySelector('.nw-hint').textContent, '樣本不足，無法比較 24 小時內的變化');
-    assert.equal(history.children.length, 2);
+    assert.equal(history.querySelector(".nw-history-content").children.length, 1);
     assert.equal(historyRows(h).length, 0);
     assert.equal(history.querySelectorAll('.nw-history-bar').length, 0);
     h.message(body);
@@ -1694,7 +1695,7 @@ for (const category of ['finance', 'tech', 'world']) {
 }
 
 test('history bins are left inclusive, exclude next boundary and include final endpoint', t => {
-  const h = setup(t);
+  const h = setup(t, w=>w.localStorage.setItem("modudock.module.news.history", "true"));
   const items = [-24, -18, -12, -6].flatMap((hour, i) => Array.from({length:5}, () =>
     timedArticle(hour, {analysis:analysis({market:i % 2 ? 'negative' : 'positive'})})));
   items.push(timedArticle(0), timedArticle(-24 - 1 / 3600000), timedArticle(1 / 3600000));
@@ -1723,7 +1724,7 @@ test('history bins are left inclusive, exclude next boundary and include final e
 });
 
 test('history requires five analyzed events and reports dash for no directional denominator', t => {
-  const h = setup(t);
+  const h = setup(t, w=>w.localStorage.setItem("modudock.module.news.history", "true"));
   h.message(historyList([
     ...Array.from({length:4}, () => timedArticle(-22)),
     timedArticle(-22, {analysis:null}), timedArticle(-22, {analysis:{market:'positive'}}),
@@ -1742,7 +1743,7 @@ test('history requires five analyzed events and reports dash for no directional 
 });
 
 test('history deduplicates using representative time and first valid analysis, respecting panel scope', t => {
-  const h = setup(t);
+  const h = setup(t, w=>w.localStorage.setItem("modudock.module.news.history", "true"));
   const body = historyList([
     ...Array.from({length:4}, () => timedArticle(-22)),
     timedArticle(-22, {event:'111111111111', event_size:3, analysis:null}),
@@ -1764,7 +1765,7 @@ test('history deduplicates using representative time and first valid analysis, r
 });
 
 test('world history uses escalation denominator, world colors and unrelated idle events', t => {
-  const h = setup(t);
+  const h = setup(t, w=>w.localStorage.setItem("modudock.module.news.history", "true"));
   h.message(historyList([
     ...Array.from({length:5}, () => timedArticle(-22, {category:'world', analysis:worldAnalysis()})),
     ...['escalation','escalation','stalemate','deescalation','not_conflict','other'].map(trend =>
@@ -1781,7 +1782,7 @@ test('world history uses escalation denominator, world colors and unrelated idle
 
 test('history falls back to current time for missing or invalid at and stays fixed during filtering', t => {
   t.mock.timers.enable({apis:['Date'], now:historyEnd});
-  const h = setup(t);
+  const h = setup(t, w=>w.localStorage.setItem("modudock.module.news.history", "true"));
   const items = [-22, -2].flatMap(hour => Array.from({length:5}, () => timedArticle(hour)));
   for (const at of [undefined, null, {}, 'bad']) {
     h.message({...listing(items), at});
@@ -1893,15 +1894,15 @@ test('seen divider precedes first old group, omits child markers and retains foc
   const line = divider(h), rows = mainRows(h);
   assert.equal(line.previousElementSibling, rows[0]);
   assert.equal(line.nextElementSibling, rows[1]);
-  assert.equal(line.textContent, '上次看到這裡');
+  assert.equal(line.textContent, '以下為上次離開前的新聞');
   assert.equal(line.getAttribute('role'), 'separator');
-  assert.equal(line.getAttribute('aria-label'), '以上是上次之後的新報導');
+  assert.equal(line.getAttribute('aria-label'), '以下是上次離開前的新聞');
   assert.equal(line.querySelector('a,button,[tabindex]'), null);
   assert.equal(line.hasAttribute('tabindex'), false);
   assert.equal(h.container.querySelector('.nw-list .nw-new'), null);
   assert.equal(focusArea(h).querySelectorAll('.nw-new').length, 1);
   assert.equal(mainRows(h).length, 2);
-  assert.match(h.container.querySelector('[role=status]').textContent, /1 則新/);
+  assert.match(h.container.querySelector('[role=status]').textContent, /新增 1 個事件/);
   const css = h.container.querySelector('style').textContent;
   assert.match(css, /\.nw \.nw-divider \{[^}]*padding: 14px 16px;[^}]*font-size: 12px;[^}]*color: var\(--nw-accent\)/);
   assert.match(css, /\.nw \.nw-divider::after \{[^}]*flex: 1;[^}]*border-top: 1px solid var\(--nw-accent\)/);
@@ -1916,7 +1917,7 @@ test('out-of-order new groups below divider keep a representative new marker', t
   assert.equal(mainRows(h)[0].querySelector('.nw-new'), null);
   assert.equal(mainRows(h)[2].querySelector('.nw-title .nw-new').textContent, '新');
   assert.equal(mainRows(h)[2].querySelector('.nw-report-title .nw-new'), null);
-  assert.match(h.container.querySelector('[role=status]').textContent, /2 則新/);
+  assert.match(h.container.querySelector('[role=status]').textContent, /新增 2 個事件/);
 });
 
 test('replacement moves seen divider and preserves link focus without treating separator as news', t => {
@@ -2108,7 +2109,7 @@ test('text buttons use visible names and external descriptions survive redraws a
   scan();
   const body=topicListing(reports,[topic]);
   h.message(body);
-  assert.equal(described(h,focusTopicButtons(h)[0]),`篩選話題：${topic.title}`);
+  assert.equal(described(h,focusTopicButtons(h)[0]),`進入話題：${topic.title}，${topic.count} 則報導`);
   assert.equal(h.container.querySelector('img'),null);
   choose(h,h.categories,'finance');
   assert.equal(described(h,themeButton(h,'memory')),'利多 1、利空 1');
@@ -2126,7 +2127,7 @@ test('text buttons use visible names and external descriptions survive redraws a
   scan();
   choose(h,h.categories,'');
   focusTopicButtons(h)[0].click();
-  assert.equal(h.container.querySelector('.nw-filter button').textContent,'返回');
+  assert.equal(h.container.querySelector('.nw-filter button').textContent,'返回原檢視');
   scan();
   const finalIds=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
   h.handle.unmount();
@@ -2261,25 +2262,26 @@ for (const exit of ['return','same-topic','disappear']) {
     Object.defineProperties(outer,{scrollHeight:{value:1000},clientHeight:{value:200}});
     h.window.document.body.append(outer); outer.append(h.container);
     outer.scrollTop=123;
-    h.message(body); saveWatch(h,'AI'); watchControls(h).only.click();
+    h.message(body); saveWatch(h,'AI');
     choose(h,h.categories,'finance'); choose(h,h.select,'甲'); themeButton(h,'memory').click();
     h.container.querySelector('.nw-list a').focus();
     focusTopicButtons(h)[0].click();
     assert.equal(h.categories.value,''); assert.equal(h.select.value,'');
-    watchControls(h).only.click(); // Temporary topic view changes must not replace saved settings.
+    watchControls(h).only.click();
+    watchControls(h).only.click(); // Restore the visible topic controls before switching.
     outer.scrollTop=456;
     focusTopicButtons(h)[1].click();
     h.message(body);
     if(exit==='return') {
       const button=h.container.querySelector('.nw-filter button');
-      assert.equal(button.textContent,'返回');
+      assert.equal(button.textContent,'返回原檢視');
       assert.equal(described(h,button),'回到進入話題前的篩選與位置');
       button.click();
     } else if(exit==='same-topic') focusTopicButtons(h)[1].click();
     else h.message({...body,topics:{list:[first]}});
     assert.equal(h.categories.value,'finance'); assert.equal(h.select.value,'甲');
     assert.equal(themeButton(h,'memory').getAttribute('aria-pressed'),'true');
-    assert.equal(watchControls(h).only.getAttribute('aria-pressed'),'true');
+    assert.equal(watchControls(h).only.getAttribute('aria-pressed'),'false');
     assert.equal(outer.scrollTop,123);
     assert.equal(h.window.document.activeElement.href,'https://example.com/original');
   });
@@ -2376,7 +2378,7 @@ test('topic focus follows source and category on the same report and retains who
   assert.deepEqual(ids(),[first.id,second.id]);
   choose(h,h.categories,'finance');
   assert.deepEqual(ids(),[first.id]);
-  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent,'4 家媒體・9 則');
+  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent,'看話題・4 家');
   choose(h,h.categories,'world');
   choose(h,h.select,'乙');
   assert.deepEqual(ids(),[first.id]); // Second has world and 乙, but not on the same report.
@@ -2971,4 +2973,73 @@ test('date-only event endpoints use each reports source evidence including child
   h.message(listing(dated.slice(0,2)));
   assert.equal(mainRows(h)[0].querySelector('.nw-time').textContent,'9/24 00:00–00:00');
   assert.equal(h.container.querySelector('.nw-report .nw-time').textContent,'00:00');
+});
+
+test('history disclosure defaults closed, shares saved state across categories and survives resends', t => {
+  const h=setup(t), body=listing([financeArticle(),worldArticle()]);
+  h.message(body); choose(h,h.categories,'finance');
+  const button=h.container.querySelector('.nw-history button');
+  const content=h.container.querySelector('.nw-history-content');
+  assert.equal(button.textContent,'近 24 小時變化');
+  assert.equal(button.getAttribute('aria-expanded'),'false');
+  assert.equal(content.hidden,true); assert.equal(content.childElementCount,0);
+  assert.equal(panel(h).querySelector('.nw-pending').hidden,true);
+  button.focus(); button.click();
+  assert.equal(h.window.document.activeElement,button);
+  assert.equal(button.getAttribute('aria-expanded'),'true');
+  assert.equal(content.hidden,false);
+  assert.match(content.textContent,/樣本不足/);
+  assert.equal(h.window.localStorage.getItem('modudock.module.news.history'),'true');
+  choose(h,h.categories,'world'); h.message(body);
+  assert.equal(button.getAttribute('aria-expanded'),'true');
+  const other=setup(t,w=>w.localStorage.setItem('modudock.module.news.history','true'));
+  other.message(body); choose(other,other.categories,'tech');
+  assert.equal(other.container.querySelector('.nw-history button').getAttribute('aria-expanded'),'true');
+  button.click();
+  assert.equal(content.childElementCount,0);
+  assert.equal(h.window.localStorage.getItem('modudock.module.news.history'),'false');
+  h.message(listing([financeArticle({analysis:null})])); choose(h,h.categories,'finance');
+  assert.equal(panel(h).querySelector('.nw-pending').hidden,false);
+  h.handle.unmount(); button.click();
+  assert.equal(h.window.localStorage.getItem('modudock.module.news.history'),'false');
+});
+
+test('history storage malformed values and read write exceptions never prevent disclosure', t => {
+  for(const raw of ['"true"','1','{}','broken',null]) {
+    const h=setup(t,w=>{if(raw!==null) w.localStorage.setItem('modudock.module.news.history',raw);});
+    h.message(listing([financeArticle()])); choose(h,h.categories,'finance');
+    assert.equal(h.container.querySelector('.nw-history button').getAttribute('aria-expanded'),'false');
+  }
+  const h=setup(t,w=>{
+    t.mock.method(w.localStorage,'getItem',()=>{throw new Error('denied');});
+    t.mock.method(w.localStorage,'setItem',()=>{throw new Error('full');});
+  });
+  h.message(listing([financeArticle()])); choose(h,h.categories,'finance');
+  const button=h.container.querySelector('.nw-history button');
+  assert.doesNotThrow(()=>button.click());
+  assert.equal(button.getAttribute('aria-expanded'),'true');
+  assert.doesNotThrow(()=>button.click());
+  assert.equal(button.getAttribute('aria-expanded'),'false');
+});
+
+test('watch-only hides focus and every analysis panel, restores them and safely shows keywords', t => {
+  const h=setup(t), topic=topicRecord();
+  const body=topicListing([financeArticle({title:'AI',topic:topic.id}),worldArticle({title:'AI',topic:topic.id}),
+    article({title:'AI',category:'politics',topic:topic.id,analysis:{kind:'politics',issue:'defense'}})]);
+  saveWatch(h,'AI,<img>'); h.message(body);
+  for(const category of ['finance','world','politics']) {
+    choose(h,h.categories,category);
+    assert.equal(h.container.querySelector('.nw-panel').hidden,false); assert.equal(focusArea(h).hidden,false);
+    watchControls(h).only.click();
+    h.message(body);
+    assert.equal(h.container.querySelector('.nw-panel').hidden,true); assert.equal(focusArea(h).hidden,true);
+    const hint=h.container.querySelector('.nw-watch-hint');
+    assert.equal(hint.hidden,false); assert.equal(hint.textContent,'只看追蹤：AI、<img>');
+    assert.equal(hint.nextElementSibling.className,'nw-list');
+    assert.equal(hint.querySelector('img'),null);
+    assert.equal(mainRows(h).length,1);
+    watchControls(h).only.click();
+    assert.equal(h.container.querySelector('.nw-panel').hidden,false); assert.equal(focusArea(h).hidden,false);
+    assert.equal(hint.hidden,true);
+  }
 });

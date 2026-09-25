@@ -86,6 +86,9 @@ export const css = `
 .nw .nw-dot { width: 6px; height: 6px; border-radius: 50%; align-self: center; flex: 0 0 auto; }
 .nw .nw-value { font-size: 20px; font-weight: 600; color: var(--nw-fg); }
 .nw .nw-history { margin-bottom: 18px; }
+/* Disclosure cue; decorative, the state is in aria-expanded. */
+.nw .nw-history-toggle::after { content: " ▸" / ""; color: var(--nw-muted); }
+.nw .nw-history-toggle[aria-expanded="true"]::after { content: " ▾" / ""; }
 .nw .nw-history-row { white-space: nowrap; display: grid; grid-template-columns: 11ch minmax(0, 1fr) 6em; align-items: center; gap: 10px; margin-top: 8px; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-history-bar { height: 6px; }
 .nw .nw-history-value { text-align: right; }
@@ -135,7 +138,7 @@ export const css = `
 .nw .nw-report-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .nw .nw-empty { padding: 32px 0; text-align: center; color: var(--nw-muted); }
 .nw .nw-empty button { display: block; margin: 12px auto 0; }
-.nw .nw-toolbar, .nw .nw-filter, .nw .nw-row { padding-inline: 16px; }
+.nw .nw-toolbar, .nw .nw-filter, .nw .nw-watch-hint, .nw .nw-row { padding-inline: 16px; }
 @container (min-width: 560px) {
   .nw .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

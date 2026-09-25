@@ -163,6 +163,13 @@ export default function mount(ctx) {
   const signalHeading = make("h3", "nw-heading", "股市訊號");
   market.append(signalHeading, marketBar, legend);
   const history = make("section", "nw-history");
+  let historyOpen = loadState("history") === true;
+  const historyToggle = make("button", "nw-heading nw-history-toggle", "近 24 小時變化");
+  historyToggle.type = "button";
+  const historyContent = make("div", "nw-history-content");
+  historyContent.id = `nw-history-${focusHeadingId}`;
+  historyToggle.setAttribute("aria-controls", historyContent.id);
+  history.append(historyToggle, historyContent);
   const macro = make("p", "nw-macro");
   const rankingSection = make("div", "");
   const rankingHeading = make("div", "nw-ranking-heading");
@@ -174,7 +181,9 @@ export default function mount(ctx) {
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(sample, market, history, macro, rankingSection, note);
   toolbar.append(refresh, sources, categories, watchToggle, watchOnly, status, watchSettings);
-  root.append(toolbar, focus, panel, themeFilter, list, empty);
+  const watchHint = make("p", "nw-hint nw-watch-hint");
+  watchHint.hidden = true;
+  root.append(toolbar, focus, panel, themeFilter, watchHint, list, empty);
   ctx.container.append(root);
 
   let up = false;
@@ -358,6 +367,7 @@ export default function mount(ctx) {
     button.setAttribute("aria-describedby", description.id);
   }
   function drawFocus(groups) {
+    if (onlyWatched) { focus.hidden = true; return; }
     if (topics.length) {
       focusList.replaceChildren();
       for (const topic of topics) {
@@ -372,8 +382,8 @@ export default function mount(ctx) {
         button.type = "button";
         button.dataset.topicId = topic.id;
         button.setAttribute("aria-pressed", String(selectedTopic === topic.id));
-        describe(button, `篩選話題：${topic.title}`, row);
-        button.append(make("span", "nw-focus-long", `${topic.sources} 家媒體・${topic.count} 則`),
+        describe(button, `進入話題：${topic.title}，${topic.count} 則報導`, row);
+        button.append(make("span", "nw-focus-long", `看話題・${topic.sources} 家`),
           make("span", "nw-focus-short", `${topic.sources} 家`));
         const copy = make("div", "nw-focus-copy");
         copy.append(newsTitle(representative || {title: topic.title}, "nw-title", members.some(isNew)));
@@ -426,7 +436,7 @@ export default function mount(ctx) {
       button.type = "button";
       button.dataset.event = group.id;
       describe(button, "展開同事件的其他報導", row);
-      button.append(make("span", "nw-focus-long", `${group.count} 家媒體`),
+      button.append(make("span", "nw-focus-long", `看同事件・${group.count} 家`),
         make("span", "nw-focus-short", `${group.count} 家`));
       row.append(newsTitle(group.reports[0], "nw-title", group.reports.some(isNew)), button);
       focusList.append(row);
@@ -462,7 +472,16 @@ export default function mount(ctx) {
     target.closest(".nw-row").scrollIntoView({block: "nearest"});
     target.focus({preventScroll: true});
   }
+  function onHistory() {
+    historyOpen = !historyOpen;
+    saveState("history", historyOpen);
+    drawItems();
+  }
   function drawHistory(groups, world, parts) {
+    historyToggle.setAttribute("aria-expanded", String(historyOpen));
+    historyContent.hidden = !historyOpen;
+    historyContent.replaceChildren();
+    if (!historyOpen) return;
     const step = 6 * 60 * 60 * 1000, start = historyAt - 4 * step;
     const buckets = Array.from({length: 4}, () => ({values: [0, 0, 0, 0], valid: 0}));
     for (const group of groups) {
@@ -477,8 +496,7 @@ export default function mount(ctx) {
       bucket.values[index ?? (world ? 3 : 2)]++;
     }
     const collapsed = buckets.filter(bucket => bucket.valid < 5).length >= 3;
-    history.replaceChildren(make("h3", "nw-heading", "近 24 小時"),
-      make("span", "nw-hint", collapsed ? "樣本不足，無法比較 24 小時內的變化"
+    historyContent.replaceChildren(make("span", "nw-hint", collapsed ? "樣本不足，無法比較 24 小時內的變化"
         : "每 6 小時一段，同一事件只算一次"));
     if (collapsed) return;
     buckets.forEach((bucket, i) => {
@@ -509,7 +527,7 @@ export default function mount(ctx) {
         bar.append(segment);
       });
       row.append(time, bar, make("span", "nw-history-value", result));
-      history.append(row);
+      historyContent.append(row);
     });
   }
   function drawPanel(scoped) {
@@ -536,9 +554,10 @@ export default function mount(ctx) {
       const title = Array.from(topics.find(topic => topic.id === selectedTopic).title);
       themeFilter.hidden = false;
       themeLabel.textContent = `話題：${title.slice(0, 24).join("")}${title.length > 24 ? "…" : ""}`;
-      clearTheme.textContent = "返回";
+      clearTheme.textContent = "返回原檢視";
       describe(clearTheme, "回到進入話題前的篩選與位置", themeFilter);
     }
+    panel.hidden ||= onlyWatched;
     if (panel.hidden) return;
     signalHeading.textContent = world ? "局勢走向" : "股市訊號";
     rankingTitle.textContent = politics ? "議題" : world ? "地區" : "題材";
@@ -577,6 +596,7 @@ export default function mount(ctx) {
     const sourceCount = new Set(scoped.map(item => text(item.source)).filter(Boolean)).size;
     sampleCount.textContent = `${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源`;
     pendingCount.textContent = `待分析 ${pending}`;
+    pendingCount.hidden = pending === 0;
     merging.hidden = eventsPending === 0;
     merging.textContent = eventsPending > 0 ? `・待合併 ${eventsPending}` : "";
     warning.hidden = groups.length >= 10;
@@ -782,15 +802,17 @@ export default function mount(ctx) {
     if (received) {
       const count = groups.filter(group => group.reports.some(isNew)).length;
       const modelText = modelState === "working" ? "整理中" : modelState === "paused" ? (modelReason === "waiting" ? "整理暫停，等待下次更新" : "整理暫停，下次更新繼續") : "";
-      status.textContent = [updatedText, refreshNotice, modelText, count ? `${count} 則新` : "", failedText, classificationText]
+      status.textContent = [updatedText, refreshNotice, modelText, count ? `新增 ${count} 個事件` : "", failedText, classificationText]
         .filter(Boolean).join(" · ");
     }
+    watchHint.hidden = !onlyWatched;
+    watchHint.textContent = onlyWatched ? `只看追蹤：${trackedWords.join("、")}` : "";
     drawFocus(groups);
     for (const [index, group] of groups.entries()) {
       if (index === dividerIndex) {
-        const divider = make("li", "nw-divider", "上次看到這裡");
+        const divider = make("li", "nw-divider", "以下為上次離開前的新聞");
         divider.setAttribute("role", "separator");
-        divider.setAttribute("aria-label", "以上是上次之後的新報導");
+        divider.setAttribute("aria-label", "以下是上次離開前的新聞");
         list.append(divider);
       }
       const item = group.reports[0];
@@ -987,6 +1009,7 @@ export default function mount(ctx) {
   clearAll.addEventListener("click", onClearAll);
   ranking.addEventListener("click", onTheme);
   clearTheme.addEventListener("click", onClearTheme);
+  historyToggle.addEventListener("click", onHistory);
   refresh.addEventListener("click", onRefresh);
   sources.addEventListener("change", onSourceOrCategory);
   categories.addEventListener("change", onSourceOrCategory);
@@ -1015,6 +1038,7 @@ export default function mount(ctx) {
       finishRefresh();
       refresh.disabled = true;
       root.removeEventListener("keydown", onBrowseKey);
+      historyToggle.removeEventListener("click", onHistory);
       refresh.removeEventListener("click", onRefresh);
       sources.removeEventListener("change", onSourceOrCategory);
       categories.removeEventListener("change", onSourceOrCategory);
