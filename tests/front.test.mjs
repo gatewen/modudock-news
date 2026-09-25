@@ -2773,3 +2773,94 @@ test('topic latest line is hidden when the newest report belongs to the seed eve
   ], [topicRecord()]));
   assert.equal(h.container.querySelector('.nw-topic-latest'), null);
 });
+
+const browseKey = (h, target, key, options = {}) => {
+  const event = new h.window.KeyboardEvent('keydown', {key, bubbles:true, cancelable:true, ...options});
+  target.dispatchEvent(event);
+  return event;
+};
+
+test('browse j/k navigate main titles, skip divider and children, and stop at boundaries', t => {
+  const h = setup(t, withSeen(seenAt));
+  const items = [eventStory('111111111111','new',11), eventStory('111111111111','child',10),
+    eventStory('222222222222','old',7)];
+  h.message(listing(items));
+  const list = h.container.querySelector('.nw-list');
+  assert.equal(list.getAttribute('aria-keyshortcuts'), 'j k s e');
+  assert.ok(list.querySelector('.nw-divider'));
+  const titles = [...list.querySelectorAll('a.nw-title')];
+  const scrolled = [];
+  t.mock.method(h.window.HTMLElement.prototype, 'scrollIntoView', function(options) { scrolled.push({node:this,options}); });
+  list.focus();
+  assert.equal(browseKey(h, list, 'j').defaultPrevented, true);
+  assert.equal(h.window.document.activeElement, titles[0]);
+  assert.equal(browseKey(h, titles[0], 'k').defaultPrevented, false);
+  assert.equal(h.window.document.activeElement, titles[0]);
+  assert.equal(browseKey(h, titles[0], 'j').defaultPrevented, true);
+  assert.equal(h.window.document.activeElement, titles[1]);
+  assert.equal(browseKey(h, titles[1], 'j').defaultPrevented, false);
+  assert.equal(h.window.document.activeElement, titles[1]);
+  browseKey(h, titles[1], 'k');
+  assert.equal(h.window.document.activeElement, titles[0]);
+  list.querySelector('.nw-expand').click();
+  const child = list.querySelector('.nw-report-title'); child.focus();
+  browseKey(h, child, 'j');
+  assert.equal(h.window.document.activeElement, titles[1]);
+  assert.deepEqual(scrolled.map(call => call.node), [titles[0], titles[1], titles[0], titles[1]]);
+  assert.ok(scrolled.every(call => call.options.block === 'nearest'));
+});
+
+test('browse s/e toggle current row controls and leave missing actions untouched', t => {
+  const h = setup(t);
+  h.message(listing([eventStory('111111111111','first',8,{summary:'摘要'}),
+    eventStory('111111111111','child',9), eventStory('222222222222','plain',10,{summary:''})]));
+  const rows = mainRows(h), title = rows[0].querySelector('a.nw-title'); title.focus();
+  for (const key of ['s','e']) {
+    const button = rows[0].querySelector(key === 's' ? '.nw-summary-toggle' : '.nw-expand');
+    const content = rows[0].querySelector(key === 's' ? '.nw-summary' : '.nw-reports');
+    for (const expanded of [true,false]) {
+      assert.equal(browseKey(h,title,key).defaultPrevented,true);
+      assert.equal(button.getAttribute('aria-expanded'),String(expanded));
+      assert.equal(content.hidden,!expanded);
+      assert.equal(h.window.document.activeElement,title);
+    }
+  }
+  const plain = rows[1].querySelector('a.nw-title');
+  for (const key of ['s','e','x']) assert.equal(browseKey(h,plain,key).defaultPrevented,false);
+  assert.equal(browseKey(h,h.container.querySelector('.nw-list'),'s').defaultPrevented,false);
+});
+
+test('browse keys ignore editing, modifiers, composition and outside targets', t => {
+  const h = setup(t);
+  h.message(listing([article()]));
+  const root = h.container.querySelector('.nw'), title = root.querySelector('a.nw-title');
+  const outside = h.window.document.createElement('button'); h.window.document.body.append(outside);
+  const editable = h.window.document.createElement('div'); editable.contentEditable='true';
+  const nested = h.window.document.createElement('span'); editable.append(nested); root.append(editable);
+  const textarea = h.window.document.createElement('textarea'); root.append(textarea);
+  for (const target of [h.select, h.categories, root.querySelector('input'), textarea, nested, outside]) {
+    for (const key of ['j','k','s','e']) assert.equal(browseKey(h,target,key).defaultPrevented,false);
+  }
+  title.focus();
+  for (const modifier of ['ctrlKey','metaKey','altKey','shiftKey','isComposing']) {
+    for (const key of ['j','k','s','e']) assert.equal(browseKey(h,title,key,{[modifier]:true}).defaultPrevented,false);
+  }
+  assert.equal(h.window.document.activeElement,title);
+  assert.equal(root.querySelector('.nw-summary-toggle').getAttribute('aria-expanded'),'false');
+});
+
+test('browse skips non-link titles, tolerates empty lists and removes root listener on unmount', t => {
+  const h = setup(t);
+  h.message(listing([article({link:'javascript:alert(1)'}), article({link:'https://e.com/valid'})]));
+  const list = h.container.querySelector('.nw-list'); list.focus();
+  browseKey(h,list,'j');
+  assert.equal(h.window.document.activeElement.href,'https://e.com/valid');
+  h.message(listing([]));
+  assert.equal(browseKey(h,list,'j').defaultPrevented,false);
+  h.message(listing([article()]));
+  const root = h.container.querySelector('.nw'), title = root.querySelector('a.nw-title');
+  h.handle.unmount();
+  for (const key of ['j','k','s','e']) assert.equal(browseKey(h,title,key).defaultPrevented,false);
+  assert.equal(root.querySelector('.nw-summary-toggle').getAttribute('aria-expanded'),'false');
+  assert.equal(h.container.children.length,0);
+});

@@ -1310,3 +1310,17 @@ cx-mod 以「每天早上看 3 分鐘的使用者」走查提出 5 項（皆不�
 - 最新那則若比 lastSeen 新，這一行前面加「新」（沿用 nw-new 樣式）。
 - 只用 textContent；話題成員依 items 中 `topic === id` 取得。
 - 驗收：前半測試（顯示／不顯示條件、截斷與 title、新標記）；真殼截圖由 cc-mod 審。
+
+### 18.40 第 40 輪（清單鍵盤快速瀏覽）
+
+第 39 輪結果：焦點話題「最新：…」（審核：同事件不重複顯示）。
+**動機**：每天快速掃新聞時，鍵盤使用者只能用 Tab 在標題、摘要、展開按鈕之間逐一跳，一列要按 2～4 次。
+
+**R40-A**
+- 只在 `root.contains(event.target)` 且 target 不是 input／select／textarea／contenteditable、且沒有按 Ctrl／Meta／Alt 時生效；其他情況完全不攔截（不影響殼與其他模組）。在模組根元素上監聽 keydown（不掛 window／document）。
+- `j`：焦點移到下一列的標題連結（從目前焦點所在列往下找；焦點不在任何列時到第一列）；`k`：上一列。移動後 `scrollIntoView({block: "nearest"})`。分隔線與子報導列略過。
+- `s`：切換目前列的摘要（等同按「摘要」）；`e`：切換目前列的「另 N 則報導」。該列沒有對應按鈕時不動作。
+- 有處理的按鍵呼叫 `preventDefault()`；其他按鍵不攔。
+- 清單加 `aria-keyshortcuts="j k s e"`；README 補一行說明。
+- unmount 移除監聽。
+- 驗收：前半測試（j/k 移動與邊界、略過分隔線、s/e 切換、在 input 中不攔、帶修飾鍵不攔、unmount 後不作用）。

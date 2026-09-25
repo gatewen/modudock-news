@@ -106,6 +106,7 @@ export default function mount(ctx) {
   status.textContent = "等待模組就緒";
   const list = make("ul", "nw-list");
   list.tabIndex = -1;
+  list.setAttribute("aria-keyshortcuts", "j k s e");
   const empty = make("div", "nw-empty");
   const emptyText = make("span", "", "正在取得新聞");
   const clearAll = make("button", "", "清除篩選");
@@ -926,6 +927,34 @@ export default function mount(ctx) {
     if (lostTopic) returnToView(true);
     else drawItems();
   }
+  function onBrowseKey(event) {
+    const target = event.target;
+    if (disposed || !root.contains(target) || event.ctrlKey || event.metaKey || event.altKey
+        || event.shiftKey || event.isComposing || target.isContentEditable
+        || target.closest?.('input, select, textarea, [contenteditable]:not([contenteditable="false"])')) return;
+    const row = target.closest?.(".nw-row");
+    const current = row && list.contains(row) ? row : null;
+    if (event.key === "j" || event.key === "k") {
+      const rows = [...list.children].filter(node => node.classList.contains("nw-row"));
+      const step = event.key === "j" ? 1 : -1;
+      let index = current ? rows.indexOf(current) + step : 0;
+      for (; index >= 0 && index < rows.length; index += step) {
+        const title = rows[index].querySelector("a.nw-title");
+        if (!title) continue;
+        title.focus({preventScroll: true});
+        title.scrollIntoView({block: "nearest"});
+        event.preventDefault();
+        return;
+      }
+    } else if (current && (event.key === "s" || event.key === "e")) {
+      const button = current.querySelector(event.key === "s" ? ".nw-summary-toggle" : ".nw-expand");
+      if (button) {
+        button.click();
+        event.preventDefault();
+      }
+    }
+  }
+  root.addEventListener("keydown", onBrowseKey);
   list.addEventListener("click", onExpand);
   list.addEventListener("click", onSummary);
   focusList.addEventListener("click", onFocus);
@@ -959,6 +988,7 @@ export default function mount(ctx) {
       up = false;
       finishRefresh();
       refresh.disabled = true;
+      root.removeEventListener("keydown", onBrowseKey);
       refresh.removeEventListener("click", onRefresh);
       sources.removeEventListener("change", onSourceOrCategory);
       categories.removeEventListener("change", onSourceOrCategory);
