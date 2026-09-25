@@ -1324,3 +1324,15 @@ cx-mod 以「每天早上看 3 分鐘的使用者」走查提出 5 項（皆不�
 - 清單加 `aria-keyshortcuts="j k s e"`；README 補一行說明。
 - unmount 移除監聽。
 - 驗收：前半測試（j/k 移動與邊界、略過分隔線、s/e 切換、在 input 中不攔、帶修飾鍵不攔、unmount 後不作用）。
+
+### 18.41 第 41 輪（前半第三次獨立審查修正）
+
+第 40 輪結果：鍵盤快速瀏覽（真殼實測）。
+**前半第三次獨立審查（agent，01:3x，範圍第 26～40 輪）**：5 條中度（3 條 happy-dom 重現：t4.mjs、t5.mjs；2 條需實機）。
+
+**R41-1 收合時焦點不留在隱藏區塊**：`e` 或點「另 N 則報導」收合時，若焦點在該列 `.nw-reports` 內，先把焦點移到該列的 `.nw-expand`。
+**R41-2 焦點保底涵蓋隱藏／停用元素**：§18.38 的保底條件加上「activeElement 位於 `[hidden]` 祖先內或為 disabled」，符合時移到清單容器。
+**R41-3 重新整理忙碌中保持可聚焦**：忙碌狀態改用 `aria-disabled="true"`（不設 disabled），`onRefresh` 在忙碌時直接忽略；樣式沿用 disabled 外觀。
+**R41-4 逾時提示持續到真的有新列表**：「更新未完成，稍後自動重試」只在收到 `at` 與上次不同的列表時清除（同一輪的補送不清）；§18.28 同步加註。
+**R41-5 選項文字不變就不寫**：更新選單數量時 `if (option.textContent !== next) option.textContent = next`。
+- 驗收：五條各一個前半測試（R41-3 驗 aria-disabled 與忙碌時點擊無效；R41-5 以 MutationObserver 驗相同內容補送零變動）；cc-mod 真殼驗鍵盤按 Enter 重新整理後焦點仍在按鈕上。

@@ -2595,15 +2595,18 @@ function refreshClock(t,h) {
 test('refresh is immediately busy and only a different list at completes it', t => {
   const h=setup(t), clock=refreshClock(t,h), body=listing([article()]);
   const list=h.container.querySelector('.nw-list');
-  h.up(); h.message(body); h.button.click();
-  assert.equal(h.button.disabled,true);
+  h.up(); h.message(body); h.button.focus(); h.button.click();
+  assert.equal(h.button.disabled,false);
+  assert.equal(h.window.document.activeElement,h.button);
+  h.button.click();
+  assert.equal(h.button.getAttribute('aria-disabled'),'true');
   assert.equal(h.button.textContent,'↻ 更新中…');
   assert.equal(list.getAttribute('aria-busy'),'true');
   assert.deepEqual(h.sent,[{op:'refresh'}]);
   h.button.dispatchEvent(new h.window.Event('click'));
   assert.equal(h.sent.length,1);
   h.message({...body,classify:{enabled:true,pending:0}});
-  assert.equal(h.button.disabled,true);
+  assert.equal(h.button.getAttribute('aria-disabled'),'true');
   assert.equal(list.getAttribute('aria-busy'),'true');
   assert.equal(clock.timers.size,1);
   h.message({...body,at:'2026-09-21T02:05:00Z'});
@@ -2615,13 +2618,13 @@ test('refresh is immediately busy and only a different list at completes it', t 
   assert.doesNotMatch(h.container.querySelector('[role=status]').textContent,/更新未完成/);
 });
 
-test('refresh timeout releases busy state and keeps notice until any next list', t => {
+test('refresh timeout releases busy state and keeps notice until a different list at', t => {
   for(const initial of [false,true]) {
     const h=setup(t), clock=refreshClock(t,h), body=listing([article()]);
     const status=()=>h.container.querySelector('[role=status]').textContent;
     h.up(); if(initial) h.message(body);
     h.button.click(); clock.tick(29999);
-    assert.equal(h.button.disabled,true);
+    assert.equal(h.button.getAttribute('aria-disabled'),'true');
     assert.doesNotMatch(status(),/更新未完成/);
     clock.tick(1);
     assert.equal(h.button.disabled,false);
@@ -2633,9 +2636,13 @@ test('refresh timeout releases busy state and keeps notice until any next list',
     h.button.click();
     assert.equal(h.sent.length,2);
     assert.match(status(),/更新未完成/);
-    h.message(body); // Even same-at results clear the notice, but not the next pending refresh.
+    h.message(body);
+    if(initial) assert.match(status(),/更新未完成/);
+    else assert.doesNotMatch(status(),/更新未完成/);
+    assert.equal(h.button.getAttribute('aria-disabled'),initial ? 'true' : null);
+    h.message({...body,at:'2026-09-21T02:05:00Z'});
     assert.doesNotMatch(status(),/更新未完成/);
-    assert.equal(h.button.disabled,initial);
+    assert.equal(h.button.getAttribute('aria-disabled'),null);
     h.handle.unmount();
   }
 });
@@ -2863,4 +2870,61 @@ test('browse skips non-link titles, tolerates empty lists and removes root liste
   for (const key of ['j','k','s','e']) assert.equal(browseKey(h,title,key).defaultPrevented,false);
   assert.equal(root.querySelector('.nw-summary-toggle').getAttribute('aria-expanded'),'false');
   assert.equal(h.container.children.length,0);
+});
+
+test('collapsing reports moves their focus to the expand button and stays collapsed on resend', t => {
+  for (const keyboard of [true, false]) {
+    const h=setup(t), body=listing([
+      article({event:'aaaaaaaaaaaa',event_size:2}),
+      article({event:'aaaaaaaaaaaa',event_size:2,title:'另一篇',link:'https://example.com/second'}),
+    ]);
+    h.message(body);
+    const toggle=h.container.querySelector('.nw-expand');
+    toggle.click();
+    const sub=h.container.querySelector('.nw-reports a');
+    sub.focus();
+    if(keyboard) assert.equal(browseKey(h,sub,'e').defaultPrevented,true);
+    else toggle.click();
+    assert.equal(h.window.document.activeElement,toggle);
+    assert.equal(toggle.getAttribute('aria-expanded'),'false');
+    assert.equal(h.container.querySelector('.nw-reports').hidden,true);
+    h.message(body);
+    assert.equal(h.container.querySelector('.nw-reports').hidden,true);
+    assert.equal(h.window.document.activeElement,h.container.querySelector('.nw-expand'));
+  }
+});
+
+test('redraw focus fallback covers hidden ancestors and disabled controls', t => {
+  const h=setup(t), body=listing([article()]);
+  h.message(body);
+  choose(h,h.select,'乙');
+  const clear=h.container.querySelector('.nw-empty button');
+  clear.focus(); clear.click();
+  assert.equal(h.container.querySelector('.nw-empty').hidden,true);
+  assert.equal(h.window.document.activeElement,h.container.querySelector('.nw-list'));
+  h.categories.focus(); h.categories.disabled=true;
+  h.message(body);
+  assert.equal(h.window.document.activeElement,h.container.querySelector('.nw-list'));
+});
+
+test('identical resends never mutate option text but changed counts and failures update it', async t => {
+  const h=setup(t), body=listing([article({category:'tech'})],[{name:'甲',ok:true,count:1}]);
+  h.message(body); choose(h,h.categories,'tech'); h.categories.focus();
+  const options=[...h.select.options,...h.categories.options];
+  const mutations=[];
+  const observer=new h.window.MutationObserver(records=>mutations.push(...records));
+  for(const select of [h.select,h.categories]) observer.observe(select,{subtree:true,childList:true,characterData:true});
+  t.after(()=>observer.disconnect());
+  h.message(body);
+  await new Promise(resolve=>h.window.setTimeout(resolve,0));
+  assert.equal(mutations.length,0);
+  assert.deepEqual([...h.select.options,...h.categories.options],options);
+  assert.equal(h.categories.value,'tech');
+  assert.equal(h.window.document.activeElement,h.categories);
+  h.message({...body,items:[],sources:[{name:'甲',ok:false,count:0}]});
+  await new Promise(resolve=>h.window.setTimeout(resolve,0));
+  assert.ok(mutations.length>0);
+  assert.equal(h.select.options[0].textContent,'全部來源 0');
+  assert.equal(h.select.options[1].textContent,'甲 0（失敗）');
+  assert.equal([...h.categories.options].find(o=>o.value==='tech').textContent,'科技 0');
 });

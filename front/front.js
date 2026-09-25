@@ -219,7 +219,7 @@ export default function mount(ctx) {
   function onRefresh() {
     if (!up || disposed || refreshTimer !== null) return;
     refreshAt = latestAt;
-    refresh.disabled = true;
+    refresh.setAttribute("aria-disabled", "true");
     refresh.textContent = "↻ 更新中…";
     list.setAttribute("aria-busy", "true");
     refreshTimer = view.setTimeout(() => {
@@ -233,6 +233,7 @@ export default function mount(ctx) {
   function finishRefresh() {
     if (refreshTimer !== null) view.clearTimeout(refreshTimer);
     refreshTimer = null;
+    refresh.removeAttribute("aria-disabled");
     refresh.disabled = !up || disposed;
     refresh.textContent = "↻ 重新整理";
     list.removeAttribute("aria-busy");
@@ -318,7 +319,9 @@ export default function mount(ctx) {
     if (expanded.has(id)) expanded.delete(id);
     else expanded.add(id);
     button.setAttribute("aria-expanded", String(expanded.has(id)));
-    button.closest(".nw-row").querySelector(".nw-reports").hidden = !expanded.has(id);
+    const reports = button.closest(".nw-row").querySelector(".nw-reports");
+    if (!expanded.has(id) && reports.contains(document.activeElement)) button.focus({preventScroll: true});
+    reports.hidden = !expanded.has(id);
   }
   function toneSummary(topic) {
     const tone = topic.tone;
@@ -712,6 +715,10 @@ export default function mount(ctx) {
     }
     return null;
   }
+  function unavailableFocus() {
+    const active = document.activeElement;
+    return !root.contains(active) || Boolean(active?.closest("[hidden]")) || active?.disabled === true;
+  }
   function restoreFocus(identity) {
     if (!identity) return false;
     let target = [...root.querySelectorAll(identity.selector)].find(node => {
@@ -732,7 +739,7 @@ export default function mount(ctx) {
       row.querySelector(".nw-expand").setAttribute("aria-expanded", "true");
     }
     if (target) target.focus({preventScroll: true});
-    return Boolean(target);
+    return Boolean(target) && !unavailableFocus();
   }
   function drawItems(keepFocus = true) {
     const focusWasInside = keepFocus && root.contains(document.activeElement);
@@ -741,7 +748,8 @@ export default function mount(ctx) {
       && (!sources.value || text(item.source) === sources.value));
     for (const option of categories.options) {
       const count = groupItems(sourceItems.filter(item => !option.value || text(item.category) === option.value)).length;
-      option.textContent = `${categoryNames.get(option.value) || "全部類別"} ${count}`;
+      const next = `${categoryNames.get(option.value) || "全部類別"} ${count}`;
+      if (option.textContent !== next) option.textContent = next;
     }
     const applicable = categories.value === "politics" ? issueTopics : categories.value === "world" ? regionTopics
       : financial(categories.value) ? themeNames : new Map();
@@ -850,7 +858,7 @@ export default function mount(ctx) {
     empty.hidden = groups.length > 0;
     emptyText.textContent = received ? "這個條件下沒有新聞" : "正在取得新聞";
     clearAll.hidden = !received;
-    if (!restoreFocus(focused) && focusWasInside && !root.contains(document.activeElement))
+    if (!restoreFocus(focused) && focusWasInside && unavailableFocus())
       list.focus({preventScroll: true});
   }
   function onClearAll() {
@@ -863,8 +871,8 @@ export default function mount(ctx) {
     drawItems();
   }
   function renderList(body) {
+    if (text(body.at) !== latestAt) refreshNotice = "";
     latestAt = text(body.at);
-    refreshNotice = "";
     if (refreshTimer !== null && latestAt !== refreshAt) finishRefresh();
     modelReason = typeof body.model?.reason === "string" ? body.model.reason : "";
     modelState = body.model && typeof body.model === "object" && ["working", "paused", "done", "off"].includes(body.model.state)
@@ -893,7 +901,8 @@ export default function mount(ctx) {
     const previous = sources.value;
     const records = Array.isArray(body.sources) ? body.sources : [];
     const options = new Map([...sources.options].map(option => [option.value, option]));
-    all.textContent = `全部來源 ${items.filter(item => item && typeof item === "object").length}`;
+    const allText = `全部來源 ${items.filter(item => item && typeof item === "object").length}`;
+    if (all.textContent !== allText) all.textContent = allText;
     const names = new Set();
     for (const source of records) {
       const name = text(source?.name);
@@ -902,7 +911,8 @@ export default function mount(ctx) {
       const option = options.get(name) || document.createElement("option");
       option.value = name;
       const count = Number.isSafeInteger(source.count) && source.count >= 0 ? source.count : 0;
-      option.textContent = `${name} ${count}${source.ok === false ? "（失敗）" : ""}`;
+      const next = `${name} ${count}${source.ok === false ? "（失敗）" : ""}`;
+      if (option.textContent !== next) option.textContent = next;
       const position = sources.options[names.size];
       if (position !== option) sources.insertBefore(option, position || null);
     }
@@ -975,7 +985,7 @@ export default function mount(ctx) {
   ctx.onUp(() => {
     if (disposed) return;
     up = true;
-    refresh.disabled = refreshTimer !== null;
+    refresh.disabled = false;
     status.textContent = "等待新聞更新";
   });
   ctx.report("ready");

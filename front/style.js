@@ -34,7 +34,7 @@ export const css = `
   max-width: 100%;
 }
 .nw button { cursor: pointer; }
-.nw button:disabled { cursor: default; color: var(--nw-muted); }
+.nw button:disabled, .nw button[aria-disabled="true"] { cursor: default; color: var(--nw-muted); }
 .nw button:focus-visible, .nw a:focus-visible, .nw select:focus-visible, .nw input:focus-visible {
   outline: 2px solid var(--nw-focus);
   outline-offset: 2px;
