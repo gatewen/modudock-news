@@ -152,11 +152,11 @@ test('category options are fixed, ordered and independent of received data', t =
     ['sports', '體育'], ['entertainment', '娛樂'], ['other', '其他']];
   const options = () => [...h.categories.options].map(option => [option.value, option.textContent]);
   assert.equal(h.categories.options.length, 10);
-  assert.deepEqual(options(), expected);
+  assert.deepEqual(options(), expected.map(([id,name]) => [id, `${name} 0`]));
   h.message(listing([article({category: 'zzz'})]));
-  assert.deepEqual(options(), expected);
+  assert.deepEqual(options(), expected.map(([id,name]) => [id, `${name} ${id ? 0 : 1}`]));
   h.message(listing([]));
-  assert.deepEqual(options(), expected);
+  assert.deepEqual(options(), expected.map(([id,name]) => [id, `${name} 0`]));
 });
 
 test('category labels recognize only string ids and safely handle malformed values', t => {
@@ -2482,4 +2482,62 @@ test('summary fallback distinguishes same-link reports and does not persist link
   buttons()[3].click(); assert.deepEqual(hidden(),[false,true,true,true,true]);
   buttons()[3].click(); h.message(body);
   assert.deepEqual(hidden(),[false,true,true,true,true]);
+});
+
+test('category option counts are events scoped only by source, including zero categories', t => {
+  const h=setup(t), id=topicRecord().id;
+  const body=topicListing([
+    eventStory('111111111111','AI',8,{source:'甲',topic:id}),
+    eventStory('111111111111','同事件',9,{source:'乙',topic:id}),
+    eventStory('222222222222','其他財經',10,{source:'乙'}),
+    article({source:'甲',category:'world',link:'https://e.com/world'}),
+  ]);
+  const labels=()=>Object.fromEntries([...h.categories.options].map(o=>[o.value,o.textContent]));
+  h.message(body);
+  assert.equal(labels()[''],'全部類別 3');
+  assert.equal(labels().finance,'財經 2');
+  assert.equal(labels().world,'國際 1');
+  assert.equal(labels().entertainment,'娛樂 0');
+  assert.ok([...h.categories.options].every(o=>!o.disabled && !o.hidden));
+  choose(h,h.select,'甲');
+  assert.equal(labels()[''],'全部類別 2');
+  assert.equal(labels().finance,'財經 1');
+  choose(h,h.categories,'finance'); themeButton(h,'memory').click();
+  saveWatch(h,'AI'); watchControls(h).only.click();
+  assert.equal(labels()[''],'全部類別 2');
+  assert.equal(labels().world,'國際 1');
+  focusTopicButtons(h)[0].click(); // Topic entry clears source; counts still include non-topic reports.
+  assert.equal(labels()[''],'全部類別 3');
+  assert.equal(labels().finance,'財經 2');
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(labels()[''],'全部類別 2');
+  choose(h,h.select,'乙');
+  assert.equal(labels().finance,'財經 2');
+  assert.equal(labels().world,'國際 0');
+});
+
+test('source counts and failure labels update existing options without losing selection or focus', t => {
+  const h=setup(t), evil='<img src=x onerror=alert(1)>';
+  const body=listing([financeArticle(),worldArticle({source:'乙'})],
+    [{name:'甲',count:1,ok:true},{name:'乙',count:1,ok:false},{name:evil,count:0,ok:true}]);
+  h.message(body);
+  const options=[...h.select.options], categories=[...h.categories.options];
+  assert.deepEqual(options.map(o=>o.textContent),['全部來源 2','甲 1','乙 1（失敗）',`${evil} 0`]);
+  assert.equal(h.container.querySelector('img'),null);
+  choose(h,h.select,'甲'); choose(h,h.categories,'finance');
+  for(const control of [h.select,h.categories]) {
+    control.focus();
+    h.message({...body,items:[...body.items,financeArticle({link:'https://e.com/new'})],
+      sources:[{name:'甲',count:2,ok:false},{name:'乙',count:1,ok:true},{name:evil,count:-1}]});
+    assert.equal(h.window.document.activeElement,control);
+    assert.equal(h.select.value,'甲'); assert.equal(h.categories.value,'finance');
+    assert.deepEqual([...h.select.options],options);
+    assert.deepEqual([...h.categories.options],categories);
+    assert.deepEqual([...h.select.options].map(o=>o.textContent),['全部來源 3','甲 2（失敗）','乙 1',`${evil} 0`]);
+    assert.equal(h.categories.selectedOptions[0].textContent,'財經 2');
+  }
+  h.message({...body,sources:[{name:'乙',count:null},{name:'新來源',count:'4'},{name:'乙',count:99}]});
+  assert.equal(h.select.value,'');
+  assert.equal(h.select.options[1],options[2]);
+  assert.deepEqual([...h.select.options].map(o=>o.textContent),['全部來源 2','乙 0','新來源 0']);
 });

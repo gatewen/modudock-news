@@ -281,14 +281,14 @@ export default function mount(ctx) {
   sources.setAttribute("aria-label", "新聞來源");
   const all = document.createElement("option");
   all.value = "";
-  all.textContent = "全部來源";
+  all.textContent = "全部來源 0";
   sources.append(all);
   const categories = document.createElement("select");
   categories.setAttribute("aria-label", "新聞類別");
   for (const [id, name] of [["", "全部類別"], ...categoryNames]) {
     const option = document.createElement("option");
     option.value = id;
-    option.textContent = name;
+    option.textContent = `${name} 0`;
     categories.append(option);
   }
   const watchToggle = make("button", "", "追蹤設定");
@@ -904,6 +904,12 @@ export default function mount(ctx) {
   }
   function drawItems(keepFocus = true) {
     const focused = keepFocus ? focusIdentity(document.activeElement) : null;
+    const sourceItems = items.filter(item => item && typeof item === "object"
+      && (!sources.value || text(item.source) === sources.value));
+    for (const option of categories.options) {
+      const count = groupItems(sourceItems.filter(item => !option.value || text(item.category) === option.value)).length;
+      option.textContent = `${categoryNames.get(option.value) || "全部類別"} ${count}`;
+    }
     const applicable = categories.value === "politics" ? issueTopics : categories.value === "world" ? regionTopics
       : financial(categories.value) ? themeNames : new Map();
     if (selectedTheme && !applicable.has(selectedTheme)) selectedTheme = "";
@@ -1048,17 +1054,21 @@ export default function mount(ctx) {
     eventsPending = Number.isInteger(events.pending) && events.pending > 0 ? events.pending : 0;
     const previous = sources.value;
     const records = Array.isArray(body.sources) ? body.sources : [];
-    sources.replaceChildren(all);
+    const options = new Map([...sources.options].map(option => [option.value, option]));
+    all.textContent = `全部來源 ${items.filter(item => item && typeof item === "object").length}`;
     const names = new Set();
     for (const source of records) {
       const name = text(source?.name);
       if (!name || names.has(name)) continue;
       names.add(name);
-      const option = document.createElement("option");
+      const option = options.get(name) || document.createElement("option");
       option.value = name;
-      option.textContent = name;
-      sources.append(option);
+      const count = Number.isSafeInteger(source.count) && source.count >= 0 ? source.count : 0;
+      option.textContent = `${name} ${count}${source.ok === false ? "（失敗）" : ""}`;
+      const position = sources.options[names.size];
+      if (position !== option) sources.insertBefore(option, position || null);
     }
+    for (const option of [...sources.options]) if (option !== all && !names.has(option.value)) option.remove();
     sourceOrder = new Map([...names].map((name, i) => [name, i]));
     sources.value = names.has(previous) ? previous : "";
     const failed = records.filter(source => source?.ok === false);
