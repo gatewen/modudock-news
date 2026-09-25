@@ -182,6 +182,7 @@ export default function mount(ctx) {
   let refreshTimer = null;
   let latestAt = "", refreshAt = "", refreshNotice = "";
   let items = [];
+  const dateOnlySources = new Set();
   let received = false;
   let modelState = "", modelReason = "";
   let selectedTheme = "";
@@ -203,13 +204,15 @@ export default function mount(ctx) {
     const pad = (n) => String(n).padStart(2, "0");
     return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   };
+  const isMidnight = date => date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0;
+  const isDateOnly = (item, date) => dateOnlySources.has(text(item.source)) && isMidnight(date);
   function newsTime(item) {
     const value = localTime(item.published);
     const date = new Date(text(item.published));
     const today = new Date();
     const sameDay = date.getFullYear() === today.getFullYear()
       && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
-    const dateOnly = date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0;
+    const dateOnly = isDateOnly(item, date);
     const calendar = `${date.getMonth() + 1}/${date.getDate()}`;
     const label = value && (dateOnly ? (sameDay ? "今天" : calendar) : `${sameDay ? "" : `${calendar} `}${value}`);
     const node = make("span", "nw-time", `${item.time_guessed === true ? "約" : ""}${label}`);
@@ -246,7 +249,7 @@ export default function mount(ctx) {
     const startDate = new Date(first.published), endDate = new Date(last.published);
     const sameDay = startDate.getFullYear() === endDate.getFullYear()
       && startDate.getMonth() === endDate.getMonth() && startDate.getDate() === endDate.getDate();
-    const dateOnly = endDate.getHours() === 0 && endDate.getMinutes() === 0 && endDate.getSeconds() === 0;
+    const dateOnly = isDateOnly(last, endDate);
     const endLabel = sameDay && !dateOnly
       ? `${last.time_guessed === true ? "約" : ""}${localTime(last.published)}` : end.textContent;
     node.textContent += `–${endLabel}`;
@@ -879,6 +882,19 @@ export default function mount(ctx) {
       ? body.model.state : "";
     received = true;
     items = Array.isArray(body.items) ? body.items : [];
+    // Use the full current list, before filters or event folding.
+    dateOnlySources.clear();
+    const sourceTimes = new Map();
+    for (const item of items) {
+      const source = text(item?.source);
+      if (!source) continue;
+      const counts = sourceTimes.get(source) || {total: 0, midnight: 0};
+      counts.total++;
+      if (isMidnight(new Date(text(item.published)))) counts.midnight++;
+      sourceTimes.set(source, counts);
+    }
+    for (const [source, counts] of sourceTimes)
+      if (counts.total >= 3 && counts.midnight / counts.total >= 0.8) dateOnlySources.add(source);
     const presentSummaries = new Set(items.filter(item => item && typeof item === "object")
       .map(item => summaryKey({id: eventId(item), reports: [item]})).filter(Boolean));
     for (const key of summaries) if (!presentSummaries.has(key)) summaries.delete(key);

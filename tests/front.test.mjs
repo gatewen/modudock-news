@@ -1173,7 +1173,7 @@ test('focus titles keep text and URL defenses and responsive labels stay scoped'
   assert.notEqual(focusArea(h).getAttribute('aria-labelledby'), focusArea(other).getAttribute('aria-labelledby'));
 });
 
-test('local midnight shows date only, including today guessed and expanded reports', t => {
+test('mostly midnight source shows dates including today guessed and expanded reports', t => {
   t.mock.timers.enable({apis:['Date'], now:new Date(2026, 0, 1, 12)});
   const h = setup(t);
   const today = new Date(2026, 0, 1).toISOString(), yesterday = new Date(2025, 11, 31).toISOString();
@@ -1979,8 +1979,8 @@ test('event time range uses local dates, guessed endpoints and date-only labels'
     [localStamp(24,23), localStamp(25,1), false, false, '9/24 23:00–01:00'],
     [localStamp(23,23), localStamp(24,1), false, false, '9/23 23:00–9/24 01:00'],
     [localStamp(25,8), localStamp(25,20), true, true, '約08:00–約20:00'],
-    [localStamp(25,0), localStamp(25,20), false, false, '今天–20:00'],
-    [localStamp(24,0), localStamp(25,0), false, true, '9/24–約今天'],
+    [localStamp(25,0), localStamp(25,20), false, false, '00:00–20:00'],
+    [localStamp(24,0), localStamp(25,0), false, true, '9/24 00:00–約00:00'],
     [localStamp(25,8), localStamp(25,8), false, false, '08:00'],
   ];
   for (const [start,end,guessStart,guessEnd,expected] of cases) {
@@ -2927,4 +2927,48 @@ test('identical resends never mutate option text but changed counts and failures
   assert.equal(h.select.options[0].textContent,'全部來源 0');
   assert.equal(h.select.options[1].textContent,'甲 0（失敗）');
   assert.equal([...h.categories.options].find(o=>o.value==='tech').textContent,'科技 0');
+});
+
+test('date-only detection is per source, needs three reports and recomputes on each list', t => {
+  t.mock.timers.enable({apis:['Date'], now:new Date(2026,8,25,12)});
+  const h=setup(t);
+  const makeReports=(source,total,midnights)=>Array.from({length:total},(_,i)=>article({
+    source, title:`${source}${i}`, link:`https://example.com/${source}/${i}`,
+    category:i===0 ? 'tech' : 'world',
+    published:localStamp(25,i<midnights ? 0 : 10),
+  }));
+  const reporters=makeReports('報導者',3,3), liberty=makeReports('自由時報',40,1), small=makeReports('少量',2,2);
+  const body=listing([...reporters,...liberty,...small],['報導者','自由時報','少量'].map(name=>({name,ok:true})));
+  h.message(body);
+  const times=()=>mainRows(h).map(row=>row.querySelector('.nw-info > .nw-time').textContent);
+  assert.deepEqual(times().slice(0,5),['今天','今天','今天','00:00','10:00']);
+  assert.deepEqual(times().slice(-2),['00:00','00:00']);
+  choose(h,h.categories,'tech');
+  assert.deepEqual(times(),['今天','00:00','00:00']); // Filtering must not change source evidence.
+  choose(h,h.select,'自由時報');
+  assert.deepEqual(times(),['00:00']);
+  choose(h,h.select,'報導者');
+  h.message({...body,items:makeReports('報導者',5,4)}); // Exactly 80%.
+  assert.deepEqual(times(),['今天']);
+  h.message({...body,items:makeReports('報導者',4,3)}); // Same-at resend drops below 80%.
+  assert.deepEqual(times(),['00:00']);
+  h.message({...body,items:reporters.slice(0,2)});
+  assert.deepEqual(times(),['00:00']);
+  h.message(body);
+  assert.deepEqual(times(),['今天']);
+});
+
+test('date-only event endpoints use each reports source evidence including child reports', t => {
+  t.mock.timers.enable({apis:['Date'], now:new Date(2026,8,25,12)});
+  const h=setup(t), event='111111111111';
+  const dated=[24,25,23].map((day,i)=>article({source:'日期來源',title:`日期${i}`,
+    published:localStamp(day,0),link:`https://example.com/date/${i}`,
+    ...(i<2 ? {event,event_size:2} : {})}));
+  h.message(listing(dated));
+  assert.equal(mainRows(h)[0].querySelector('.nw-time').textContent,'9/24–今天');
+  h.container.querySelector('.nw-expand').click();
+  assert.equal(h.container.querySelector('.nw-report .nw-time').textContent,'今天');
+  h.message(listing(dated.slice(0,2)));
+  assert.equal(mainRows(h)[0].querySelector('.nw-time').textContent,'9/24 00:00–00:00');
+  assert.equal(h.container.querySelector('.nw-report .nw-time').textContent,'00:00');
 });
