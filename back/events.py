@@ -15,10 +15,10 @@ import unicodedata
 
 if __package__:
     from .classify import _ChoiceClient, _choice, MAX_ITEMS, MAX_CHARS
-    from .feedparse import dedup_key
+    from .feedparse import dedup_key, match_text
 else:
     from classify import _ChoiceClient, _choice, MAX_ITEMS, MAX_CHARS
-    from feedparse import dedup_key
+    from feedparse import dedup_key, match_text
 
 CRITERIA = {
     "same": "是同一個事件",
@@ -34,7 +34,7 @@ GROUP_WINDOW = timedelta(hours=24)
 
 
 def _bigrams(title):
-    clean = "".join(c for c in title.lower()
+    clean = "".join(c for c in match_text(title).lower()
                     if not c.isspace() and not unicodedata.category(c).startswith("P"))
     return set(zip(clean, clean[1:]))
 
@@ -53,6 +53,9 @@ class Pair:
     left: tuple  # (dedup_key, title, summary)
     right: tuple
     similarity: float
+    # Smaller title bigram count, computed once by candidate_pairs; defaults to
+    # "long enough" for directly constructed pairs.
+    min_grams: int = 6
 
     @property
     def key(self):
@@ -60,7 +63,8 @@ class Pair:
 
     @property
     def automatic(self):
-        return self.similarity >= AUTO_THRESHOLD
+        # Very short titles can reach overlap 1.0 by accident; let jev decide.
+        return self.similarity >= AUTO_THRESHOLD and self.min_grams >= 6
 
 
 def candidate_pairs(items):
@@ -76,7 +80,7 @@ def candidate_pairs(items):
             continue
         score = _overlap(left_grams, right_grams)
         if score >= CANDIDATE_THRESHOLD:
-            result.append(Pair(left, right, score))
+            result.append(Pair(left, right, score, min(len(left_grams), len(right_grams))))
     return result
 
 

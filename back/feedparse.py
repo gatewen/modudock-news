@@ -7,7 +7,7 @@ timezone are interpreted as UTC. first_seen uses oldest-insertion eviction
 from collections import Counter, OrderedDict
 from copy import deepcopy
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
 from html.parser import HTMLParser
@@ -163,6 +163,14 @@ def dedup_key(link):
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
 
 
+_MATCH_IGNORED = str.maketrans('', '', '\u200b\u200c\u2060\ufeff')
+
+
+def match_text(value):
+    """Remove invisible separators for matching only; preserve ZWJ and display text."""
+    return value.translate(_MATCH_IGNORED)
+
+
 def parse_feed(data, final_url, source, first_seen, now):
     """Return (normalized items, candidate first_seen), never commit cache.
 
@@ -173,10 +181,9 @@ def parse_feed(data, final_url, source, first_seen, now):
     if not isinstance(source, str) or not source.strip() or len(source) > 64:
         raise ValueError("source must contain 1..64 characters")
     timestamp = _iso(now)
+    current = datetime.fromisoformat(timestamp)
     root = _xml(data)
     seen = OrderedDict(first_seen)
-    while len(seen) > 1000:
-        seen.popitem(last=False)
     atom = root.tag != "rss"
     prefix = ATOM + "|" if root.tag == ATOM + "|feed" else ""
 
@@ -216,16 +223,20 @@ def parse_feed(data, final_url, source, first_seen, now):
             continue
         date = first(entry, "published" if atom else "pubDate") or first(entry, "updated")
         published = _date(date)
+        if published is not None and datetime.fromisoformat(published) - current > timedelta(hours=1):
+            published = None
         guessed = published is None
         if guessed:
             if key not in seen:
                 seen[key] = timestamp
-                if len(seen) > 1000:
-                    seen.popitem(last=False)
             published = seen[key]
         summary = (first(entry, "summary") or first(entry, "content")) if atom else first(entry, "description")
         items.append(dict(title=title, link=link, published=published,
                           summary=plain(summary, 200), source=source, time_guessed=guessed))
+    # Finish every lookup before FIFO eviction, so inserting a missing key
+    # cannot evict another entry that this same feed has yet to visit.
+    while len(seen) > 1000:
+        seen.popitem(last=False)
     return items, seen
 
 

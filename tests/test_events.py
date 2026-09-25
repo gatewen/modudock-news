@@ -15,7 +15,7 @@ from back.feedparse import dedup_key
 from tests.test_classify import server
 
 
-def article(n, hours=0, title='同一新聞事件', source='甲', **overrides):
+def article(n, hours=0, title='同一新聞事件報導', source='甲', **overrides):
     return dict(title=title, summary='摘要', source=source, link=f'https://example.com/{n}',
                 published=(datetime(2026, 9, 24, tzinfo=timezone.utc) + timedelta(hours=hours)).isoformat(),
                 **overrides)
@@ -43,6 +43,29 @@ def edge(left, right):
 
 
 class CandidateTests(unittest.TestCase):
+    def test_short_titles_remain_candidates_but_cannot_auto_merge(self):
+        for left, right, automatic in [('AI', 'Taiwan earthquake', False),
+                                       ('abcdef', 'abcdefghijk', False),
+                                       ('abcdefghijk', 'abcdef', False),
+                                       ('aaaaaaa', 'aaaaaaaaaa', False),
+                                       ('abcdefg', 'abcdefghijk', True)]:
+            with self.subTest(left=left, right=right):
+                pair, = candidate_pairs([article(0, title=left), article(1, title=right)])
+                self.assertEqual(pair.similarity, 1)
+                self.assertEqual(pair.automatic, automatic)
+
+    def test_zero_width_matching_preserves_zwj(self):
+        from back.events import _bigrams
+        title = '台積電擴建晶圓廠'
+        for separator in '\u200b\u200c\u2060\ufeff':
+            with self.subTest(separator=repr(separator)):
+                dirty = separator.join(title)
+                pair, = candidate_pairs([article(0, title=title), article(1, title=dirty)])
+                self.assertEqual(pair.similarity, 1)
+                self.assertTrue(pair.automatic)
+                self.assertEqual(pair.right[1], dirty)
+        self.assertEqual(_bigrams('👩\u200d💻'), {('👩', '\u200d'), ('\u200d', '💻')})
+
     def test_bigram_normalization_and_overlap_not_jaccard(self):
         self.assertEqual(title_overlap('ＡI，台積電！ A-B\n', 'ａi台積電ab'), 1)
         self.assertEqual(title_overlap('ABCDEF', 'abcd'), 1)
@@ -94,6 +117,15 @@ class CandidateTests(unittest.TestCase):
 class MatcherTests(unittest.TestCase):
     def client(self, url, **kwargs):
         return EventMatcher(endpoint=url, key='events-secret-test', log=lambda _: None, **kwargs)
+
+    def test_short_high_overlap_pair_goes_to_model(self):
+        pair, = candidate_pairs([article(0, title='AI'), article(1, title='Taiwan earthquake')])
+        with server(lambda p, *_: (200, answers(p, 'different'), {})) as (url, received):
+            self.assertEqual(self.client(url).match([pair]), {pair.key: False})
+            self.assertEqual(len(received), 1)
+        client = self.client('http://127.0.0.1:9')
+        client.enabled = False
+        self.assertEqual(list(client.match_round([pair])), [])
 
     def test_exact_request_shape_named_pairs_and_deduplicated_state(self):
         a, b, c = record(0, '甲'), record(1, '乙'), record(2, '丙')

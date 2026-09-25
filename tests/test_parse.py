@@ -1,6 +1,6 @@
 from collections import OrderedDict
 from copy import deepcopy
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -28,7 +28,7 @@ def parse(data, seen=None, now=NOW):
 
 class ParseTests(unittest.TestCase):
     def test_rss_fixture_normalization_and_drops(self):
-        items, seen = parse((FIXTURES / "rss.xml").read_bytes())
+        items, seen = parse((FIXTURES / "rss.xml").read_bytes(), now=NOW + timedelta(hours=4))
         self.assertEqual(len(items), 2)
         self.assertEqual(items[0], dict(title="新聞 標題", link="https://example.com/story?utm_source=rss&a=1#top",
                          published="2026-09-21T02:00:00.000000Z", summary="摘要 & 內容 第二段",
@@ -38,7 +38,7 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(seen), 1)
 
     def test_atom_priority_and_namespace(self):
-        items, _ = parse((FIXTURES / "atom.xml").read_bytes())
+        items, _ = parse((FIXTURES / "atom.xml").read_bytes(), now=NOW + timedelta(hours=4))
         self.assertEqual(len(items), 3)
         self.assertEqual(items[0]["link"], "https://example.com/redirected/article")
         self.assertEqual(items[0]["published"], "2026-09-21T02:00:00.000000Z")
@@ -65,6 +65,45 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(candidate), 1000)
         self.assertNotIn("https://example.com/0", candidate)
         self.assertIn("https://example.com/0", seen)
+
+    def test_first_seen_over_capacity_does_not_cascade_or_refresh_fifo(self):
+        data = rss(''.join(entry(link=f'/{i}') for i in range(1001)))
+        first, old = parse(data)
+        original = deepcopy(old)
+        second, new = parse(data, old, now=NOW + timedelta(minutes=10))
+        self.assertEqual(old, original)
+        self.assertEqual(len(new), 1000)
+        self.assertEqual([i for i, (a, b) in enumerate(zip(first, second))
+                          if a['published'] != b['published']], [0])
+        self.assertEqual(list(new), list(old)[1:] + [first[0]['link']])
+        self.assertTrue(all(item['time_guessed'] for item in second))
+        # Subsequent rounds lose only the one truly evicted timestamp, not all 1001.
+        third, _ = parse(data, new, now=NOW + timedelta(minutes=20))
+        self.assertEqual([i for i, (a, b) in enumerate(zip(second, third))
+                          if a['published'] != b['published']], [1])
+
+    def test_future_dates_over_one_hour_use_stable_first_seen(self):
+        for date, guessed in [('2026-09-21T00:59:59Z', False),
+                              ('2026-09-21T01:00:00Z', False),
+                              ('2026-09-21T09:00:00+08:00', False),
+                              ('2026-09-21T01:00:00.000001Z', True),
+                              ('2099-01-01T00:00:00Z', True),
+                              ('1970-01-01T00:00:00Z', False)]:
+            with self.subTest(date=date):
+                items, seen = parse(rss(entry(extra=f'<pubDate>{date}</pubDate>')))
+                self.assertEqual(items[0]['time_guessed'], guessed)
+                self.assertEqual(items[0]['published'], fp._iso(NOW) if guessed else fp._date(date))
+                self.assertEqual(len(seen), int(guessed))
+        data = rss(entry(extra='<pubDate>2099-01-01T00:00:00Z</pubDate>'))
+        first, seen = parse(data)
+        second, _ = parse(data, seen, now=NOW + timedelta(minutes=10))
+        self.assertEqual(first, second)
+
+    def test_display_preserves_zero_width_characters_and_zwj(self):
+        title = '台\u200b積\u200c電\u2060晶\ufeff片👩\u200d💻'
+        items, _ = parse(rss(entry(title, extra=f'<description>{title}</description>')))
+        self.assertEqual(items[0]['title'], title)
+        self.assertEqual(items[0]['summary'], title)
 
     def test_bad_xml_root_and_namespace_rejected(self):
         for data in (b"", b"<rss>", b"<html/>", b'<feed xmlns="urn:wrong"/>'):
@@ -140,7 +179,7 @@ class ParseTests(unittest.TestCase):
                 self.assertEqual(parse(rss(entry(title, link)))[0], [])
 
     def test_date_fallbacks_and_utc(self):
-        items, _ = parse(rss(entry(extra="<updated>2026-09-21T03:00:00</updated>")))
+        items, _ = parse(rss(entry(extra="<updated>2026-09-21T03:00:00</updated>")), now=NOW + timedelta(hours=4))
         self.assertEqual(items[0]["published"], "2026-09-21T03:00:00.000000Z")
         items, _ = parse(rss(entry(extra="<pubDate>bad</pubDate><updated>2027-01-01T00:00:00Z</updated>")))
         self.assertTrue(items[0]["time_guessed"])

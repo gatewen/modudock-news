@@ -30,6 +30,17 @@ def response(payload, *_):
 
 
 class PlanTests(unittest.TestCase):
+    def test_zero_width_words_and_candidates_preserve_zwj(self):
+        for separator in '\u200b\u200c\u2060\ufeff':
+            with self.subTest(separator=repr(separator)):
+                self.assertEqual(words(separator.join('特朗普ALPHA')), words('川普ALPHA'))
+                candidate = story('candidate', separator.join('川普訪美 ALPHA'))
+                items, groups = snapshot([candidate])
+                topics, pending = plan(items, groups, {}, ['A', 'B', 'C'])
+                self.assertEqual(len(topics), 1)
+                self.assertEqual(pending, [(items[0]['link'], candidate['link'])])
+        self.assertEqual(words('AB\u200dCD'), {'AB', 'CD'})
+
     def test_two_source_event_cannot_seed_even_with_cached_third_source_expansion(self):
         seeds = [story(f's{i}', 'ALPHA', source) for i, source in enumerate('AB')]
         third = story('third', 'ALPHA', 'C')
