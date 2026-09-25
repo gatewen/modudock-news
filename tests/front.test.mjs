@@ -2541,3 +2541,79 @@ test('source counts and failure labels update existing options without losing se
   assert.equal(h.select.options[1],options[2]);
   assert.deepEqual([...h.select.options].map(o=>o.textContent),['全部來源 2','乙 0','新來源 0']);
 });
+
+function refreshClock(t,h) {
+  let now=0, next=0;
+  const timers=new Map();
+  t.mock.method(h.window,'setTimeout',(callback,delay)=>{
+    const id=++next; timers.set(id,{callback,at:now+delay}); return id;
+  });
+  t.mock.method(h.window,'clearTimeout',id=>timers.delete(id));
+  return {timers, tick(ms) {
+    now+=ms;
+    for(const [id,timer] of [...timers]) if(timer.at<=now) {
+      timers.delete(id); timer.callback();
+    }
+  }};
+}
+
+test('refresh is immediately busy and only a different list at completes it', t => {
+  const h=setup(t), clock=refreshClock(t,h), body=listing([article()]);
+  const list=h.container.querySelector('.nw-list');
+  h.up(); h.message(body); h.button.click();
+  assert.equal(h.button.disabled,true);
+  assert.equal(h.button.textContent,'↻ 更新中…');
+  assert.equal(list.getAttribute('aria-busy'),'true');
+  assert.deepEqual(h.sent,[{op:'refresh'}]);
+  h.button.dispatchEvent(new h.window.Event('click'));
+  assert.equal(h.sent.length,1);
+  h.message({...body,classify:{enabled:true,pending:0}});
+  assert.equal(h.button.disabled,true);
+  assert.equal(list.getAttribute('aria-busy'),'true');
+  assert.equal(clock.timers.size,1);
+  h.message({...body,at:'2026-09-21T02:05:00Z'});
+  assert.equal(h.button.disabled,false);
+  assert.equal(h.button.textContent,'↻ 重新整理');
+  assert.equal(list.hasAttribute('aria-busy'),false);
+  assert.equal(clock.timers.size,0);
+  clock.tick(30000);
+  assert.doesNotMatch(h.container.querySelector('[role=status]').textContent,/更新未完成/);
+});
+
+test('refresh timeout releases busy state and keeps notice until any next list', t => {
+  for(const initial of [false,true]) {
+    const h=setup(t), clock=refreshClock(t,h), body=listing([article()]);
+    const status=()=>h.container.querySelector('[role=status]').textContent;
+    h.up(); if(initial) h.message(body);
+    h.button.click(); clock.tick(29999);
+    assert.equal(h.button.disabled,true);
+    assert.doesNotMatch(status(),/更新未完成/);
+    clock.tick(1);
+    assert.equal(h.button.disabled,false);
+    assert.equal(h.button.textContent,'↻ 重新整理');
+    assert.equal(h.container.querySelector('.nw-list').hasAttribute('aria-busy'),false);
+    assert.match(status(),/更新未完成，稍後自動重試/);
+    choose(h,h.categories,'finance');
+    assert.match(status(),/更新未完成，稍後自動重試/);
+    h.button.click();
+    assert.equal(h.sent.length,2);
+    assert.match(status(),/更新未完成/);
+    h.message(body); // Even same-at results clear the notice, but not the next pending refresh.
+    assert.doesNotMatch(status(),/更新未完成/);
+    assert.equal(h.button.disabled,initial);
+    h.handle.unmount();
+  }
+});
+
+test('unmount cancels refresh timer and late messages cannot restart UI', t => {
+  const h=setup(t), clock=refreshClock(t,h);
+  h.up(); h.button.click();
+  assert.equal(clock.timers.size,1);
+  h.handle.unmount();
+  assert.equal(clock.timers.size,0);
+  clock.tick(30000); h.up(); h.message(listing([]));
+  assert.equal(h.button.disabled,true);
+  assert.equal(h.container.childElementCount,0);
+  h.button.dispatchEvent(new h.window.Event('click'));
+  assert.equal(h.sent.length,1);
+});

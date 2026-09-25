@@ -177,6 +177,8 @@ export default function mount(ctx) {
 
   let up = false;
   let disposed = false;
+  let refreshTimer = null;
+  let latestAt = "", refreshAt = "", refreshNotice = "";
   let items = [];
   let received = false;
   let modelState = "";
@@ -213,7 +215,25 @@ export default function mount(ctx) {
     return node;
   }
   function onRefresh() {
-    if (up && !disposed) ctx.channel.send({ op: "refresh" });
+    if (!up || disposed || refreshTimer !== null) return;
+    refreshAt = latestAt;
+    refresh.disabled = true;
+    refresh.textContent = "↻ 更新中…";
+    list.setAttribute("aria-busy", "true");
+    refreshTimer = view.setTimeout(() => {
+      finishRefresh();
+      refreshNotice = "更新未完成，稍後自動重試";
+      if (received) drawItems();
+      else status.textContent = refreshNotice;
+    }, 30000);
+    ctx.channel.send({ op: "refresh" });
+  }
+  function finishRefresh() {
+    if (refreshTimer !== null) view.clearTimeout(refreshTimer);
+    refreshTimer = null;
+    refresh.disabled = !up || disposed;
+    refresh.textContent = "↻ 重新整理";
+    list.removeAttribute("aria-busy");
   }
   function groupTime(reports) {
     const valid = reports.filter(item => Number.isFinite(Date.parse(text(item.published))));
@@ -727,7 +747,7 @@ export default function mount(ctx) {
     if (received) {
       const count = groups.filter(group => group.reports.some(isNew)).length;
       const modelText = modelState === "working" ? "整理中" : modelState === "paused" ? "整理暫停，下次更新繼續" : "";
-      status.textContent = [updatedText, modelText, count ? `${count} 則新` : "", failedText, classificationText]
+      status.textContent = [updatedText, refreshNotice, modelText, count ? `${count} 則新` : "", failedText, classificationText]
         .filter(Boolean).join(" · ");
     }
     drawFocus(groups);
@@ -818,6 +838,9 @@ export default function mount(ctx) {
     drawItems();
   }
   function renderList(body) {
+    latestAt = text(body.at);
+    refreshNotice = "";
+    if (refreshTimer !== null && latestAt !== refreshAt) finishRefresh();
     modelState = body.model && typeof body.model === "object" && ["working", "paused", "done", "off"].includes(body.model.state)
       ? body.model.state : "";
     received = true;
@@ -898,7 +921,7 @@ export default function mount(ctx) {
   ctx.onUp(() => {
     if (disposed) return;
     up = true;
-    refresh.disabled = false;
+    refresh.disabled = refreshTimer !== null;
     status.textContent = "等待新聞更新";
   });
   ctx.report("ready");
@@ -909,6 +932,7 @@ export default function mount(ctx) {
       view.removeEventListener("pagehide", persistLastSeen);
       disposed = true;
       up = false;
+      finishRefresh();
       refresh.disabled = true;
       refresh.removeEventListener("click", onRefresh);
       sources.removeEventListener("change", onSourceOrCategory);
