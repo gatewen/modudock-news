@@ -62,6 +62,7 @@ class _ResponseDeadline(Exception):
 @dataclass
 class _ClientState:
     enabled: bool
+    reason: str = ""
     lock: object = field(default_factory=threading.Lock, repr=False)
 
 
@@ -86,7 +87,7 @@ class _ChoiceClient:
             raise ValueError("invalid classifier endpoint")
         self.endpoint = endpoint
         self._key = os.environ.get("TYPESAFE_API_KEY", "") if key is None else key
-        self._state = _ClientState(bool(self._key))
+        self._state = _ClientState(bool(self._key), "" if self._key else "no_key")
         self.clock, self.timeout, self.budget = clock, timeout, budget
         self.read_deadline = read_deadline
         self.sleep = sleep
@@ -110,7 +111,14 @@ class _ChoiceClient:
         # Shared clients use the same lock; authentication shutdown is visible
         # to subsequent admissions without holding a lock during network I/O.
         with self._state.lock:
+            if self._state.enabled and not value:
+                self._state.reason = "auth"
             self._state.enabled = value
+
+    @property
+    def disabled_reason(self):
+        with self._state.lock:
+            return self._state.reason
 
     def _run_round(self, items, request):
         """Yield detached successful candidates; stop at a failed batch (rate-limit retries are request-local)."""

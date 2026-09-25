@@ -3043,3 +3043,22 @@ test('watch-only hides focus and every analysis panel, restores them and safely 
     assert.equal(hint.hidden,true);
   }
 });
+
+test('disabled classification explains fixed reasons and clears stale titles on later lists', t => {
+  const h=setup(t), status=h.container.querySelector('[role=status]');
+  const cases=[
+    ['no_key','分類未啟用：未設定 API 金鑰','設定 TYPESAFE_API_KEY 後重新載入模組'],
+    ['auth','分類已停用：API 金鑰無效','請確認金鑰後重新載入模組'],
+    [undefined,'分類：關閉',''], ['unknown','分類：關閉',''],
+    [{secret:'do not show'},'分類：關閉',''], ['__proto__','分類：關閉',''],
+  ];
+  for(const [reason,label,title] of cases) {
+    h.message({...listing([],[{name:'甲',ok:true}]),classify:{enabled:false},model:{state:'off',reason}});
+    assert.match(status.textContent,new RegExp(label));
+    assert.equal(status.title,title);
+  }
+  h.message({...listing([],[{name:'甲',ok:false,error:'timeout'}]),classify:{enabled:false},model:{state:'off',reason:'auth'}});
+  assert.equal(status.title,'甲：timeout\n請確認金鑰後重新載入模組');
+  h.message({...listing([],[{name:'甲',ok:true}]),classify:{enabled:true},model:{state:'done',reason:''}});
+  assert.doesNotMatch(status.textContent,/金鑰|分類：關閉/); assert.equal(status.title,'');
+});

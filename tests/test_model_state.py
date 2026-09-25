@@ -60,7 +60,7 @@ class ModelStateTests(unittest.TestCase):
         for cache in s.caches: cache.items = []
         self.assertEqual(s._emit(s.caches, [])['body']['model'], {'state':'done','reason':''})
         s.classifier.enabled = False
-        self.assertEqual(s._emit(s.caches, [])['body']['model'], {'state':'off','reason':'disabled'})
+        self.assertEqual(s._emit(s.caches, [])['body']['model'], {'state':'off','reason':'auth'})
 
     def test_model_state_size_is_reserved_before_longer_status_resend(self):
         packet = {'t':'msg','body':{'items':[{'title':'x'*100} for _ in range(20)],
@@ -68,7 +68,7 @@ class ModelStateTests(unittest.TestCase):
         packet['body']['padding'] = 'x' * (MAX_PACKET - len(packet_bytes(packet)))
         initial = fit_packet(packet)
         self.assertLess(len(initial['body']['items']), 20)
-        for state, reason in [('working',''),('paused','failed'),('paused','budget'),('paused','waiting'),('off','disabled')]:
+        for state, reason in [('working',''),('paused','failed'),('paused','budget'),('paused','waiting'),('off','no_key'),('off','auth')]:
             changed = deepcopy(initial)
             changed['body']['model'] = {'state':state,'reason':reason}
             self.assertLessEqual(len(packet_bytes(changed)),MAX_PACKET)

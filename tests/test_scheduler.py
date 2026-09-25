@@ -941,6 +941,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
                         self.assertFalse(clients['classifier'].enabled)
                         self.assertFalse(clients['analyzer'].enabled)
                         self.assertEqual(body['classify'], {'enabled': False, 'pending': 0})
+                        self.assertEqual(body['model'], {'state': 'off', 'reason': 'auth'})
                         self.assertEqual(body['analysis']['pending'], 0)
                         self.assertTrue(all(i['analysis'] is None for i in body['items']))
                         count = len(received)

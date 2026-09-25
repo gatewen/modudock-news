@@ -543,7 +543,9 @@ class Scheduler:
 
     def _model_state(self, body):
         if not self._classify_enabled():
-            return {'state': 'off', 'reason': 'disabled'}
+            clients = (self.classifier, self.analyzer, self.matcher, self.topic_matcher, self.tone_client)
+            reason = 'auth' if any(getattr(client, 'disabled_reason', '') == 'auth' for client in clients) else 'no_key'
+            return {'state': 'off', 'reason': reason}
         pending = any(body.get(name, {}).get('pending', 0) > 0
                       for name in ('classify', 'analysis', 'events', 'topics')) or body.get('topics', {}).get('tone_pending', 0) > 0
         if not pending:

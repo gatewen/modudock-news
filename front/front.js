@@ -962,7 +962,10 @@ export default function mount(ctx) {
     const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
     analysisEnabled = classify.enabled !== false;
     const pending = Number.isInteger(classify.pending) && classify.pending >= 0 ? classify.pending : 0;
-    classificationText = classify.enabled === false ? "分類：關閉"
+    const offNotice = classify.enabled === false && modelState === "off"
+      ? {no_key: ["分類未啟用：未設定 API 金鑰", "設定 TYPESAFE_API_KEY 後重新載入模組"],
+         auth: ["分類已停用：API 金鑰無效", "請確認金鑰後重新載入模組"]}[modelReason] : null;
+    classificationText = classify.enabled === false ? (Array.isArray(offNotice) ? offNotice[0] : "分類：關閉")
       : modelState !== "working" && pending > 0 ? `未分類：${pending}` : "";
     const updated = localTime(body.at);
     const at = Date.parse(text(body.at));
@@ -972,6 +975,7 @@ export default function mount(ctx) {
       : failed.length > 1 ? `${failureName(failed[0])}等 ${failed.length} 個來源失敗` : "";
     status.title = failed.map(source => `${failureName(source)}${typeof source.error === "string"
       ? `：${Array.from(source.error).slice(0, 80).join("")}` : ""}`).join("\n");
+    if (Array.isArray(offNotice)) status.title = [status.title, offNotice[1]].filter(Boolean).join("\n");
     if (lostTopic) returnToView(true);
     else drawItems();
   }

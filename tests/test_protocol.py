@@ -358,6 +358,7 @@ class ProtocolTests(unittest.TestCase):
             self.send('up')
             body = self.packet()['body']
             self.assertEqual(body['classify'], {'enabled': False, 'pending': 0})
+            self.assertEqual(body['model'], {'state': 'off', 'reason': 'no_key'})
             self.assertEqual(body['analysis'], {'pending': 0})
             self.assertIsNone(body['items'][0]['analysis'])
             self.assertEqual(self.packet()['t'], 'publish')
