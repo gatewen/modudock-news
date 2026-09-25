@@ -30,6 +30,46 @@ def response(payload, *_):
 
 
 class PlanTests(unittest.TestCase):
+    def test_two_source_event_cannot_seed_even_with_cached_third_source_expansion(self):
+        seeds = [story(f's{i}', 'ALPHA', source) for i, source in enumerate('AB')]
+        third = story('third', 'ALPHA', 'C')
+        items, groups = snapshot([third], seeds)
+        seed = seeds[0]['link']
+        cache = {(seed, third['link']): True}
+        self.assertEqual(plan(items, groups, cache, ['A', 'B', 'C']), ([], []))
+        # The cached expansion is viable; only new-seed eligibility prevents it.
+        retained, pending = plan(items, groups, cache, ['A', 'B', 'C'], previous=[seed])
+        self.assertEqual(retained[0]['sources'], 3)
+        self.assertEqual(set(retained[0]['keys']), {item['link'] for item in seeds + [third]})
+        self.assertEqual(pending, [])
+
+    def test_pending_limit_keeps_older_high_overlap_ahead_of_newer_single_term_candidates(self):
+        seeds = [story(f's{i}', ' '.join(f'TERM{n}' for n in range(10)), source)
+                 for i, source in enumerate('ABC')]
+        newer = [story(f'candidate{i}', f'TERM{i % 10}', hour=1 + i / 10) for i in range(70)]
+        stronger = story('high-overlap', 'TERM0 TERM1', hour=0)
+        items, groups = snapshot(newer + [stronger], seeds, size=300)
+        topics, pending = plan(items, groups, {}, ['A', 'B', 'C'])
+        self.assertEqual(len(topics), 1)
+        self.assertEqual(len(pending), 60)
+        self.assertEqual(pending, [(seeds[0]['link'], item['link'])
+                                   for item in [stronger] + newer[-59:][::-1]])
+        self.assertEqual((topics, pending), plan(items[::-1], groups, {}, ['A', 'B', 'C']))
+
+    def test_topic_output_prefers_more_sources_over_more_reports(self):
+        broad = [story(f'broad{i}', 'BROAD', source) for i, source in enumerate('ABCD')]
+        frequent = [story(f'frequent{i}', 'FREQUENT', source) for i, source in enumerate('ABCABCABC')]
+        items, groups = snapshot(seeds=broad + frequent)
+        for item in broad:
+            groups[item['link']] = {'event': 'broad'}
+        for item in frequent:
+            groups[item['link']] = {'event': 'frequent'}
+        topics, pending = plan(items, groups, {}, ['A', 'B', 'C', 'D'])
+        self.assertEqual([(topic['title'], topic['sources'], topic['count']) for topic in topics],
+                         [('BROAD', 4, 4), ('FREQUENT', 3, 9)])
+        self.assertEqual(pending, [])
+        self.assertEqual((topics, pending), plan(items[::-1], groups, {}, ['A', 'B', 'C', 'D']))
+
     def test_five_previous_topics_do_not_exclude_larger_new_topic_or_leak_pending(self):
         seeds, extras, groups, previous = [], [], {}, []
         for n, size in enumerate([3, 3, 3, 3, 3, 10]):
