@@ -3078,7 +3078,7 @@ test('manual source/category choices persist and restore once after first list o
   assert.equal(next.select.value,'');
   next.message(body); assert.equal(next.select.value,''); // Never reapply on resends.
   choose(next,next.categories,'');
-  assert.deepEqual(JSON.parse(next.window.localStorage.getItem(viewKey)),{source:'',category:''});
+  assert.deepEqual(JSON.parse(next.window.localStorage.getItem(viewKey)),{source:'乙',category:''}); // Missing live source does not overwrite its saved preference.
 });
 
 test('stored view validates fields independently and does not revive missing options', t => {
@@ -3097,7 +3097,7 @@ test('stored view validates fields independently and does not revive missing opt
   assert.equal(h.select.value,''); assert.equal(h.categories.value,'finance');
   const early=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify({source:'乙',category:'finance'})));
   choose(early,early.categories,'world'); early.message(listing([worldArticle()]));
-  assert.equal(early.categories.value,'world'); assert.equal(early.select.value,'');
+  assert.equal(early.categories.value,'world'); assert.equal(early.select.value,'乙');
 });
 
 test('topic entry return disappearance theme and clear filters do not save view', t => {
@@ -3131,5 +3131,47 @@ test('view storage failures are silent and manual selection still works', t => {
     assert.equal(h.categories.value,'');
     assert.doesNotThrow(()=>choose(h,h.categories,'finance'));
     assert.equal(h.categories.value,'finance'); assert.equal(mainRows(h).length,1);
+  }
+});
+
+test('remembered category waits for classified items while source restores immediately', t => {
+  const h=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify({source:'乙',category:'finance'})));
+  const raw=listing([article({source:'乙',category:''})]);
+  h.message({...raw,model:{state:'working'},classify:{enabled:true}});
+  assert.equal(h.select.value,'乙'); assert.equal(h.categories.value,'');
+  assert.equal(mainRows(h).length,1);
+  choose(h,h.select,'甲'); // Source edits do not cancel pending category restoration.
+  h.message({...raw,items:[financeArticle()]});
+  assert.equal(h.select.value,'甲'); assert.equal(h.categories.value,'finance');
+  h.message({...raw,model:{state:'working'}});
+  assert.equal(h.container.querySelector('.nw-empty').hidden,false);
+  assert.equal(h.container.querySelector('.nw-empty span').textContent,'分類中，稍後出現');
+  h.message({...raw,model:{state:'done'}});
+  assert.equal(h.container.querySelector('.nw-empty span').textContent,'這個條件下沒有新聞');
+});
+
+test('disabled classification and manual category edits cancel remembered category restoration', t => {
+  for(const action of ['off','manual']) {
+    const h=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify({source:'',category:'finance'})));
+    const body={...listing([article({category:''})]),model:{state:'working'},classify:{enabled:true}};
+    h.message(action==='off' ? {...body,classify:{enabled:false},model:{state:'off',reason:'no_key'}} : body);
+    assert.equal(h.categories.value,''); assert.equal(mainRows(h).length,1);
+    if(action==='manual') choose(h,h.categories,'tech');
+    h.message({...body,items:[financeArticle()]});
+    assert.equal(h.categories.value,action==='off' ? '' : 'tech');
+  }
+});
+
+test('manual view changes merge only that field with stored preferences during topic view', t => {
+  for(const field of ['source','category']) {
+    const h=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify({source:'乙',category:'finance'})));
+    const topic=topicRecord();
+    h.message(topicListing([financeArticle({source:'乙',topic:topic.id})]));
+    focusTopicButtons(h)[0].click();
+    assert.equal(h.select.value,''); assert.equal(h.categories.value,'');
+    if(field==='category') choose(h,h.categories,'tech');
+    else choose(h,h.select,'甲');
+    assert.deepEqual(JSON.parse(h.window.localStorage.getItem(viewKey)),field==='category'
+      ? {source:'乙',category:'tech'} : {source:'甲',category:'finance'});
   }
 });

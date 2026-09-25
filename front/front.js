@@ -39,7 +39,8 @@ export default function mount(ctx) {
     saveState("watch", normalized);
     return normalized;
   }
-  let initialView = loadState("view");
+  const storedView = loadState("view");
+  const initialView = storedView && typeof storedView === "object" && !Array.isArray(storedView) ? {...storedView} : {};
   const storedLastSeen = loadState("lastSeen");
   const parsedLastSeen = typeof storedLastSeen === "string" ? Date.parse(storedLastSeen) : NaN;
   const lastSeen = Number.isFinite(parsedLastSeen) ? parsedLastSeen : null;
@@ -687,9 +688,13 @@ export default function mount(ctx) {
     selectedTopic = "";
     drawItems();
   }
-  function onSourceOrCategory() {
-    initialView = null; // A manual choice before the first list takes precedence.
-    saveState("view", {source: sources.value, category: categories.value});
+  function onSourceOrCategory(event) {
+    const field = event.currentTarget === sources ? "source" : "category";
+    delete initialView[field];
+    const stored = loadState("view");
+    const previous = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+    saveState("view", {source: text(previous.source), category: text(previous.category),
+      [field]: event.currentTarget.value});
     savedView = null;
     selectedTopic = "";
     drawItems();
@@ -884,7 +889,9 @@ export default function mount(ctx) {
       list.append(row);
     }
     empty.hidden = groups.length > 0;
-    emptyText.textContent = received ? "這個條件下沒有新聞" : "正在取得新聞";
+    emptyText.textContent = received
+      ? categories.value && modelState === "working" ? "分類中，稍後出現" : "這個條件下沒有新聞"
+      : "正在取得新聞";
     clearAll.hidden = !received;
     if (!restoreFocus(focused) && focusWasInside && unavailableFocus())
       list.focus({preventScroll: true});
@@ -960,13 +967,15 @@ export default function mount(ctx) {
     for (const option of [...sources.options]) if (option !== all && !names.has(option.value)) option.remove();
     sourceOrder = new Map([...names].map((name, i) => [name, i]));
     sources.value = names.has(previous) ? previous : "";
-    if (initialView && typeof initialView === "object" && !Array.isArray(initialView)) {
-      if (typeof initialView.source === "string" && [...sources.options].some(option => option.value === initialView.source))
-        sources.value = initialView.source;
+    if (typeof initialView.source === "string" && [...sources.options].some(option => option.value === initialView.source))
+      sources.value = initialView.source;
+    delete initialView.source; // Source restoration belongs to the first list only.
+    if (body.classify?.enabled === false) delete initialView.category;
+    else if (items.some(item => categoryNames.has(text(item?.category)))) {
       if (typeof initialView.category === "string" && [...categories.options].some(option => option.value === initialView.category))
         categories.value = initialView.category;
+      delete initialView.category;
     }
-    initialView = null; // Restore only once, including when an option is missing.
     const failed = records.filter(source => source?.ok === false);
     const failureName = source => text(source.name) || "未命名來源";
     const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
