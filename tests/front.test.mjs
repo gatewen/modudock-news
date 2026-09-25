@@ -387,16 +387,16 @@ test('theme filter toggles, cancels, preserves panel scope and survives same-at 
   assert.deepEqual(rowTitles(h), ['甲記憶體', '甲代工', '新增記憶體']);
 });
 
-test('selected theme remains cancellable after it disappears from new data', t => {
+test('selected theme automatically clears after it disappears from new data', t => {
   const h = setup(t);
   h.message(listing([financeArticle()]));
   choose(h, h.categories, 'finance');
   themeButton(h, 'memory').click();
   h.message(listing([financeArticle({analysis: analysis({theme: 'foundry'})})]));
-  assert.deepEqual(rowTitles(h), []);
+  assert.deepEqual(rowTitles(h), ['新聞']);
   assert.equal(rankLabel(themeButton(h, 'foundry')), '晶圓代工 1');
-  h.container.querySelector('.nw-filter button').click();
-  assert.equal(rowTitles(h).length, 1);
+  assert.equal(h.container.querySelector('.nw-filter').hidden, true);
+  assert.equal(themeButton(h, 'foundry').getAttribute('aria-pressed'), 'false');
 });
 
 test('small-sample boundary is below ten and empty ranking has placeholder', t => {
@@ -3235,3 +3235,46 @@ test('clear all cancels deferred view for this mount without overwriting storage
 
 // Include the walk suite in npm test without changing the package script.
 import './front.walk.test.mjs';
+
+test('resends clear empty theme region and issue selections within panel scope even when hidden', t => {
+  const cases=[
+    ['finance','memory', financeArticle(), financeArticle({analysis:analysis({theme:'energy'})})],
+    ['world','region:other',worldArticle({analysis:worldAnalysis({region:'other'})}),worldArticle({analysis:worldAnalysis({region:'us_china'})})],
+    ['politics','issue:other',article({category:'politics',analysis:{kind:'politics',issue:'other'}}),article({category:'politics',analysis:{kind:'politics',issue:'defense'}})],
+  ];
+  for(const [category,id,original,replacement] of cases) for(const watched of [false,true]) {
+    const h=setup(t);
+    const outside={...original,source:'乙',link:'https://e/outside'};
+    const body=listing([original,outside]);
+    h.message(body); choose(h,h.categories,category); choose(h,h.select,'甲');
+    h.container.querySelector(`[data-topic="${id}"]`).click();
+    assert.equal(h.container.querySelector('.nw-filter').hidden,false);
+    if(watched) {saveWatch(h,'新聞'); watchControls(h).only.click();}
+    h.message(body); // A still-present event must keep the selection.
+    assert.equal(h.container.querySelector('.nw-filter').hidden,false);
+    h.message({...body,items:[replacement,outside]});
+    assert.equal(h.container.querySelector('.nw-filter').hidden,true);
+    assert.equal(mainRows(h).length,1);
+    assert.equal(h.select.value,'甲'); assert.equal(h.categories.value,category);
+    if(watched) watchControls(h).only.click();
+    assert.equal(h.container.querySelectorAll('.nw-theme[aria-pressed=true]').length,0);
+    h.message(body); // Reappearance does not reselect a cancelled filter.
+    assert.equal(h.container.querySelector('.nw-filter').hidden,true);
+  }
+});
+
+test('other filter labels distinguish regions and issues without changing ranking names', t => {
+  const h=setup(t);
+  for(const [category,id,analysisValue,label] of [
+    ['world','region:other',worldAnalysis({region:'other'}),'其他地區'],
+    ['politics','issue:other',{kind:'politics',issue:'other'},'其他議題'],
+  ]) {
+    h.message(listing([article({category,analysis:analysisValue})]));
+    choose(h,h.categories,category);
+    const button=h.container.querySelector(`[data-topic="${id}"]`);
+    assert.equal(button.querySelector('.nw-theme-name').textContent,'其他');
+    button.click();
+    assert.equal(h.container.querySelector('.nw-filter > span').textContent,`已篩選：${label}`);
+    button.click(); assert.equal(h.container.querySelector('.nw-filter').hidden,true);
+  }
+});

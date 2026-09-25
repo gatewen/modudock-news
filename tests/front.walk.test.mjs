@@ -105,7 +105,7 @@ function check() {
   if (topicMode && (src || cat)) errs.push(`topic mode with filters src=${src} cat=${cat}`);
   const topicId = topicMode ? pressedTopic[0]?.dataset.topicId : '';
   // expected groups
-  const ns = cat==='world'?'region:':cat==='politics'?'issue:':''; const theme = themeMode ? (pressedTheme[0] || [...topicNames].find(([id,n])=>label==='已篩選：'+n && (ns? id.startsWith(ns): !id.includes(':')))?.[0]) : '';
+  const ns = cat==='world'?'region:':cat==='politics'?'issue:':''; const theme = themeMode ? (pressedTheme[0] || [...topicNames].find(([id,n])=>label==='已篩選：'+(id==='region:other'?'其他地區':id==='issue:other'?'其他議題':n) && (ns? id.startsWith(ns): !id.includes(':')))?.[0]) : '';
   const items = last.items.filter(i => (!src || i.source === src) && (!cat || i.category === cat) && (!topicId || i.topic === topicId)
     && (!theme || topicOf(validAnalysis(i)) === theme));
   const words = JSON.parse(window.localStorage.getItem('modudock.module.news.watch') || '[]');

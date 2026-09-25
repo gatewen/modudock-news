@@ -538,7 +538,9 @@ export default function mount(ctx) {
     panel.hidden = !world && !politics && !financial(categories.value);
     panel.setAttribute("aria-label", politics ? "政治議題分析" : world ? "國際局勢分析" : "財經分析");
     themeFilter.hidden = panel.hidden || !selectedTheme;
-    themeLabel.textContent = selectedTheme ? `已篩選：${topicNames.get(selectedTheme)}` : "";
+    const selectedLabel = selectedTheme === "region:other" ? "其他地區"
+      : selectedTheme === "issue:other" ? "其他議題" : topicNames.get(selectedTheme);
+    themeLabel.textContent = selectedTheme ? `已篩選：${selectedLabel}` : "";
     clearTheme.textContent = "清除篩選";
     describe(clearTheme, "", themeFilter);
     topicSources.hidden = !selectedTopic;
@@ -798,6 +800,9 @@ export default function mount(ctx) {
       && (!sources.value || text(item.source) === sources.value)
       && (!categories.value || text(item.category) === categories.value)
       && (!selectedTopic || item.topic === selectedTopic));
+    // Match the panel's event counts, even when watch-only hides the panel.
+    if (selectedTheme && !groupItems(scoped).some(group =>
+      topicOf(group.reports.map(validAnalysis).find(Boolean)) === selectedTheme)) selectedTheme = "";
     drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
     list.replaceChildren();
     const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
