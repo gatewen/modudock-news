@@ -5,6 +5,7 @@ source_timeout starts when a worker takes a job; queued jobs are bounded by
 round_timeout. stop never joins blocked network workers.
 """
 from collections import OrderedDict, deque
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -95,6 +96,21 @@ class ClassifyResult:
     work: ModelRound | None = None
 
 
+@dataclass(frozen=True)
+class _Lane:
+    name: str
+    jobs: queue.Queue
+    pair: bool
+    fits: Callable
+    call: Callable
+    result_type: type
+    wait_results: bool = False
+
+
+def _items_fit(batch):
+    return len(batch) <= MAX_ITEMS and sum(len(item[1]) + len(item[2]) for item in batch) <= MAX_CHARS
+
+
 class Scheduler:
     def __init__(self, feeds, fetcher, outbox, seq, *, interval=600,
                  source_timeout=30, round_timeout=60, clock=time.monotonic,
@@ -129,6 +145,18 @@ class Scheduler:
         self.analysis_cache = OrderedDict()
         self.analysis_in_flight = set()
         self.classify_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
+        self.lanes = (
+            _Lane('classify', self.classify_jobs, False, _items_fit,
+                  lambda batch: self.classifier.classify(batch), ClassifyResult, True),
+            _Lane('analysis', self.analysis_jobs, False, _items_fit,
+                  lambda batch, **options: self.analyzer.analyze(batch, **options), AnalysisResult),
+            _Lane('events', self.event_jobs, True, pairs_fit,
+                  lambda batch: self.matcher.match(batch), EventResult, True),
+            _Lane('topics', self.topic_jobs, True, topics_fit,
+                  lambda batch: self.topic_matcher.match(batch), TopicResult, True),
+            _Lane('tone', self.tone_jobs, False, _items_fit,
+                  lambda batch: self.tone_client.tone(batch), ToneResult),
+        )
         self.classify_cache = OrderedDict()
         self.in_flight = set()  # Coordinator-owned, including queued work.
         self.last_list = None
@@ -326,76 +354,81 @@ class Scheduler:
             work.logged = True
             del self.model_rounds[round_id]
 
+    def _next_lane(self):
+        return next((lane for lane in self.lanes if not lane.jobs.empty()), None)
+
+    def _take_batch(self, lane, work, first):
+        # Called under cv. Capture analysis kind here, before releasing cv for HTTP.
+        jobs, batch = lane.jobs, [first]
+        kind = None
+        if lane.name == 'analysis':
+            kind = analysis_kind(self.classify_cache.get(first[0], ""))
+            # Leave other kinds in their original positions/order.
+            # cv owns admission; the queue mutex protects its storage.
+            with jobs.mutex:
+                index = 0
+                while index < len(jobs.queue) and len(batch) < MAX_ITEMS:
+                    next_work, next_item = jobs.queue[index]
+                    if next_work is not work:
+                        break
+                    if analysis_kind(self.classify_cache.get(next_item[0], "")) != kind:
+                        index += 1
+                        continue
+                    if not lane.fits(batch + [next_item]):
+                        break
+                    batch.append(next_item)
+                    del jobs.queue[index]
+                jobs.not_full.notify_all()
+        else:
+            while not jobs.empty() and (lane.pair or len(batch) < MAX_ITEMS):
+                with jobs.mutex:
+                    next_work, next_item = jobs.queue[0]
+                if next_work is not work or not lane.fits(batch + [next_item]):
+                    break
+                batch.append(jobs.get_nowait()[1])
+        return batch, kind
+
+    def _call(self, lane, batch, kind=None):
+        if lane.name == 'analysis':
+            return lane.call(batch, kind=kind)
+        return lane.call(batch)
+
+    def _to_result(self, lane, work, batch, result):
+        keys = tuple(pair.key for pair in batch) if lane.pair else tuple(key for key, _, _ in batch)
+        if lane.result_type is ClassifyResult:
+            return lane.result_type(result or {}, keys, work.round_id, tuple(batch), work)
+        return lane.result_type(result or {}, keys, work.round_id)
+
     def _classify_worker(self):
         # Reconsider priority at every HTTP batch boundary. In-flight HTTP is
         # not preemptible. Queue/results/work references all remain bounded.
+        waiting_types = tuple(lane.result_type for lane in self.lanes if lane.wait_results)
         while True:
             with self.cv:
                 self._finish_model_rounds()
                 while not self.stopping and (
-                    (self.classify_jobs.empty() and self.analysis_jobs.empty() and self.event_jobs.empty() and self.topic_jobs.empty() and self.tone_jobs.empty())
-                    or any(isinstance(result, (ClassifyResult, EventResult, TopicResult)) for result in self.results)
+                    self._next_lane() is None
+                    or any(isinstance(result, waiting_types) for result in self.results)
                 ):
                     self.cv.wait()
                 if self.stopping:
                     return
-                jobs = (self.classify_jobs if not self.classify_jobs.empty() else
-                        self.analysis_jobs if not self.analysis_jobs.empty() else
-                        self.event_jobs if not self.event_jobs.empty() else
-                        self.topic_jobs if not self.topic_jobs.empty() else self.tone_jobs)
-                toning = jobs is self.tone_jobs
-                topic_matching = jobs is self.topic_jobs
-                matching = jobs is self.event_jobs
-                analyzing = jobs is self.analysis_jobs
-                work, item = jobs.get_nowait()
-                kind = analysis_kind(self.classify_cache.get(item[0], "")) if analyzing else None
-                batch = [item]
-                chars = 0 if matching or topic_matching else len(item[1]) + len(item[2])
-                if analyzing:
-                    # Leave other kinds in their original positions/order.
-                    # cv owns admission; the queue mutex protects its storage.
-                    with jobs.mutex:
-                        index = 0
-                        while index < len(jobs.queue) and len(batch) < MAX_ITEMS:
-                            next_work, next_item = jobs.queue[index]
-                            if next_work is not work:
-                                break
-                            if analysis_kind(self.classify_cache.get(next_item[0], "")) != kind:
-                                index += 1
-                                continue
-                            size = len(next_item[1]) + len(next_item[2])
-                            if chars + size > MAX_CHARS:
-                                break
-                            batch.append(next_item)
-                            chars += size
-                            del jobs.queue[index]
-                        jobs.not_full.notify_all()
-                while not analyzing and not jobs.empty() and (matching or topic_matching or len(batch) < MAX_ITEMS):
-                    with jobs.mutex:
-                        next_work, next_item = jobs.queue[0]
-                    size = 0 if matching or topic_matching else len(next_item[1]) + len(next_item[2])
-                    if (next_work is not work
-                            or (matching and not pairs_fit(batch + [next_item]))
-                            or (topic_matching and not topics_fit(batch + [next_item]))
-                            or chars + size > MAX_CHARS):
-                        break
-                    batch.append(jobs.get_nowait()[1])
-                    chars += size
+                lane = self._next_lane()
+                work, item = lane.jobs.get_nowait()
+                batch, kind = self._take_batch(lane, work, item)
                 if work.deadline is None:
                     work.deadline = self.model_clock() + self.model_budget
                 allowed = self._classify_enabled() and not work.failed and self.model_clock() < work.deadline
                 if allowed:
-                    label = 'tone' if toning else 'topics' if topic_matching else 'events' if matching else 'analysis' if analyzing else 'classify'
                     if work.started is None:
                         work.started = self.model_clock()
-                    work.requests[label] += 1
+                    work.requests[lane.name] += 1
                     work.running = True
                     self.model_rounds[work.round_id] = work
             result = None
             if allowed:
                 try:
-                    result = (self.tone_client.tone(batch) if toning else self.topic_matcher.match(batch) if topic_matching else self.matcher.match(batch) if matching else
-                              self.analyzer.analyze(batch, kind=kind) if analyzing else self.classifier.classify(batch))
+                    result = self._call(lane, batch, kind)
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
             with self.cv:
@@ -405,17 +438,7 @@ class Scheduler:
                     work.failures += 1
                 if result is None:
                     work.failed = True
-            keys = tuple(pair.key for pair in batch) if matching or topic_matching else tuple(key for key, _, _ in batch)
-            if toning:
-                candidate = ToneResult(result or {}, keys, work.round_id)
-            elif topic_matching:
-                candidate = TopicResult(result or {}, keys, work.round_id)
-            elif matching:
-                candidate = EventResult(result or {}, keys, work.round_id)
-            elif analyzing:
-                candidate = AnalysisResult(result or {}, keys, work.round_id)
-            else:
-                candidate = ClassifyResult(result or {}, keys, work.round_id, tuple(batch), work)
+            candidate = self._to_result(lane, work, batch, result)
             if not self._submit_classification(candidate):
                 return
 

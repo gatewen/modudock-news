@@ -1114,3 +1114,16 @@ cx-mod 以「每天早上看 3 分鐘的使用者」走查提出 5 項（皆不�
 - 保險：30 秒內沒有新 `at` 也恢復（避免後端忙或失敗時按鈕永遠卡住），並在狀態列顯示「更新未完成，稍後自動重試」直到下一份列表到來。
 - unmount 時清掉計時器。
 - 驗收：前半測試（按下後狀態、新 at 恢復、同 at 不恢復、30 秒逾時恢復與提示、unmount 清計時器）；真殼截圖由 cc-mod 審。
+
+### 18.29 第 29 輪（後半模型工作迴圈結構整理，行為不變）
+
+第 28 輪結果：重新整理的即時回饋（真殼 1.8 秒恢復）。
+**動機**：`_classify_worker` 以 5 個布林旗標（toning/topic_matching/matching/analyzing）與多層三元運算式分派 5 種工作；第 12 輪的「基調搶在話題前」即出在這段的等待條件。可讀性差、易藏優先序錯誤。
+
+**R29-A 以「工作線路表」取代旗標**
+- 新增內部 dataclass `_Lane`（name、jobs 佇列、pair 型或 item 型、批次規則、呼叫函式、結果類別、是否要等待未接收結果）；`self.lanes` 依優先序列出 classify、analysis、events、topics、tone。
+- `_classify_worker` 拆成：`_next_lane()`（依序取第一個非空佇列）、`_take_batch(lane, work, first)`（沿用各自既有的批次規則：analysis 的同 kind 掃描、events/topics 的 fits、其他的 MAX_ITEMS/MAX_CHARS）、`_call(lane, batch)`、`_to_result(lane, ...)`。
+- 等待條件改為「有任何 lane 標記需要等待的未接收結果」（等同目前的 Classify/Event/Topic）。
+- `work.requests` 的鍵沿用 lane.name。
+- **不改任何行為**：優先序、批次內容與大小、預算、失敗語意、log 字串、統計行格式都不變。
+- 驗收：Python 全套測試數不變全綠；cc-mod 重跑後半變異掃描（目標字串若搬移需對應更新）；真實滿額跑的 `model round=` 統計各類請求數與改版前在同一時段的量級一致、所有 pending 歸零、總時間相當。
