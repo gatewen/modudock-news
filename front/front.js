@@ -105,6 +105,7 @@ export default function mount(ctx) {
   status.setAttribute("role", "status");
   status.textContent = "等待模組就緒";
   const list = make("ul", "nw-list");
+  list.tabIndex = -1;
   const empty = make("div", "nw-empty");
   const emptyText = make("span", "", "正在取得新聞");
   const clearAll = make("button", "", "清除篩選");
@@ -612,9 +613,10 @@ export default function mount(ctx) {
     drawItems();
   }
   function returnToView(automatic = false) {
+    const focusWasInside = root.contains(document.activeElement);
     const currentFocus = focusIdentity(document.activeElement);
-    const restorePosition = !automatic || root.contains(document.activeElement)
-      || document.activeElement === document.body;
+    // Mouse readers usually have focus on body; they still expect their scroll back.
+    const restorePosition = !automatic || focusWasInside || document.activeElement === document.body;
     const saved = savedView;
     savedView = null;
     selectedTopic = "";
@@ -630,7 +632,8 @@ export default function mount(ctx) {
       drawItems(false);
     }
     if (saved && restorePosition) {
-      if (!restoreFocus(saved.focus) && automatic) restoreFocus(currentFocus);
+      const restored = restoreFocus(saved.focus) || (automatic && restoreFocus(currentFocus));
+      if (!restored && focusWasInside) list.focus({preventScroll: true});
       if (saved.scroller?.isConnected) saved.scroller.scrollTop = saved.scrollTop;
     }
   }
@@ -715,6 +718,7 @@ export default function mount(ctx) {
     return Boolean(target);
   }
   function drawItems(keepFocus = true) {
+    const focusWasInside = keepFocus && root.contains(document.activeElement);
     const focused = keepFocus ? focusIdentity(document.activeElement) : null;
     const sourceItems = items.filter(item => item && typeof item === "object"
       && (!sources.value || text(item.source) === sources.value));
@@ -829,7 +833,8 @@ export default function mount(ctx) {
     empty.hidden = groups.length > 0;
     emptyText.textContent = received ? "這個條件下沒有新聞" : "正在取得新聞";
     clearAll.hidden = !received;
-    restoreFocus(focused);
+    if (!restoreFocus(focused) && focusWasInside && !root.contains(document.activeElement))
+      list.focus({preventScroll: true});
   }
   function onClearAll() {
     savedView = null;

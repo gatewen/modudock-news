@@ -1446,7 +1446,7 @@ test('removed focus identity never focuses a different event with the same href 
     calls.push(this); return original.call(this, options);
   });
   assert.doesNotThrow(() => h.message(listing(reports.slice(3))));
-  assert.equal(calls.length, 0); // Same link belongs to a different event.
+  assert.deepEqual(calls, [h.container.querySelector('.nw-list')]); // Never choose another event's link.
   assert.notEqual(h.window.document.activeElement, h.container.querySelector('.nw-list a.nw-title'));
   const outside = h.window.document.createElement('button');
   h.window.document.body.append(outside); outside.focus(); calls.length = 0;
@@ -1830,7 +1830,7 @@ test('merged focused report follows unique href and opens its new group with syn
   const calls = [];
   t.mock.method(h.window.HTMLElement.prototype, 'focus', function() { calls.push(this); });
   h.message(listing([a]));
-  assert.equal(calls.length, 0); // Removed report must not send focus to its former representative.
+  assert.deepEqual(calls, [h.container.querySelector('.nw-list')]); // Never choose its former representative.
 });
 
 test('focus href fallback refuses ambiguous links after event identity changes', t => {
@@ -1840,7 +1840,7 @@ test('focus href fallback refuses ambiguous links after event identity changes',
   const calls = [];
   t.mock.method(h.window.HTMLElement.prototype, 'focus', function() { calls.push(this); });
   h.message(listing([eventStory('222222222222', '甲', 8, {link}), eventStory('333333333333', '乙', 9, {link})]));
-  assert.equal(calls.length, 0);
+  assert.deepEqual(calls, [h.container.querySelector('.nw-list')]);
 });
 
 test('stale instance unmount cannot overwrite newer lastSeen saved by another instance', t => {
@@ -2313,7 +2313,7 @@ test('return skips removed source and theme options and tolerates vanished focus
   h.container.querySelector('.nw-filter button').click();
   assert.equal(h.select.value,''); assert.equal(h.categories.value,'finance');
   assert.equal(h.container.querySelector('.nw-filter').hidden,true);
-  assert.equal(mainRows(h).length,1); assert.equal(calls.length,0);
+  assert.equal(mainRows(h).length,1); assert.deepEqual(calls,[h.container.querySelector('.nw-list')]);
 });
 
 test('category and political issue tags add information only in appropriate views', t => {
@@ -2659,3 +2659,54 @@ test('paused waiting explains next update and validates reason without retaining
     assert.match(status.textContent, reason === 'waiting' ? /整理暫停，等待下次更新/ : /整理暫停，下次更新繼續/);
   }
 });
+
+test('topic and original link disappearing falls back to the list without scrolling', t => {
+  const h = setup(t), id = topicRecord().id;
+  h.message(topicListing([article({topic:id, link:'https://e.com/gone'})]));
+  focusTopicButtons(h)[0].focus();
+  focusTopicButtons(h)[0].click();
+  h.container.querySelector('.nw-list a').focus();
+  const list = h.container.querySelector('.nw-list');
+  const calls = [], original = list.focus;
+  t.mock.method(list, 'focus', function(options) { calls.push(options); return original.call(this, options); });
+  h.message(listing([article({link:'https://e.com/replacement'})]));
+  assert.equal(list.getAttribute('tabindex'), '-1');
+  assert.equal(h.window.document.activeElement, list);
+  assert.deepEqual(calls, [{preventScroll:true}]);
+});
+
+test('ordinary replacement falls back to the list for a removed focused report, including empty lists', t => {
+  const h = setup(t);
+  for (const replacement of [[], [article({link:'https://e.com/new'})]]) {
+    h.message(listing([article({link:'https://e.com/old'})]));
+    h.container.querySelector('.nw-list a').focus();
+    h.message(listing(replacement));
+    assert.equal(h.window.document.activeElement, h.container.querySelector('.nw-list'));
+  }
+  h.select.focus();
+  h.message(listing([]));
+  assert.equal(h.window.document.activeElement, h.select); // A surviving control is not displaced.
+});
+
+for (const outside of ['input', 'body']) {
+  test(`replacement and automatic return do not steal ${outside} focus for the fallback`, t => {
+    const h = setup(t), id = topicRecord().id;
+    const target = outside === 'body' ? h.window.document.body : h.window.document.createElement('input');
+    if (outside === 'input') h.window.document.body.append(target);
+    else target.tabIndex = -1;
+    h.container.style.overflowY = 'auto';
+    Object.defineProperties(h.container, {scrollHeight:{value:2000},clientHeight:{value:200}});
+    h.message(topicListing([article({topic:id,link:'https://e.com/gone'})]));
+    h.container.scrollTop = 1200;
+    focusTopicButtons(h)[0].focus(); focusTopicButtons(h)[0].click();
+    h.container.scrollTop = 300;
+    target.focus();
+    h.message(listing([]));
+    assert.equal(h.window.document.activeElement, target);
+    // §18.25 R25-4: body focus (typical for mouse readers) still gets the saved scroll back;
+    // focus inside another control does not.
+    assert.equal(h.container.scrollTop, outside === 'body' ? 1200 : 300);
+    h.message(listing([article()]));
+    assert.equal(h.window.document.activeElement, target);
+  });
+}
