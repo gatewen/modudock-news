@@ -1499,3 +1499,14 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 4. 每個 round 的統計行最多一行；
 5. 所有 worker 執行緒在 stop 後結束（或只因假網路阻塞而存活）。
 - 全套測試時間增加 ≤10 秒；失敗時印出 seed 以便重現。只加測試；若測試抓到真問題，先回報 cc-mod 再修。
+
+### 18.48 第 48 輪（前半通盤審查：跨功能狀態）
+
+第 47 輪結果：後半隨機故障注入測試（變異：拿掉在途去重 → 53 組失敗）。最後耐久 22 分鐘三輪正常。
+**前半通盤審查（agent，00:5x）**：80 seed × 800 步隨機狀態漫步全部不變條件成立；定向重現 3 條中度（scratchpad/tb.mjs、ta.mjs、ta2.mjs；漫步腳本 walk.mjs）。
+
+**R48-1 事件 id 變動時沿用展開／摘要狀態與焦點**：`renderList` 清理前，以上一份 items 建立 link→舊 event 對照，依共有成員把 `expanded`／`summaries` 的舊 id 換成新 id；`focusIdentity` 對 `.nw-expand`／`.nw-summary-toggle` 另記該列代表 href，`restoreFocus` 找不到時依 href 找所在列的同類按鈕。
+**R48-2 延後的類別不得套進話題檢視**：恢復類別時若在話題檢視（selectedTopic 或 savedView 存在），寫進 `savedView.category` 而不改 `categories.value`；`returnToView` 讓待恢復值優先於 saved.category。
+**R48-3 清除篩選取消待恢復**：`onClearAll` 刪除 `initialView.category` 與 `.source`（只影響本次，不寫 localStorage）。
+**R48-4 前半隨機狀態漫步進 repo**：把 walk.mjs 改寫為 `tests/front.walk.test.mjs`（固定 seed、預設 20 seed × 300 步，環境變數可調），斷言審查使用的不變條件；失敗時印 seed。
+- 驗收：三條各一測試（改寫審查腳本）；漫步測試全綠且總時間增加 ≤10 秒。

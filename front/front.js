@@ -667,7 +667,9 @@ export default function mount(ctx) {
     selectedTopic = "";
     if (saved) {
       sources.value = [...sources.options].some(option => option.value === saved.source) ? saved.source : "";
-      categories.value = [...categories.options].some(option => option.value === saved.category) ? saved.category : "";
+      const category = typeof initialView.category === "string" && items.some(item => categoryNames.has(text(item?.category)))
+        ? initialView.category : saved.category;
+      categories.value = [...categories.options].some(option => option.value === category) ? category : "";
       selectedTheme = saved.theme;
       onlyWatched = saved.watched && trackedWords.length > 0;
     }
@@ -742,7 +744,9 @@ export default function mount(ctx) {
     for (const [selector, attribute] of [[".nw-list .nw-summary-toggle", "summary"], [".nw-list .nw-expand", "event"],
       [".nw-focus-count[data-event]", "event"], [".nw-focus-count[data-topic-id]", "topicId"],
       [".nw-theme[data-topic]", "topic"]]) {
-      if (node.matches(selector)) return {selector, attribute, value: node.dataset[attribute]};
+      if (node.matches(selector)) return {selector, attribute, value: node.dataset[attribute],
+        rowHref: node.matches(".nw-expand, .nw-summary-toggle")
+          ? node.closest(".nw-row")?.querySelector("a.nw-title")?.href : undefined};
     }
     return null;
   }
@@ -761,6 +765,11 @@ export default function mount(ctx) {
     if (!target && identity.href !== undefined) {
       const matches = [...list.querySelectorAll("a")].filter(node => node.href === identity.href);
       if (matches.length === 1) target = matches[0];
+    }
+    if (!target && identity.rowHref) {
+      const matches = [...list.querySelectorAll("a")].filter(node => node.href === identity.rowHref);
+      if (matches.length === 1)
+        target = matches[0].closest(".nw-row").querySelector(identity.attribute === "event" ? ".nw-expand" : ".nw-summary-toggle");
     }
     const reports = target?.closest(".nw-reports");
     if (reports?.hidden) {
@@ -897,6 +906,8 @@ export default function mount(ctx) {
       list.focus({preventScroll: true});
   }
   function onClearAll() {
+    delete initialView.category;
+    delete initialView.source;
     savedView = null;
     sources.value = "";
     categories.value = "";
@@ -913,7 +924,25 @@ export default function mount(ctx) {
     modelState = body.model && typeof body.model === "object" && ["working", "paused", "done", "off"].includes(body.model.state)
       ? body.model.state : "";
     received = true;
+    const previousEvents = new Map();
+    for (const item of items) {
+      if (!text(item?.link) || !eventId(item)) continue;
+      const ids = previousEvents.get(item.link) || new Set();
+      ids.add(eventId(item));
+      previousEvents.set(item.link, ids);
+    }
+    const wasExpanded = new Set(expanded), hadSummary = new Set(summaries);
     items = Array.isArray(body.items) ? body.items : [];
+    // Transfer by shared reports before pruning old IDs. Snapshots avoid
+    // cascading transfers when several old groups merge or split together.
+    for (const item of items) {
+      const id = item && typeof item === "object" ? eventId(item) : null;
+      if (!id) continue;
+      for (const old of previousEvents.get(text(item.link)) || []) {
+        if (wasExpanded.has(old)) expanded.add(id);
+        if (hadSummary.has(`event:${old}`)) summaries.add(`event:${id}`);
+      }
+    }
     // Use the full current list, before filters or event folding.
     dateOnlySources.clear();
     const sourceTimes = new Map();
@@ -972,8 +1001,11 @@ export default function mount(ctx) {
     delete initialView.source; // Source restoration belongs to the first list only.
     if (body.classify?.enabled === false) delete initialView.category;
     else if (items.some(item => categoryNames.has(text(item?.category)))) {
-      if (typeof initialView.category === "string" && [...categories.options].some(option => option.value === initialView.category))
-        categories.value = initialView.category;
+      if (typeof initialView.category === "string" && [...categories.options].some(option => option.value === initialView.category)) {
+        if (selectedTopic || savedView) {
+          if (savedView) savedView.category = initialView.category;
+        } else categories.value = initialView.category;
+      }
       delete initialView.category;
     }
     const failed = records.filter(source => source?.ok === false);

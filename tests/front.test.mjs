@@ -771,7 +771,8 @@ test('expanded event survives same-at replacement, representative change and fil
   choose(h, h.select, '甲');
   assert.equal(h.container.querySelector('.nw-reports').hidden, false);
   h.message(listing(items.map(item => ({...item, event: '000000000004'}))));
-  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'), 'false');
+  // R48: the same reports keep expansion even when their event root changes.
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'), 'true');
 });
 
 test('panel counts events and takes earliest valid analysis while retaining report and source counts', t => {
@@ -3175,3 +3176,62 @@ test('manual view changes merge only that field with stored preferences during t
       ? {source:'乙',category:'tech'} : {source:'甲',category:'finance'});
   }
 });
+
+test('event root changes transfer expansion summary and either action focus by shared report', t => {
+  for(const action of ['.nw-expand','.nw-summary-toggle']) {
+    const h=setup(t), old='bbbbbbbbbbbb', next='aaaaaaaaaaaa';
+    const reports=[article({event:old,event_size:2,link:'https://e/1',published:localStamp(25,9)}),
+      article({event:old,event_size:2,link:'https://e/2',published:localStamp(25,10)})];
+    h.message(listing(reports));
+    h.container.querySelector('.nw-expand').click(); h.container.querySelector('.nw-summary-toggle').click();
+    h.container.querySelector(action).focus();
+    h.message(listing([...reports.map(i=>({...i,event:next,event_size:3})),
+      article({event:next,event_size:3,link:'https://e/earlier',published:localStamp(25,8)})]));
+    const row=mainRows(h)[0];
+    assert.equal(row.dataset.event,next);
+    assert.equal(row.querySelector('.nw-expand').getAttribute('aria-expanded'),'true');
+    assert.equal(row.querySelector('.nw-summary-toggle').getAttribute('aria-expanded'),'true');
+    assert.equal(row.querySelector('.nw-reports').hidden,false);
+    assert.equal(row.querySelector('.nw-summary').hidden,false);
+    assert.ok(h.window.document.activeElement === row.querySelector(action), `focus must follow ${action}, got ${h.window.document.activeElement.className}`);
+    // Reusing an old ID without a shared report must not resurrect old state.
+    h.message(listing([article({event:old,event_size:2,link:'https://e/unrelated'}),
+      article({event:old,event_size:2,link:'https://e/unrelated2'})]));
+    assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),'false');
+    assert.equal(h.container.querySelector('.nw-summary-toggle').getAttribute('aria-expanded'),'false');
+  }
+});
+
+test('deferred category stays out of topic and survives manual or automatic return', t => {
+  for(const exit of ['return','disappear','before-classification']) {
+    const h=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify({source:'',category:'finance'})));
+    const topic=topicRecord(), raw=topicListing([article({topic:topic.id,category:''})]);
+    h.message(raw); focusTopicButtons(h)[0].click();
+    if(exit==='before-classification') h.container.querySelector('.nw-filter button').click();
+    const body={...raw,items:[worldArticle({topic:topic.id})],
+      ...(exit==='disappear' ? {topics:{list:[]}} : {})};
+    h.message(body);
+    if(exit==='return') {
+      assert.equal(h.categories.value,''); assert.equal(mainRows(h).length,1);
+      assert.equal(h.container.querySelector('.nw-filter').hidden,false);
+      h.container.querySelector('.nw-filter button').click();
+    }
+    assert.equal(h.categories.value,'finance');
+    h.message(body); assert.equal(h.categories.value,'finance');
+  }
+});
+
+test('clear all cancels deferred view for this mount without overwriting storage', t => {
+  const saved=JSON.stringify({source:'乙',category:'finance'});
+  const h=setup(t,w=>w.localStorage.setItem(viewKey,saved));
+  h.message(listing([article({category:''})]));
+  assert.equal(mainRows(h).length,0);
+  h.container.querySelector('.nw-empty button').click();
+  h.message(listing([financeArticle()]));
+  assert.equal(h.select.value,''); assert.equal(h.categories.value,'');
+  assert.equal(mainRows(h).length,1);
+  assert.equal(h.window.localStorage.getItem(viewKey),saved);
+});
+
+// Include the walk suite in npm test without changing the package script.
+import './front.walk.test.mjs';
