@@ -2,6 +2,7 @@ from copy import deepcopy
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from back.classify import Classifier
 from back.analyze import Analyzer
@@ -24,7 +25,7 @@ class TopicSchedulerTests(unittest.TestCase):
         for s in self.schedulers: s.stop()
         for gate in self.gates: gate.set()
         for s in self.schedulers:
-            for thread in s.workers + [s.coordinator] + ([s.classify_worker] if s.classify_worker else []):
+            for thread in s.workers + [s.coordinator] + s.classify_workers:
                 if thread.ident is not None:
                     thread.join(2)
                     self.assertFalse(thread.is_alive())
@@ -202,6 +203,7 @@ class TopicSchedulerTests(unittest.TestCase):
             self.assertEqual([i['link'] for i in second['body']['items']], before)
             self.assertLessEqual(len(packet_bytes(second)), MAX_PACKET)
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_topic_failure_releases_remaining_batches_and_next_round_can_retry(self):
         title = ' '.join(f'TERM{i}' for i in range(10))
         seeds = [story(f's{i}', title, source) for i,source in enumerate('ABC')]

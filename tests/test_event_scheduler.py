@@ -6,6 +6,7 @@ from pathlib import Path
 import queue
 import threading
 import unittest
+from unittest.mock import patch
 
 from back.analyze import Analyzer
 from back.classify import Classifier
@@ -41,8 +42,7 @@ class EventSchedulerTests(unittest.TestCase):
             gate.set()
         for scheduler in self.schedulers:
             threads = scheduler.workers + [scheduler.coordinator]
-            if scheduler.classify_worker:
-                threads.append(scheduler.classify_worker)
+            threads.extend(scheduler.classify_workers)
             for thread in threads:
                 if thread.ident is not None:
                     thread.join(timeout=2)
@@ -81,7 +81,7 @@ class EventSchedulerTests(unittest.TestCase):
         scheduler, sink, _ = self.make(items)
         scheduler.start()
         body = self.round(sink)
-        self.assertIsNone(scheduler.classify_worker)
+        self.assertEqual(scheduler.classify_workers, [])
         self.assertEqual(body['events'], {'pending': 0})
         self.assertEqual(sorted(i['event_size'] for i in body['items']), [1, 2, 2])
         for item in body['items']:
@@ -153,6 +153,7 @@ class EventSchedulerTests(unittest.TestCase):
         self.assertNotIn(frozenset(('bad', 'value')), scheduler.event_cache)
         self.assertIs(scheduler.event_cache[frozenset(('x', 'y'))], False)
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_pair_priority_below_classification_above_analysis_at_batch_boundary(self):
         gate, entered = self.gate(), threading.Event()
         def respond(payload, n, _):
@@ -222,8 +223,10 @@ class EventSchedulerTests(unittest.TestCase):
                 self.assertTrue(all(not c.enabled for c in clients.values()))
                 with scheduler.cv:
                     self.assertEqual(scheduler.last_list['body']['events']['pending'], 0)
-                self.assertEqual([kind(p) for _, _, p in received][-1], stage)
+                # Other requests admitted before authentication failed may finish later.
+                self.assertIn(stage, [kind(p) for _, _, p in received])
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_shared_budget_classify_pair_analysis_and_remaining_work_next_round(self):
         now = [0]
         def respond(payload, *_):
@@ -292,6 +295,12 @@ class EventSchedulerTests(unittest.TestCase):
         self.assertEqual(len(items), MAX_ITEMS_LIST)
         with server(response) as (url, received):
             scheduler, sink, _ = self.make(items, self.clients(url), cached=False)
+            admissions = []
+            take_batch = scheduler._take_batch
+            def record_admission(lane, work, first):
+                admissions.append(lane.name)  # Called under cv, before concurrent HTTP starts.
+                return take_batch(lane, work, first)
+            scheduler._take_batch = record_admission
             scheduler.start()
             first = self.round(sink)
             self.assertEqual(len(first['items']), MAX_ITEMS_LIST)
@@ -307,7 +316,8 @@ class EventSchedulerTests(unittest.TestCase):
             self.assertEqual(final['analysis']['pending'], 0)
             self.assertEqual(len(final['items']), MAX_ITEMS_LIST)
             stages = [kind(p) for _, _, p in received]
-            self.assertEqual(stages, sorted(stages, key=['classify', 'events', 'analysis'].index))
+            self.assertEqual(admissions, sorted(admissions, key=['classify', 'events', 'analysis'].index))
+            self.assertCountEqual(stages, admissions)  # HTTP arrival order can differ from admission order.
             while not sink.packets.empty():
                 packet = sink.packets.get_nowait()
                 self.assertEqual(packet['t'], 'msg')
@@ -325,6 +335,7 @@ class EventSchedulerTests(unittest.TestCase):
         self.assertTrue(scheduler.event_jobs.empty())
         self.assertFalse(scheduler.event_in_flight)
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_snapshot_budget_leaves_pairs_then_next_round_reduces_pending(self):
         items = json.loads((Path(__file__).parent / 'fixtures/events-300-2026-09-24.json').read_text())
         now = [0]

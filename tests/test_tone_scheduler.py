@@ -2,6 +2,7 @@ from copy import deepcopy
 import threading
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from back.scheduler import Scheduler, ModelRound, ToneResult, EventResult
 from back.topics import ToneClient, TopicPair
@@ -62,7 +63,7 @@ class ToneSchedulerTests(unittest.TestCase):
                     return wait(timeout)
                 s.cv.wait = observed_wait
                 # Drive coordinator acceptance explicitly, so the race is deterministic.
-                s.classify_worker.start()
+                s.classify_workers[0].start()
                 self.assertTrue(yielded.wait(2))
                 with s.cv:
                     self.assertEqual(calls, ['events'])
@@ -82,6 +83,7 @@ class ToneSchedulerTests(unittest.TestCase):
                 self.assertEqual(s.model_work.failed, fail)
                 s.stop()
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_topic_members_all_categories_only_once_after_topics_and_resend_counts_reports(self):
         items, _ = snapshot([story('one','ALPHA BETA'), story('two','BETA DELTA')])
         kinds = []

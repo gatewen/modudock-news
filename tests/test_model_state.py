@@ -37,8 +37,16 @@ class ModelStateTests(unittest.TestCase):
                     eventually(lambda: not (s.topic_in_flight or s.tone_in_flight))
                     while not sink.packets.empty(): sink.packets.get_nowait()
                     s.refresh()
+                    # An acknowledged old result may still be serializing a
+                    # resend. The new round's publish fences its initial list.
+                    while True:
+                        packet = sink.packets.get(timeout=3)
+                        if packet['t'] == 'publish':
+                            break
+                        current = packet
+                    self.assertEqual(current['body']['model']['state'], 'working')
                     eventually(lambda: s.completed == 2 and s.last_list['body']['model']['state'] == 'done', timeout=3)
-                    states = []
+                    states = [current['body']['model']['state']]
                     while not sink.packets.empty():
                         packet = sink.packets.get_nowait()
                         if packet['t'] == 'msg': states.append(packet['body']['model']['state'])

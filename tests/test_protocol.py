@@ -334,9 +334,13 @@ class ProtocolTests(unittest.TestCase):
             self.assertTrue(all(len(i['event']) == 12 and i['event_size'] == 1 for i in initial['body']['items']))
             self.assertEqual(publish['t'], 'publish')
             self.assertTrue(entered.wait(2))
-            self.assertEqual([kind(p) for _, _, p in received], ['classify', 'events'])
-            # Drain the classification update before bye; analysis waits for events.
-            self.packet()
+            # Other workers finish classification/analysis while the event HTTP
+            # request remains blocked. Drain their updates before checking bye.
+            while True:
+                update = self.packet()['body']
+                if update['classify']['pending'] == 0 and update['analysis']['pending'] == 0:
+                    break
+            self.assertCountEqual([kind(p) for _, _, p in received], ['classify', 'events', 'analysis'])
             started = time.monotonic()
             self.send('bye')
             self.exited(started)

@@ -6,6 +6,7 @@ import queue
 import threading
 import time
 import unittest
+from unittest.mock import patch
 
 from back.feedparse import MAX_ITEMS_LIST
 from back.fetch import Result
@@ -54,7 +55,9 @@ class SchedulerTests(unittest.TestCase):
         for gate in self.gates:
             gate.set()
         for scheduler in self.schedulers:
-            for thread in scheduler.workers + [scheduler.coordinator] + ([scheduler.classify_worker] if scheduler.classify_worker else []):
+            for thread in scheduler.workers + [scheduler.coordinator] + scheduler.classify_workers:
+                if thread.ident is None:
+                    continue
                 thread.join(timeout=2)
                 self.assertFalse(thread.is_alive())
 
@@ -388,6 +391,7 @@ class ClassificationSchedulerTests(unittest.TestCase):
         with scheduler.cv:
             return dict(scheduler.classify_cache)
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_first_list_publish_then_each_batch_resends_without_publish(self):
         from tests.test_classify import server, answers
         first, second = self.gate(), self.gate()
@@ -555,13 +559,14 @@ class ClassificationSchedulerTests(unittest.TestCase):
                 scheduler.start()
                 body = self.round(sink)
                 self.assertEqual(threading.active_count(), before + 5)  # Four fetch + coordinator.
-                self.assertIsNone(scheduler.classify_worker)
+                self.assertEqual(scheduler.classify_workers, [])
                 self.assertEqual(body["classify"], {"enabled": False, "pending": 0})
                 self.assertEqual(body["items"][0]["category"], "")
                 scheduler.stop()
                 for thread in scheduler.workers + [scheduler.coordinator]:
                     thread.join(1)
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_queue_list_limit_nonblocking_and_inflight_dedup_queued_and_processing(self):
         from tests.test_classify import server, answers
         gate, entered = self.gate(), threading.Event()
@@ -585,8 +590,8 @@ class ClassificationSchedulerTests(unittest.TestCase):
                 self.assertTrue(entered.wait(1))
                 # Server adds one handler thread in addition to our six.
                 self.assertEqual(threading.active_count(), before + 7)
-                self.assertEqual(scheduler.classify_worker.name, "news-classify")
-                self.assertTrue(scheduler.classify_worker.daemon)
+                self.assertEqual(scheduler.classify_workers[0].name, "news-classify-1")
+                self.assertTrue(scheduler.classify_workers[0].daemon)
                 for n, (value, queued, flying) in enumerate([
                     (("a", 1), 0, 1),     # Already processing.
                     (("b", 100), 100, 101),
@@ -887,6 +892,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             self.assertEqual(len(self.cache(scheduler)), 4000)
             self.assertNotIn('key-0', self.cache(scheduler))
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_analysis_failure_releases_all_keys_and_stops_round_then_retries(self):
         from tests.test_classify import server
         attempts = []
@@ -980,6 +986,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
                 agate.set()
                 fgate.set()
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_classification_preempts_remaining_analysis_at_batch_boundary(self):
         from tests.test_classify import server
         gate, entered = self.gate(), threading.Event()
@@ -1011,6 +1018,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             finally:
                 gate.set()
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_shared_budget_40_seconds_classify_20_analyze_no_third_request(self):
         from tests.test_classify import server
         now = [0]
@@ -1056,6 +1064,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             self.assertEqual(self.next_analysis(sink)['analysis']['pending'], 0)
             self.assertEqual(len(received), 2)
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_classification_failure_also_stops_cached_analysis_same_round(self):
         from tests.test_classify import server
         with server(lambda p, n, _: (500, {}, {}) if n == 1 else (200, model_answers(p), {})) as (url, received):
@@ -1072,6 +1081,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             eventually(lambda: len(self.cache(scheduler)) == 2)
             self.assertGreaterEqual(len(received), 3)
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_analysis_queue_bounded_and_deduplicates_queued_processing_keys(self):
         from tests.test_classify import server
         gate, entered = self.gate(), threading.Event()

@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 from back.scheduler import Scheduler, ModelRound
 from back.events import Pair
@@ -16,6 +17,7 @@ class ModelStatsTests(unittest.TestCase):
     tearDown = tone_helpers.ToneSchedulerTests.tearDown
     make = tone_helpers.ToneSchedulerTests.make
 
+    @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_snowball_round_logs_once_after_all_results_and_cache_only_round_is_silent(self):
         items, _ = snapshot([story('one', 'ALPHA BETA'), story('two', 'BETA DELTA')])
         def respond(payload, *_):

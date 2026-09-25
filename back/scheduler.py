@@ -29,6 +29,9 @@ else:
     from topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 
 
+MODEL_WORKERS = 3
+
+
 @dataclass
 class Cache:
     items: list = field(default_factory=list)
@@ -54,7 +57,7 @@ class ModelRound:
     requests: dict = field(default_factory=lambda: dict.fromkeys(('classify', 'analysis', 'events', 'topics', 'tone'), 0))
     failures: int = 0
     started: float | None = None
-    running: bool = False
+    running: int = 0
     awaiting: int = 0
     logged: bool = False
 
@@ -161,9 +164,9 @@ class Scheduler:
         self.in_flight = set()  # Coordinator-owned, including queued work.
         self.last_list = None
         self.last_topic_seeds = ()
-        self.classify_worker = (threading.Thread(target=self._classify_worker,
-                                name="news-classify", daemon=True)
-                                if self._classify_enabled() else None)
+        self.classify_workers = ([threading.Thread(target=self._classify_worker,
+                                  name=f"news-classify-{i + 1}", daemon=True)
+                                  for i in range(MODEL_WORKERS)] if self._classify_enabled() else [])
         self.results = deque()  # Producers wait at 32; no unbounded late results.
         self.caches = [Cache() for _ in feeds]
         self.stopping = False
@@ -180,8 +183,8 @@ class Scheduler:
     def start(self):
         for worker in self.workers:
             worker.start()
-        if self.classify_worker is not None:
-            self.classify_worker.start()
+        for worker in self.classify_workers:
+            worker.start()
         self.coordinator.start()
 
     def refresh(self):
@@ -340,12 +343,11 @@ class Scheduler:
         for round_id, work in list(self.model_rounds.items()):
             if work.running:
                 continue
-            terminal = work.failed or (work.deadline is not None and self.model_clock() >= work.deadline)
             queued = False
             for jobs in queues:
                 with jobs.mutex:
                     queued |= any(candidate is work for candidate, _ in jobs.queue)
-            if not terminal and (work.awaiting or queued):
+            if work.awaiting or queued:
                 continue
             counts = work.requests
             elapsed = max(0, self.model_clock() - work.started)
@@ -423,7 +425,7 @@ class Scheduler:
                     if work.started is None:
                         work.started = self.model_clock()
                     work.requests[lane.name] += 1
-                    work.running = True
+                    work.running += 1
                     self.model_rounds[work.round_id] = work
             result = None
             if allowed:
@@ -432,15 +434,18 @@ class Scheduler:
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
             with self.cv:
-                work.running = False
+                if allowed:
+                    work.running -= 1
                 work.awaiting += 1
                 if allowed and result is None:
                     work.failures += 1
                 if result is None:
                     work.failed = True
-            candidate = self._to_result(lane, work, batch, result)
-            if not self._submit_classification(candidate):
-                return
+                # Publish completion under the same cv acquisition: another
+                # worker must see dependency results before taking new work.
+                candidate = self._to_result(lane, work, batch, result)
+                if not self._submit_classification(candidate):
+                    return
 
     def _decorate(self, packet):
         # Coordinator only, under cv. Never mutate parser/source caches.
