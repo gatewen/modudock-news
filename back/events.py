@@ -107,11 +107,7 @@ class EventMatcher(_ChoiceClient):
         if not _fits(pending):
             self.log("events: batch exceeds limit")
             return None
-        self._pending = pending
-        try:
-            result = self._request(_state(pending))
-        finally:
-            self._pending = []
+        result = self._request(_state(pending), context=pending)
         return None if result is None else automatic | result
 
     def match_round(self, pairs):
@@ -144,17 +140,17 @@ class EventMatcher(_ChoiceClient):
             if result is not None:
                 yield result
 
-    def _questions(self, size):
-        indices = {item[0]: i for i, item in enumerate(_state(self._pending))}
+    def _questions(self, size, context=None):
+        indices = {item[0]: i for i, item in enumerate(_state(context))}
         return {f"same_{i}": {
             "type": "choice",
             "instructions": f"news_{indices[pair.left[0]]} 與 news_{indices[pair.right[0]]} 是否在報導同一個事件（同一件事、同一個發布或同一段行情）？",
             "criteria": CRITERIA,
-        } for i, pair in enumerate(self._pending)}
+        } for i, pair in enumerate(context)}
 
-    def _decode(self, batch, answers):
+    def _decode(self, batch, answers, context=None):
         result = {}
-        for i, pair in enumerate(self._pending):
+        for i, pair in enumerate(context):
             choice, p_max = _choice(answers.get(f"same_{i}"), CRITERIA, "different")
             result[pair.key] = choice == "same" and p_max >= SAME_THRESHOLD
         return result

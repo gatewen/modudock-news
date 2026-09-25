@@ -221,16 +221,16 @@ class MatcherTests(unittest.TestCase):
     def test_transient_failures_stop_round_but_allow_next_round(self):
         for status in [429, 500, 'timeout']:
             def response(payload, n, release):
-                if n == 1:
+                if n <= (3 if status == 429 else 1):
                     if status == 'timeout':
                         release.wait(0.1)
                         return respond(payload)
                     return status, {}, {}
                 return respond(payload)
             with self.subTest(status=status), server(response) as (url, received):
-                client = self.client(url, timeout=0.02)
+                client = self.client(url, timeout=0.02, sleep=lambda _: None)
                 self.assertEqual(list(client.match_round(disjoint(11))), [])
-                self.assertEqual(len(received), 1)
+                self.assertEqual(len(received), 3 if status == 429 else 1)
                 self.assertTrue(client.enabled)
                 self.assertEqual(len(list(client.match_round(disjoint(1)))), 1)
 

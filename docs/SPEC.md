@@ -1144,3 +1144,19 @@ cx-mod 以「每天早上看 3 分鐘的使用者」走查提出 5 項（皆不�
 **R30-A** 優先序改為 **分類 > 配對 > 話題 > 分析 > 基調**（`self.lanes` 順序）。其餘語意不變：話題仍只在配對完成（events.pending == 0）後才排；各 lane 的等待規則不變。
 - 更新 §18.5 R5-C、§18.8 R8-A 等處對優先序的描述為本節順序（在原文加註「已由 §18.30 取代」即可）。
 - 驗收：既有優先序測試改為新順序並維持相同強度（例如「配對進行中不排話題」「話題先於分析」「分析先於基調」）；cc-mod 真實跑確認焦點提前。
+
+### 18.31 第 31 輪（並行準備：可重入用戶端、429/529 退避）
+
+第 30 輪結果：焦點優先序（焦點大話題 ~32→~20–24 秒）。
+**claude-jevmodel 回覆（22:4x，含實測）**：同一 key 12 個並發請求總時間 ≈ 單一請求、無 429；超限回 429 或 529，**不帶 Retry-After、無 rate-limit header**，須反應式指數退避；官方限制可能無預警調整；每請求 64k tokens 上限，目前 20 則 ≈ 6k tokens。建議先做 2～3 條並行（預估一輪 40 秒 → ~14 秒），暫不放大批次（準確率風險）。
+**阻礙**：`Analyzer` 以 `self._kind`、`EventMatcher` 以 `self._pending` 保存當次請求狀態 → 同一物件不可同時呼叫。
+
+**R31-A 用戶端可重入**
+- `_ChoiceClient._request(batch, context=None)`；`_questions(size, context)`、`_decode(batch, answers, context)` 由參數取得當次資料，不得寫入任何實例屬性。Analyzer 的 kind、EventMatcher 的 pending pairs 改走 context。
+- 共享的只有：設定（endpoint/key/timeout…）、opener、`_state`（enabled）。`_state.enabled` 的寫入（401/403）用鎖或原子賦值，說明為何安全。
+- 驗收：單元測試以兩條執行緒同時呼叫同一 Analyzer（finance 與 world）與同一 EventMatcher（不同 pairs），假 server 延遲回應並依題目回答 → 兩邊結果各自正確、不交錯。
+
+**R31-B 429/529 退避**
+- 回應 429 或 529：在該請求的 `read_deadline` 內重試，最多 2 次，等待 0.5 秒、1 秒（可注入 sleep 以利測試）；仍失敗則照一般失敗處理。log 固定字串「{label}: rate limited, retry」／「{label}: rate limited」，不含任何回應內容。401/403 行為不變（關閉，不重試）。
+- 驗收：單元測試（429→200 成功、529×3 失敗、超過 read_deadline 不再重試、401 不重試）。
+- 本輪**不改**排程（仍單一 worker），真實跑結果應與現在一致（cc-mod 驗請求數與結果）。

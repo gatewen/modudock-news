@@ -3,20 +3,21 @@
 classify(batch) returns a complete key -> category candidate or None.
 classify_round(items) yields successful batches, stopping at the first failure
 or before starting another request once 60 seconds have elapsed. Inputs are
-(key, title, summary) tuples. Consume the iterator on one classifier worker;
-do not call this object concurrently. Each new iterator is a new round.
+(key, title, summary) tuples. Request context and round state are local to each call, so clients can be
+called concurrently. Each new iterator is a new round.
 
 The budget is admission-only: an in-flight request can finish after it expires.
 Body reads check a total response deadline starting before the request (30s
 by default). This is cooperative between socket reads; DNS and slow headers
 still cannot be reclaimed, and a blocked read waits for its socket timeout.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import http.client
 import json
 import os
 import sys
 import time
+import threading
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPSHandler, HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -61,6 +62,7 @@ class _ResponseDeadline(Exception):
 @dataclass
 class _ClientState:
     enabled: bool
+    lock: object = field(default_factory=threading.Lock, repr=False)
 
 
 class _ChoiceClient:
@@ -68,10 +70,10 @@ class _ChoiceClient:
 
     _label = "classify"
     def __init__(self, *, endpoint=ENDPOINT, key=None, clock=time.monotonic,
-                 timeout=15, budget=60, read_deadline=30, ssl_context=None, ca_file=None, log=None, shared=None):
+                 timeout=15, budget=60, read_deadline=30, sleep=time.sleep, ssl_context=None, ca_file=None, log=None, shared=None):
         if shared is not None:
             # One authentication switch and the exact same HTTP/TLS settings.
-            for name in ("endpoint", "_key", "clock", "timeout", "budget", "read_deadline", "log",
+            for name in ("endpoint", "_key", "clock", "timeout", "budget", "read_deadline", "sleep", "log",
                          "ssl_context", "has_ca", "_opener", "_state"):
                 setattr(self, name, getattr(shared, name))
             return
@@ -87,6 +89,7 @@ class _ChoiceClient:
         self._state = _ClientState(bool(self._key))
         self.clock, self.timeout, self.budget = clock, timeout, budget
         self.read_deadline = read_deadline
+        self.sleep = sleep
         self.log = log or (lambda message: print(message, file=sys.stderr, flush=True))
         # Reuse the exact CA fallback and verification policy without applying
         # the RSS destination/redirect policy or doing any network I/O.
@@ -99,14 +102,18 @@ class _ChoiceClient:
 
     @property
     def enabled(self):
-        return self._state.enabled
+        with self._state.lock:
+            return self._state.enabled
 
     @enabled.setter
     def enabled(self, value):
-        self._state.enabled = value
+        # Shared clients use the same lock; authentication shutdown is visible
+        # to subsequent admissions without holding a lock during network I/O.
+        with self._state.lock:
+            self._state.enabled = value
 
     def _run_round(self, items, request):
-        """Yield detached successful candidates; never retry within this round."""
+        """Yield detached successful candidates; stop at a failed batch (rate-limit retries are request-local)."""
         started = self.clock()
         batch, chars = [], 0
         for item in items:
@@ -132,7 +139,7 @@ class _ChoiceClient:
             if result is not None:
                 yield result
 
-    def _request(self, batch):
+    def _request(self, batch, context=None):
         """One bounded HTTP batch. None means disabled or whole-batch failure."""
         if not self.enabled:
             return None
@@ -149,7 +156,7 @@ class _ChoiceClient:
             "model": MODEL,
             "state": {f"news_{i}": {"title": title, "summary": summary}
                       for i, (_, title, summary) in enumerate(batch)},
-            "questions": self._questions(len(batch)),
+            "questions": self._questions(len(batch), context),
         }
         try:
             request = Request(self.endpoint, data=json.dumps(payload).encode("utf-8"),
@@ -157,36 +164,54 @@ class _ChoiceClient:
                                        "Content-Type": "application/json", "User-Agent": USER_AGENT},
                               method="POST")
             deadline = self.clock() + self.read_deadline
-            try:
-                response = self._opener.open(request, timeout=self.timeout)
-            except HTTPError as exc:
-                response = exc
-            with response:
-                if response.code in (401, 403):
-                    self.enabled = False
-                    self.log(f"{self._label}: disabled (HTTP {response.code})")
+            for attempt in range(3):
+                if not self.enabled:
                     return None
-                if response.code != 200:
-                    self.log(f"{self._label}: HTTP {response.code}")
+                try:
+                    response = self._opener.open(request, timeout=self.timeout)
+                except HTTPError as exc:
+                    response = exc
+                with response:
+                    if response.code in (401, 403):
+                        self.enabled = False
+                        self.log(f"{self._label}: disabled (HTTP {response.code})")
+                        return None
+                    if response.code in (429, 529):
+                        limited = True
+                    elif response.code != 200:
+                        self.log(f"{self._label}: HTTP {response.code}")
+                        return None
+                    else:
+                        limited = False
+                        data = bytearray()
+                        while True:
+                            if self.clock() >= deadline:
+                                raise _ResponseDeadline()
+                            block = response.read1(min(65536, MAX_BODY + 1 - len(data)))
+                            if self.clock() >= deadline:
+                                raise _ResponseDeadline()
+                            if not block:
+                                if response.length not in (None, 0):
+                                    raise _InvalidResponse()
+                                break
+                            data.extend(block)
+                            if len(data) > MAX_BODY:
+                                raise _InvalidResponse()
+                if not limited:
+                    break
+                delay = 0.5 * (2 ** attempt)
+                if attempt == 2 or self.clock() + delay >= deadline:
+                    self.log(f"{self._label}: rate limited")
                     return None
-                data = bytearray()
-                while True:
-                    if self.clock() >= deadline:
-                        raise _ResponseDeadline()
-                    block = response.read1(min(65536, MAX_BODY + 1 - len(data)))
-                    if self.clock() >= deadline:
-                        raise _ResponseDeadline()
-                    if not block:
-                        if response.length not in (None, 0):
-                            raise _InvalidResponse()
-                        break
-                    data.extend(block)
-                    if len(data) > MAX_BODY:
-                        raise _InvalidResponse()
+                self.log(f"{self._label}: rate limited, retry")
+                self.sleep(delay)
+                if self.clock() >= deadline:
+                    self.log(f"{self._label}: rate limited")
+                    return None
             document = json.loads(data)
             if not isinstance(document, dict) or not isinstance(document.get("answers"), dict):
                 raise _InvalidResponse()
-            return self._decode(batch, document["answers"])
+            return self._decode(batch, document["answers"], context)
         except _ResponseDeadline:
             self.log(f"{self._label}: response deadline")
             return None
@@ -220,10 +245,10 @@ class Classifier(_ChoiceClient):
     def classify(self, batch):
         return self._request(batch)
 
-    def _questions(self, size):
+    def _questions(self, size, context=None):
         return {f"item_{i}": {"type": "choice", "instructions": f"news_{i} 這則新聞屬於哪一類？",
                               "criteria": CRITERIA} for i in range(size)}
 
-    def _decode(self, batch, answers):
+    def _decode(self, batch, answers, context=None):
         return {key: _choice(answers.get(f"item_{i}"), CRITERIA, "other")[0]
                 for i, (key, _, _) in enumerate(batch)}

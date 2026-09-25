@@ -194,19 +194,19 @@ class AnalyzeTests(unittest.TestCase):
 
     def transient(self, status):
         def respond(payload, n, release):
-            if n == 1:
+            if n <= (3 if status == 429 else 1):
                 if status == "timeout":
                     release.wait(1)
                     return 200, answers(), {}
                 return status, {}, {}
             return 200, answers(len(payload["state"])), {}
         with server(respond) as (url, received):
-            client = self.client(url, timeout=0.05)
+            client = self.client(url, timeout=0.05, sleep=lambda _: None)
             self.assertEqual(list(client.analyze_round(items(21))), [])
             self.assertTrue(client.enabled)
-            self.assertEqual(len(received), 1)
+            self.assertEqual(len(received), 3 if status == 429 else 1)
             self.assertEqual([len(r) for r in client.analyze_round(items(21))], [20, 1])
-            self.assertEqual(len(received), 3)
+            self.assertEqual(len(received), 5 if status == 429 else 3)
 
     def test_429_stops_round_then_next_round_retries(self):
         self.transient(429)

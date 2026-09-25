@@ -148,12 +148,12 @@ class TopicMatcher(_ChoiceClient):
             if result is not None:
                 yield result
 
-    def _questions(self, size):
+    def _questions(self, size, context=None):
         return {f't_{i}': {'type': 'choice',
                 'instructions': f'news_0 是一個大新聞話題的代表報導。news_{i} 和 news_0 是否屬於同一個新聞話題？',
                 'criteria': CRITERIA} for i in range(1, size)}
 
-    def _decode(self, batch, answers):
+    def _decode(self, batch, answers, context=None):
         result = {}
         for i in range(1, len(batch)):
             choice, probability = _choice(answers.get(f't_{i}'), CRITERIA, 'different')
@@ -178,11 +178,11 @@ class ToneClient(_ChoiceClient):
     def tone_round(self, items):
         return self._run_round(items, self.tone)
 
-    def _questions(self, size):
+    def _questions(self, size, context=None):
         return {f'q_{i}': {'type': 'choice',
                 'instructions': f'news_{i} 對它所報導的事情，整體評價基調是什麼？',
                 'criteria': TONE_CRITERIA} for i in range(size)}
 
-    def _decode(self, batch, answers):
+    def _decode(self, batch, answers, context=None):
         return {key: _choice(answers.get(f'q_{i}'), TONE_CRITERIA, 'neutral')[0]
                 for i, (key, _, _) in enumerate(batch)}

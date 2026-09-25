@@ -104,22 +104,18 @@ class Analyzer(_ChoiceClient):
         """One homogeneous kind per request; return keyed tagged analyses."""
         if kind not in QUESTION_SETS:
             raise ValueError("unknown analysis kind")
-        self._kind = kind
-        try:
-            return self._request(batch)
-        finally:
-            self._kind = "finance"
+        return self._request(batch, context=kind)
 
-    def _questions(self, size):
+    def _questions(self, size, context=None):
         return {f"{name}_{i}": {"type": "choice", "instructions": f"news_{i} {instruction}",
                                 "criteria": criteria}
-                for i in range(size) for name, (instruction, criteria, _) in QUESTION_SETS[self._kind].items()}
+                for i in range(size) for name, (instruction, criteria, _) in QUESTION_SETS[context].items()}
 
-    def _decode(self, batch, answers):
+    def _decode(self, batch, answers, context=None):
         result = {}
         for i, (key, _, _) in enumerate(batch):
-            analysis = {"kind": self._kind}
-            for name, (_, criteria, abstain) in QUESTION_SETS[self._kind].items():
+            analysis = {"kind": context}
+            for name, (_, criteria, abstain) in QUESTION_SETS[context].items():
                 choice, p_max = _choice(answers.get(f"{name}_{i}"), criteria, abstain)
                 analysis[name] = choice
                 if name == "dir":
