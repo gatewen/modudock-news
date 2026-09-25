@@ -132,6 +132,11 @@ const css = `
 .nw .nw-legend-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; color: var(--nw-muted); font-size: 12px; }
 .nw .nw-dot { width: 6px; height: 6px; border-radius: 50%; align-self: center; flex: 0 0 auto; }
 .nw .nw-value { font-size: 20px; font-weight: 600; color: var(--nw-fg); }
+.nw .nw-history { margin-bottom: 18px; }
+.nw .nw-history-row { display: grid; grid-template-columns: 11ch minmax(0, 1fr) 6em; align-items: center; gap: 10px; margin-top: 8px; font-size: 12px; color: var(--nw-muted); }
+.nw .nw-history-bar { height: 6px; }
+.nw .nw-history-value { text-align: right; }
+.nw .nw-history-short { display: none; }
 .nw .nw-macro { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 18px; }
 .nw .nw-up { color: var(--nw-up); }
 .nw .nw-down { color: var(--nw-down); }
@@ -174,6 +179,9 @@ const css = `
   .nw .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @container (max-width: 419.98px) {
+  .nw .nw-history-long { display: none; }
+  .nw .nw-history-short { display: inline; }
+  .nw .nw-history-row { grid-template-columns: 6ch minmax(0, 1fr) 6em; }
   .nw .nw-focus-long { display: none; }
   .nw .nw-focus-short { display: inline; }
   .nw .nw-status { flex-basis: 100%; margin-left: 0; }
@@ -329,6 +337,7 @@ export default function mount(ctx) {
   });
   const signalHeading = make("h3", "nw-heading", "股市訊號");
   market.append(signalHeading, marketBar, legend);
+  const history = make("section", "nw-history");
   const macro = make("p", "nw-macro");
   const rankingSection = make("div", "");
   const rankingHeading = make("div", "nw-ranking-heading");
@@ -338,7 +347,7 @@ export default function mount(ctx) {
   ranking.setAttribute("aria-label", "題材排行");
   rankingSection.append(rankingHeading, ranking);
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
-  panel.append(sample, market, macro, rankingSection, note);
+  panel.append(sample, market, history, macro, rankingSection, note);
   toolbar.append(refresh, sources, categories, watchToggle, status, watchSettings);
   root.append(toolbar, focus, panel, themeFilter, list, empty);
   ctx.container.append(root);
@@ -352,6 +361,7 @@ export default function mount(ctx) {
   let topics = [];
   let analysisEnabled = true;
   let eventsPending = 0;
+  let historyAt = Date.now();
   let updatedText = "", failedText = "", classificationText = "";
   const expanded = new Set();
   let sourceOrder = new Map();
@@ -509,6 +519,53 @@ export default function mount(ctx) {
     target.closest(".nw-row").scrollIntoView({block: "nearest"});
     target.focus({preventScroll: true});
   }
+  function drawHistory(groups, world, parts) {
+    const step = 6 * 60 * 60 * 1000, start = historyAt - 4 * step;
+    const buckets = Array.from({length: 4}, () => ({values: [0, 0, 0, 0], valid: 0}));
+    for (const group of groups) {
+      const stamp = Date.parse(text(group.reports[0].published));
+      if (!Number.isFinite(stamp) || stamp < start || stamp > historyAt) continue;
+      const bucket = buckets[Math.min(3, Math.floor((stamp - start) / step))];
+      const analysis = group.reports.map(validAnalysis).find(Boolean);
+      if (analysis) bucket.valid++;
+      const signal = world ? analysis?.trend : analysis?.market;
+      const index = world ? {escalation: 0, stalemate: 1, deescalation: 2}[signal]
+        : {positive: 0, mixed: 1, negative: 3}[signal];
+      bucket.values[index ?? (world ? 3 : 2)]++;
+    }
+    history.replaceChildren(make("h3", "nw-heading", "近 24 小時"),
+      make("span", "nw-hint", "每 6 小時一段，同一事件只算一次"));
+    buckets.forEach((bucket, i) => {
+      const from = localTime(new Date(start + i * step).toISOString());
+      const to = localTime(new Date(start + (i + 1) * step).toISOString());
+      const label = `${from}–${i === 3 ? "現在" : to}`;
+      const short = `${from.slice(0, 2)}–${i === 3 ? "現在" : to.slice(0, 2)}`;
+      const values = bucket.values, total = values.reduce((sum, n) => sum + n, 0);
+      const denominator = total - values[world ? 3 : 2];
+      const insufficient = bucket.valid < 5;
+      // A percentage over a tiny denominator overstates certainty; show the count instead.
+      const name = world ? "升級" : "正面";
+      const result = insufficient ? "樣本不足" : !denominator ? "—"
+        : denominator < 5 ? `${name} ${values[0]}/${denominator}`
+        : `${name} ${Math.round(values[0] / denominator * 100)}%`;
+      const row = make("div", "nw-history-row");
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", `${from}–${to}，${result}，樣本 ${bucket.valid} 個事件`);
+      const time = make("span", "");
+      time.setAttribute("aria-hidden", "true");
+      time.append(make("span", "nw-history-long", label), make("span", "nw-history-short", short));
+      const bar = make("div", "nw-bar nw-history-bar");
+      bar.setAttribute("aria-hidden", "true");
+      bar.dataset.empty = String(insufficient);
+      if (!insufficient) parts.forEach(([id], j) => {
+        const segment = make("span", `nw-segment nw-${id}`);
+        segment.style.width = `${values[j] / total * 100}%`;
+        bar.append(segment);
+      });
+      row.append(time, bar, make("span", "nw-history-value", result));
+      history.append(row);
+    });
+  }
   function drawPanel(scoped) {
     const world = categories.value === "world";
     panel.hidden = !world && !financial(categories.value);
@@ -542,6 +599,7 @@ export default function mount(ctx) {
     const themes = new Map([...names.keys()].map(id => [id, {count: 0, bull: 0, bear: 0}]));
     let pending = 0;
     const groups = groupItems(scoped);
+    drawHistory(groups, world, parts);
     for (const group of groups) {
       const analysis = group.reports.map(validAnalysis).find(Boolean);
       if (!analysis) {
@@ -798,6 +856,8 @@ export default function mount(ctx) {
     const pending = Number.isInteger(classify.pending) && classify.pending >= 0 ? classify.pending : 0;
     classificationText = classify.enabled === false ? "分類：關閉" : pending > 0 ? `未分類：${pending}` : "";
     const updated = localTime(body.at);
+    const at = Date.parse(text(body.at));
+    historyAt = Number.isFinite(at) ? at : Date.now();
     updatedText = updated ? `${updated} 更新` : "";
     failedText = failed.length === 1 ? `${failureName(failed[0])} 失敗`
       : failed.length > 1 ? `${failureName(failed[0])}等 ${failed.length} 個來源失敗` : "";

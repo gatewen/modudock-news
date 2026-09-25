@@ -264,7 +264,7 @@ test('analysis panel appears only for finance or tech between toolbar and list',
   assert.equal(panel(h).nextElementSibling.nextElementSibling, h.container.querySelector('ul'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
-  assert.equal(panel(h).children.length, 5);
+  assert.equal(panel(h).children.length, 6);
   assert.equal(panel(h).querySelector('small').textContent, '同一事件多家報導只算一次。');
 });
 
@@ -1166,7 +1166,7 @@ test('focus titles keep text and URL defenses and responsive labels stay scoped'
   const link = focusArea(h).querySelector('a');
   assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer');
   const css = h.container.querySelector('style').textContent;
-  assert.match(css, /@container \(max-width: 419\.98px\)\s*\{\s*\.nw \.nw-focus-long \{ display: none; \}\s*\.nw \.nw-focus-short \{ display: inline; \}/);
+  assert.match(css, /@container \(max-width: 419\.98px\)\s*\{[\s\S]*?\.nw \.nw-focus-long \{ display: none; \}\s*\.nw \.nw-focus-short \{ display: inline; \}/);
   const other = setup(t);
   assert.notEqual(focusArea(h).getAttribute('aria-labelledby'), focusArea(other).getAttribute('aria-labelledby'));
 });
@@ -1637,4 +1637,113 @@ test('failed source status names all failures with bounded safe error tooltips',
   h.message(listing([], [{name:'乙', ok:true}]));
   assert.equal(status.title, '');
   assert.doesNotMatch(status.textContent, /失敗/);
+});
+
+const historyEnd = Date.parse('2026-09-25T12:00:00Z');
+const historyRows = h => [...h.container.querySelectorAll('.nw-history-row')];
+const historyResults = h => historyRows(h).map(row => row.querySelector('.nw-history-value').textContent);
+const timedArticle = (hours, overrides = {}) => financeArticle({
+  published:new Date(historyEnd + hours * 3600000).toISOString(), ...overrides,
+});
+const historyList = items => ({...listing(items), at:new Date(historyEnd).toISOString()});
+const hhmm = stamp => {
+  const date = new Date(stamp);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+};
+
+test('history bins are left inclusive, exclude next boundary and include final endpoint', t => {
+  const h = setup(t);
+  const items = [-24, -18, -12, -6].flatMap((hour, i) => Array.from({length:5}, () =>
+    timedArticle(hour, {analysis:analysis({market:i % 2 ? 'negative' : 'positive'})})));
+  items.push(timedArticle(0), timedArticle(-24 - 1 / 3600000), timedArticle(1 / 3600000));
+  h.message(historyList(items));
+  choose(h, h.categories, 'finance');
+  assert.deepEqual(historyResults(h), ['正面 100%', '正面 0%', '正面 100%', '正面 17%']);
+  const rows = historyRows(h);
+  assert.deepEqual(rows.map(row => row.getAttribute('aria-label').match(/樣本 (\d+)/)[1]), ['5', '5', '5', '6']);
+  assert.equal(rows[0].getAttribute('role'), 'group');
+  assert.equal(rows[0].getAttribute('aria-label'), `${hhmm(historyEnd - 24 * 3600000)}–${hhmm(historyEnd - 18 * 3600000)}，正面 100%，樣本 5 個事件`);
+  assert.equal(rows[3].querySelector('.nw-history-long').textContent, `${hhmm(historyEnd - 6 * 3600000)}–現在`);
+  assert.equal(rows[0].querySelector('.nw-history-short').textContent,
+    `${hhmm(historyEnd - 24 * 3600000).slice(0,2)}–${hhmm(historyEnd - 18 * 3600000).slice(0,2)}`);
+  const history = h.container.querySelector('.nw-history');
+  assert.equal(history.previousElementSibling.className, 'nw-market');
+  assert.equal(history.nextElementSibling.className, 'nw-macro');
+  assert.equal(history.querySelector('.nw-hint').textContent, '每 6 小時一段，同一事件只算一次');
+  const bar = rows[3].querySelector('.nw-history-bar');
+  assert.equal(bar.getAttribute('aria-hidden'), 'true');
+  assert.equal(h.window.getComputedStyle(bar).height, '6px');
+  assert.deepEqual([...bar.children].map(node => node.className),
+    ['nw-segment nw-positive', 'nw-segment nw-mixed', 'nw-segment nw-idle', 'nw-segment nw-negative']);
+  assert.ok(Math.abs(parseFloat(bar.firstElementChild.style.width) - 100 / 6) < 0.001);
+  const css = h.container.querySelector('style').textContent;
+  assert.match(css, /@container \(max-width: 419\.98px\)\s*\{\s*\.nw \.nw-history-long \{ display: none; \}\s*\.nw \.nw-history-short \{ display: inline; \}/);
+});
+
+test('history requires five analyzed events and reports dash for no directional denominator', t => {
+  const h = setup(t);
+  h.message(historyList([
+    ...Array.from({length:4}, () => timedArticle(-22)),
+    timedArticle(-22, {analysis:null}), timedArticle(-22, {analysis:{market:'positive'}}),
+    ...Array.from({length:5}, () => timedArticle(-16, {analysis:analysis({market:'not_market'})})),
+    ...['positive','positive','mixed','negative','other'].map(market => timedArticle(-10, {analysis:analysis({market})})),
+    timedArticle(-2, {published:'bad'}), timedArticle(-2, {published:{}}),
+  ]));
+  choose(h, h.categories, 'finance');
+  assert.deepEqual(historyResults(h), ['樣本不足', '—', '正面 2/4', '樣本不足']);
+  const rows = historyRows(h);
+  assert.equal(rows[0].querySelector('.nw-history-bar').dataset.empty, 'true');
+  assert.equal(rows[0].querySelector('.nw-history-bar').childElementCount, 0);
+  assert.match(rows[0].getAttribute('aria-label'), /樣本 4 個事件/);
+  assert.equal(rows[1].querySelector('.nw-history-bar').dataset.empty, 'false');
+  assert.equal(rows[1].querySelector('.nw-idle').style.width, '100%');
+});
+
+test('history deduplicates using representative time and first valid analysis, respecting panel scope', t => {
+  const h = setup(t);
+  const body = historyList([
+    ...Array.from({length:4}, () => timedArticle(-22)),
+    timedArticle(-22, {event:'111111111111', event_size:3, analysis:null}),
+    timedArticle(-16, {event:'111111111111', event_size:3, analysis:analysis({market:'negative'})}),
+    timedArticle(-10, {event:'111111111111', event_size:3}),
+    timedArticle(-22, {source:'乙', analysis:analysis({market:'negative'})}),
+    timedArticle(-22, {category:'tech', analysis:analysis({market:'negative'})}),
+  ]);
+  h.message(body);
+  choose(h, h.categories, 'finance');
+  choose(h, h.select, '甲');
+  assert.deepEqual(historyResults(h), ['正面 80%', '樣本不足', '樣本不足', '樣本不足']);
+  const before = h.container.querySelector('.nw-history').textContent;
+  themeButton(h, 'memory').click();
+  assert.equal(h.container.querySelector('.nw-history').textContent, before);
+  h.message(body);
+  assert.equal(h.container.querySelector('.nw-history').textContent, before);
+});
+
+test('world history uses escalation denominator, world colors and unrelated idle events', t => {
+  const h = setup(t);
+  h.message(historyList(['escalation','escalation','stalemate','deescalation','not_conflict','other'].map(trend =>
+    timedArticle(-2, {category:'world', analysis:{kind:'world', trend, region:'us_china'}}))));
+  choose(h, h.categories, 'world');
+  assert.equal(historyResults(h)[3], '升級 2/4');
+  const row = historyRows(h)[3], bar = row.querySelector('.nw-history-bar');
+  assert.match(row.getAttribute('aria-label'), /升級 2\/4，樣本 6 個事件/);
+  assert.deepEqual([...bar.children].map(node => node.className),
+    ['nw-segment nw-escalation', 'nw-segment nw-mixed', 'nw-segment nw-deescalation', 'nw-segment nw-idle']);
+  assert.ok(Math.abs(parseFloat(bar.lastElementChild.style.width) - 100 / 3) < 0.001);
+});
+
+test('history falls back to current time for missing or invalid at and stays fixed during filtering', t => {
+  t.mock.timers.enable({apis:['Date'], now:historyEnd});
+  const h = setup(t);
+  const items = Array.from({length:5}, () => timedArticle(-2));
+  for (const at of [undefined, null, {}, 'bad']) {
+    h.message({...listing(items), at});
+    choose(h, h.categories, 'finance');
+    assert.equal(historyResults(h)[3], '正面 100%');
+  }
+  const before = h.container.querySelector('.nw-history').textContent;
+  t.mock.timers.tick(7 * 3600000);
+  themeButton(h, 'memory').click();
+  assert.equal(h.container.querySelector('.nw-history').textContent, before);
 });
