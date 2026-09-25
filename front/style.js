@@ -8,6 +8,8 @@ export const css = `
   --nw-accent: var(--md-accent, #005fb8);
   --nw-focus: var(--md-focus, #005fb8);
   --nw-danger: var(--md-danger, light-dark(#b42318, #ff8b82));
+  /* Report tone must not reuse red/green: in finance views red already means "up". */
+  --nw-tone-neg: color-mix(in srgb, var(--nw-fg) 78%, transparent);
   --nw-up: light-dark(#c8102e, #ff6b6b);
   --nw-down: light-dark(#0f7b3f, #4fd18b);
   --nw-mixed: light-dark(#b7791f, #f0b429);
@@ -53,13 +55,13 @@ export const css = `
 .nw .nw-focus-copy { min-width: 0; }
 .nw .nw-tone { margin-top: 6px; }
 .nw .nw-bar.nw-tone-bar { height: 4px; margin-bottom: 4px; }
-.nw .nw-tone-negative { background: var(--nw-danger); }
+.nw .nw-tone-negative { background: var(--nw-tone-neg); }
 .nw .nw-tone-positive { background: var(--nw-accent); }
 .nw .nw-tone-mixed { background: var(--nw-mixed); }
 .nw .nw-tone-neutral { background: var(--nw-idle); }
 .nw .nw-tone-tag { font-size: 12px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; }
 .nw .nw-tone-tag-positive { color: var(--nw-accent); }
-.nw .nw-tone-tag-negative { color: var(--nw-danger); }
+.nw .nw-tone-tag-negative { color: var(--nw-tone-neg); }
 .nw .nw-tone-tag-mixed { color: var(--nw-mixed); }
 .nw .nw-tone-tag-neutral { color: var(--nw-muted); }
 .nw .nw-sample { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 18px; color: var(--nw-muted); font-size: 12px; }

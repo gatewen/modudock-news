@@ -1487,7 +1487,7 @@ test('topic tone needs five judged reports, sorts positive counts and uses a dec
     'nw-segment nw-tone-mixed','nw-segment nw-tone-neutral','nw-segment nw-tone-negative']);
   [4,5,15,17].forEach((count,i) => assert.ok(Math.abs(parseFloat(bar.children[i].style.width)-count/41*100)<.001));
   const css = h.container.querySelector('style').textContent;
-  for (const [id, token] of [['negative','danger'],['positive','accent'],['mixed','mixed'],['neutral','idle']]) {
+  for (const [id, token] of [['negative','tone-neg'],['positive','accent'],['mixed','mixed'],['neutral','idle']]) {
     assert.ok(css.includes(`.nw .nw-tone-${id} { background: var(--nw-${token}); }`));
   }
 });
