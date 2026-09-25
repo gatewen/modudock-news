@@ -261,7 +261,8 @@ test('analysis panel appears only for finance or tech between toolbar and list',
   }
   assert.equal(panel(h).nextElementSibling.className, 'nw-filter');
   assert.equal(panel(h).nextElementSibling.nextElementSibling, h.container.querySelector('ul'));
-  assert.equal(panel(h).previousElementSibling.contains(h.categories), true);
+  assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
+  assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
   assert.equal(panel(h).children.length, 5);
   assert.equal(panel(h).querySelector('small').textContent, '同一事件多家報導只算一次。');
 });
@@ -892,7 +893,8 @@ test('world panel replaces finance panel only for world and restores finance pre
   choose(h, h.categories, 'world');
   assert.equal(worldPanel(h), surface);
   assert.equal(surface.hidden, false);
-  assert.equal(surface.previousElementSibling.className, 'nw-toolbar');
+  assert.equal(surface.previousElementSibling.className, 'nw-focus-section');
+  assert.equal(surface.previousElementSibling.previousElementSibling.className, 'nw-toolbar');
   assert.equal(surface.querySelector('.nw-heading').textContent, '局勢走向');
   assert.equal(surface.querySelector('.nw-macro').hidden, true);
   assert.equal(surface.querySelector('.nw-ranking-heading').textContent, '地區（點選篩選）');
@@ -1078,4 +1080,109 @@ test('news times use local calendar today, yesterday and guessed markers, includ
   for (const index of [0, 1, 3, 5]) assert.equal(times[index].title, '');
   h.container.querySelector('.nw-expand').click();
   assert.equal(h.container.querySelector('.nw-reports .nw-time').textContent, '約00:05');
+});
+
+const focusReports = (id, count, hour = 10, overrides = {}) => Array.from({length: count}, (_,i) =>
+  eventStory(id, `${id}-${i}`, hour + i, {source: `媒體${i}`, ...overrides}));
+const focusArea = h => h.container.querySelector('.nw-focus-section');
+const focusButtons = h => [...focusArea(h).querySelectorAll('button')];
+
+test('focus requires three distinct named sources, ranks by count latest time and id, and caps at five', t => {
+  const h = setup(t);
+  assert.equal(focusArea(h).hidden, true);
+  const groups = [focusReports('000000000006', 3), focusReports('000000000005', 3),
+    focusReports('000000000004', 3), focusReports('000000000003', 3),
+    focusReports('000000000002', 3, 11), focusReports('000000000001', 4, 5)];
+  const two = focusReports('aaaaaaaaaaaa', 2);
+  h.message(listing([...groups.flat(), ...two, ...two, ...focusReports('bbbbbbbbbbbb', 4, 10, {source: {}})]));
+  assert.equal(focusArea(h).hidden, false);
+  assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['000000000001', '000000000002',
+    '000000000003', '000000000004', '000000000005']);
+  assert.equal(focusButtons(h)[0].getAttribute('aria-label'), '展開 4 家媒體的報導');
+  assert.equal(focusButtons(h)[0].querySelector('.nw-focus-long').textContent, '4 家媒體');
+  assert.equal(focusButtons(h)[0].querySelector('.nw-focus-short').textContent, '4 家');
+  assert.equal(focusArea(h).querySelector('a').textContent, '000000000001-0');
+  assert.equal(h.window.document.getElementById(focusArea(h).getAttribute('aria-labelledby')).textContent, '焦點');
+  const spanning = focusReports('ffffffffffff', 3, 5);
+  spanning[2].published = '2026-09-24T23:00:00Z';
+  h.message(listing([...focusReports('000000000001', 3, 10), ...spanning]));
+  assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['ffffffffffff', '000000000001']);
+  assert.equal(focusArea(h).querySelector('a').textContent, 'ffffffffffff-0');
+  h.message(listing(two));
+  assert.equal(focusArea(h).hidden, true);
+  assert.equal(focusButtons(h).length, 0);
+});
+
+test('focus recomputes after source category and topic filters, including same-at replacement', t => {
+  const h = setup(t);
+  const reports = [...focusReports('111111111111', 3), ...focusReports('222222222222', 3, 10, {category: 'politics'})];
+  const body = listing(reports, ['媒體0', '媒體1', '媒體2'].map(name => ({name, ok:true})));
+  h.message(body);
+  assert.equal(focusButtons(h).length, 2);
+  h.select.value = '媒體0'; h.select.dispatchEvent(new h.window.Event('change'));
+  assert.equal(focusArea(h).hidden, true);
+  h.select.value = ''; h.select.dispatchEvent(new h.window.Event('change'));
+  h.categories.value = 'finance'; h.categories.dispatchEvent(new h.window.Event('change'));
+  assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['111111111111']);
+  const topic = h.container.querySelector('.nw-theme').dataset.topic;
+  h.container.querySelector('.nw-theme').click();
+  assert.equal(focusButtons(h).length, 1);
+  h.message({...body, items: reports.map((item,i) => i === 0 ? {...item, analysis:null} : item)});
+  assert.equal(h.container.querySelector(`.nw-theme[data-topic="${topic}"]`).getAttribute('aria-pressed'), 'true');
+  assert.equal(focusArea(h).hidden, true); // Only two matching sources remain.
+});
+
+test('focus expands scrolls and focuses existing event, preserves expansion and removes listener on unmount', t => {
+  const h = setup(t), body = listing(focusReports('111111111111', 3));
+  h.message(body);
+  const button = focusButtons(h)[0], row = h.container.querySelector('.nw-row');
+  const calls = [];
+  row.scrollIntoView = options => calls.push(options);
+  button.click();
+  const toggle = row.querySelector('.nw-expand');
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  assert.equal(row.querySelector('.nw-reports').hidden, false);
+  assert.equal(h.window.document.activeElement, toggle);
+  assert.deepEqual(calls, [{block:'nearest'}]);
+  button.click();
+  assert.equal(toggle.getAttribute('aria-expanded'), 'true');
+  h.message(body);
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'), 'true');
+  const retained = focusButtons(h)[0], currentRow = h.container.querySelector('.nw-row');
+  let afterUnmount = 0;
+  currentRow.scrollIntoView = () => { afterUnmount++; };
+  h.handle.unmount(); retained.click();
+  assert.equal(afterUnmount, 0);
+});
+
+test('focus titles keep text and URL defenses and responsive labels stay scoped', t => {
+  const h = setup(t);
+  h.message(listing(focusReports('111111111111', 3, 10, {title:'<img src=x onerror=alert(1)>', link:'javascript:alert(1)'})));
+  assert.equal(focusArea(h).querySelector('img'), null);
+  assert.equal(focusArea(h).querySelector('a'), null);
+  assert.equal(focusArea(h).querySelector('.nw-title').textContent, '<img src=x onerror=alert(1)>');
+  h.message(listing(focusReports('111111111111', 3)));
+  const link = focusArea(h).querySelector('a');
+  assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer');
+  const css = h.container.querySelector('style').textContent;
+  assert.match(css, /@container \(max-width: 419\.98px\)\s*\{\s*\.nw \.nw-focus-long \{ display: none; \}\s*\.nw \.nw-focus-short \{ display: inline; \}/);
+  const other = setup(t);
+  assert.notEqual(focusArea(h).getAttribute('aria-labelledby'), focusArea(other).getAttribute('aria-labelledby'));
+});
+
+test('local midnight shows date only, including today guessed and expanded reports', t => {
+  t.mock.timers.enable({apis:['Date'], now:new Date(2026, 0, 1, 12)});
+  const h = setup(t);
+  const today = new Date(2026, 0, 1).toISOString(), yesterday = new Date(2025, 11, 31).toISOString();
+  h.message(listing([
+    article({published:today}), article({published:yesterday}),
+    article({published:today, time_guessed:true}),
+    article({published:yesterday, time_guessed:true, event:'111111111111', event_size:2}),
+    article({published:today, event:'111111111111', event_size:2}),
+    article({published:new Date(2026, 0, 1, 0, 0, 1).toISOString()}),
+  ]));
+  const nodes = [...h.container.querySelectorAll('.nw-time')];
+  assert.deepEqual(nodes.map(n => n.textContent), ['今天','12/31','約今天','約12/31','今天','00:00']);
+  assert.equal(nodes[2].title, '來源沒有提供發布時間，以收錄時間代替');
+  assert.equal(nodes[3].title, nodes[2].title);
 });

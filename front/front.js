@@ -53,6 +53,7 @@ function eventId(item) {
     && Number.isInteger(item.event_size) && item.event_size > 0 ? item.event.toLowerCase() : null;
 }
 
+let focusHeadingId = 0;
 const css = `
 .nw {
   --nw-bg: var(--md-bg, #ffffff);
@@ -94,6 +95,12 @@ const css = `
 .nw .nw-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 12px; }
 .nw .nw-status { margin-left: auto; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-panel { background: var(--nw-surface); border-radius: 8px; padding: 14px 16px; }
+.nw .nw-focus-section { background: var(--nw-surface); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+.nw .nw-focus-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.nw .nw-focus-list { display: grid; gap: 10px; }
+.nw .nw-focus-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.nw .nw-focus-count { font-size: 12px; white-space: nowrap; }
+.nw .nw-focus-short { display: none; }
 .nw .nw-sample { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0 0 18px; color: var(--nw-muted); font-size: 12px; }
 .nw .nw-pending { margin-left: auto; }
 .nw .nw-warning { flex-basis: 100%; }
@@ -154,6 +161,8 @@ const css = `
   .nw .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @container (max-width: 419.98px) {
+  .nw .nw-focus-long { display: none; }
+  .nw .nw-focus-short { display: inline; }
   .nw .nw-status { flex-basis: 100%; margin-left: 0; }
   .nw .nw-theme { grid-template-columns: minmax(0, 1fr) 3ch; }
   .nw .nw-theme-track { display: none; }
@@ -214,6 +223,15 @@ export default function mount(ctx) {
   clearTheme.setAttribute("aria-label", "取消題材篩選");
   themeFilter.append(themeLabel, clearTheme);
   const panel = make("section", "nw-panel");
+  const focus = make("section", "nw-focus-section");
+  focus.hidden = true;
+  const focusHeading = make("h3", "nw-heading", "焦點");
+  focusHeading.id = `nw-focus-heading-${++focusHeadingId}`;
+  focus.setAttribute("aria-labelledby", focusHeading.id);
+  const focusHeader = make("div", "nw-focus-heading");
+  focusHeader.append(focusHeading, make("span", "nw-hint", "多家媒體同時報導"));
+  const focusList = make("div", "nw-focus-list");
+  focus.append(focusHeader, focusList);
   panel.setAttribute("aria-label", "財經分析");
   panel.hidden = true;
   const sample = make("p", "nw-sample");
@@ -253,7 +271,7 @@ export default function mount(ctx) {
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(sample, market, macro, rankingSection, note);
   toolbar.append(refresh, sources, categories, status);
-  root.append(toolbar, panel, themeFilter, list, empty);
+  root.append(toolbar, focus, panel, themeFilter, list, empty);
   ctx.container.append(root);
 
   let up = false;
@@ -279,7 +297,9 @@ export default function mount(ctx) {
     const today = new Date();
     const sameDay = date.getFullYear() === today.getFullYear()
       && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
-    const label = value && `${sameDay ? "" : `${date.getMonth() + 1}/${date.getDate()} `}${value}`;
+    const dateOnly = date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0;
+    const calendar = `${date.getMonth() + 1}/${date.getDate()}`;
+    const label = value && (dateOnly ? (sameDay ? "今天" : calendar) : `${sameDay ? "" : `${calendar} `}${value}`);
     const node = make("span", "nw-time", `${item.time_guessed === true ? "約" : ""}${label}`);
     if (item.time_guessed === true) node.title = "來源沒有提供發布時間，以收錄時間代替";
     return node;
@@ -328,6 +348,39 @@ export default function mount(ctx) {
     else expanded.add(id);
     button.setAttribute("aria-expanded", String(expanded.has(id)));
     button.closest(".nw-row").querySelector(".nw-reports").hidden = !expanded.has(id);
+  }
+  function drawFocus(groups) {
+    const ranked = groups.map(group => ({...group,
+      count: new Set(group.reports.map(item => text(item.source)).filter(Boolean)).size,
+      latest: Math.max(...group.reports.map(item => {
+        const stamp = Date.parse(text(item.published));
+        return Number.isFinite(stamp) ? stamp : -Infinity;
+      })),
+    })).filter(group => group.count >= 3)
+      .sort((a, b) => b.count - a.count || b.latest - a.latest || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+      .slice(0, 5);
+    focus.hidden = ranked.length === 0;
+    focusList.replaceChildren();
+    for (const group of ranked) {
+      const row = make("div", "nw-focus-row");
+      const button = make("button", "nw-focus-count");
+      button.type = "button";
+      button.dataset.event = group.id;
+      button.setAttribute("aria-label", `展開 ${group.count} 家媒體的報導`);
+      button.append(make("span", "nw-focus-long", `${group.count} 家媒體`),
+        make("span", "nw-focus-short", `${group.count} 家`));
+      row.append(newsTitle(group.reports[0], "nw-title"), button);
+      focusList.append(row);
+    }
+  }
+  function onFocus(event) {
+    const button = event.target?.closest?.("button[data-event]");
+    if (!button || !focusList.contains(button)) return;
+    const target = [...list.querySelectorAll(".nw-expand")].find(node => node.dataset.event === button.dataset.event);
+    if (!target) return;
+    if (!expanded.has(button.dataset.event)) target.click();
+    target.closest(".nw-row").scrollIntoView({block: "nearest"});
+    target.focus({preventScroll: true});
   }
   function drawPanel(scoped) {
     const world = categories.value === "world";
@@ -442,7 +495,9 @@ export default function mount(ctx) {
     drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
     list.replaceChildren();
     const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
-    for (const group of groupItems(filtered)) {
+    const groups = groupItems(filtered);
+    drawFocus(groups);
+    for (const group of groups) {
       const item = group.reports[0];
       const category = text(item.category);
       const analysis = validAnalysis(item);
@@ -526,6 +581,7 @@ export default function mount(ctx) {
     drawItems();
   }
   list.addEventListener("click", onExpand);
+  focusList.addEventListener("click", onFocus);
   clearAll.addEventListener("click", onClearAll);
   ranking.addEventListener("click", onTheme);
   clearTheme.addEventListener("click", onClearTheme);
@@ -551,6 +607,7 @@ export default function mount(ctx) {
       sources.removeEventListener("change", drawItems);
       categories.removeEventListener("change", drawItems);
       list.removeEventListener("click", onExpand);
+      focusList.removeEventListener("click", onFocus);
       expanded.clear();
       sourceOrder.clear();
       clearAll.removeEventListener("click", onClearAll);
