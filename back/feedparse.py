@@ -1,8 +1,8 @@
 """Pure feed parsing: callers supply time/cache and explicitly commit results.
 
 No network, clock reads, or mutation of caller-owned state. Dates without a
-timezone are interpreted as UTC. first_seen uses oldest-insertion eviction
-(SPEC §5.5), not access-order eviction. Limits use KiB/MiB, as the Outbox does.
+timezone are interpreted as UTC. first_seen uses least-recently-used eviction
+(SPEC §18.37). Limits use KiB/MiB, as the Outbox does.
 """
 from collections import Counter, OrderedDict
 from copy import deepcopy
@@ -230,10 +230,12 @@ def parse_feed(data, final_url, source, first_seen, now):
             if key not in seen:
                 seen[key] = timestamp
             published = seen[key]
+        if key in seen:
+            seen.move_to_end(key)
         summary = (first(entry, "summary") or first(entry, "content")) if atom else first(entry, "description")
         items.append(dict(title=title, link=link, published=published,
                           summary=plain(summary, 200), source=source, time_guessed=guessed))
-    # Finish every lookup before FIFO eviction, so inserting a missing key
+    # Finish every lookup before LRU eviction, so inserting a missing key
     # cannot evict another entry that this same feed has yet to visit.
     while len(seen) > 1000:
         seen.popitem(last=False)

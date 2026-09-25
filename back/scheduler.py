@@ -60,6 +60,7 @@ class ModelRound:
     running: int = 0
     awaiting: int = 0
     logged: bool = False
+    admitted: bool = True  # Initial list must reach Outbox before HTTP starts.
 
 
 @dataclass
@@ -265,8 +266,8 @@ class Scheduler:
         return self.classifier is not None and self.classifier.enabled
 
     def _enqueue_classification(self, packet):
-        # Called by the coordinator after list + publish, outside the emit
-        # path. cv protects admission/dedup; put_nowait never waits for space.
+        # Coordinator only. Initial admission is staged under cv until list +
+        # publish succeed; later acknowledgements refill without blocking.
         with self.cv:
             if self.stopping or not self._classify_enabled():
                 return
@@ -274,6 +275,8 @@ class Scheduler:
             if work is None or work.round_id != self.round_id:
                 work = ModelRound(self.round_id)
             self.model_work = work
+            if not self._can_admit(work):
+                return
             for item in packet["body"]["items"]:
                 key = dedup_key(item["link"])
                 self._enqueue_analysis(work, (key, item["title"], item["summary"]))
@@ -357,7 +360,11 @@ class Scheduler:
             del self.model_rounds[round_id]
 
     def _next_lane(self):
-        return next((lane for lane in self.lanes if not lane.jobs.empty()), None)
+        for lane in self.lanes:
+            with lane.jobs.mutex:
+                if lane.jobs.queue and lane.jobs.queue[0][0].admitted:
+                    return lane
+        return None
 
     def _take_batch(self, lane, work, first):
         # Called under cv. Capture analysis kind here, before releasing cv for HTTP.
@@ -420,13 +427,15 @@ class Scheduler:
                 batch, kind = self._take_batch(lane, work, item)
                 if work.deadline is None:
                     work.deadline = self.model_clock() + self.model_budget
+                    self.cv.notify_all()  # Coordinator must schedule its deadline wake.
                 allowed = self._classify_enabled() and not work.failed and self.model_clock() < work.deadline
                 if allowed:
                     if work.started is None:
                         work.started = self.model_clock()
                     work.requests[lane.name] += 1
                     work.running += 1
-                    self.model_rounds[work.round_id] = work
+                    if not work.logged:
+                        self.model_rounds[work.round_id] = work
             result = None
             if allowed:
                 try:
@@ -436,7 +445,8 @@ class Scheduler:
             with self.cv:
                 if allowed:
                     work.running -= 1
-                work.awaiting += 1
+                if not work.logged:
+                    work.awaiting += 1
                 if allowed and result is None:
                     work.failures += 1
                 if result is None:
@@ -527,6 +537,10 @@ class Scheduler:
         body['model'] = self._model_state(body)
         return packet
 
+    def _can_admit(self, work):
+        return (work is not None and not work.failed
+                and (work.deadline is None or self.model_clock() < work.deadline))
+
     def _model_state(self, body):
         if not self._classify_enabled():
             return {'state': 'off', 'reason': 'disabled'}
@@ -534,11 +548,15 @@ class Scheduler:
                       for name in ('classify', 'analysis', 'events', 'topics')) or body.get('topics', {}).get('tone_pending', 0) > 0
         if not pending:
             return {'state': 'done', 'reason': ''}
+        if (any(not lane.jobs.empty() for lane in self.lanes)
+                or self.in_flight or self.analysis_in_flight or self.event_in_flight
+                or self.topic_in_flight or self.tone_in_flight):
+            return {'state': 'working', 'reason': ''}
         work = self.model_work
         expired = work is not None and work.deadline is not None and self.model_clock() >= work.deadline
         if work is not None and (work.failed or expired):
             return {'state': 'paused', 'reason': 'failed' if work.failures or not expired else 'budget'}
-        return {'state': 'working', 'reason': ''}
+        return {'state': 'paused', 'reason': 'waiting'}
 
     def _enqueue_topics(self, packet):
         # Coordinator only. Reuse this list's admission budget across snowball steps.
@@ -587,6 +605,21 @@ class Scheduler:
         return None
 
     def _accept(self, candidate):
+        packet = self._accept_candidate(candidate)
+        model_result = isinstance(candidate, (ClassifyResult, AnalysisResult, EventResult, TopicResult, ToneResult))
+        if model_result and self.last_list is not None:
+            # Refresh may have skipped keys still owned by an older round.
+            # Refill event overflow on every acknowledgement, including false matches.
+            if (self.model_work is not None and self.model_work.round_id == self.round_id
+                    and (isinstance(candidate, EventResult) or candidate.round_id != self.round_id)):
+                self._enqueue_classification(self._decorate(self.last_list))
+            if packet is not None:
+                packet['body']['model'] = self._model_state(packet['body'])
+            else:
+                packet = self._model_resend(set())
+        return packet
+
+    def _accept_candidate(self, candidate):
         # Called only under cv by the coordinator. A worker produces exactly
         # one candidate per job; the generation check is the ownership guard.
         self.processed_results += 1
@@ -672,7 +705,7 @@ class Scheduler:
             if candidate.work is not None:
                 for item in candidate.items:
                     if item[0] in accepted:
-                        self._enqueue_analysis(candidate.work, item)
+                        self._enqueue_analysis(self.model_work or candidate.work, item)
             # Model results belong to keys, never fetch generations.
             return self._model_resend(accepted)
         if candidate.round_id != self.round_id:
@@ -689,12 +722,13 @@ class Scheduler:
         self.status[i].update(ok=candidate.error is None, error=candidate.error)
         self.pending.discard(i)
 
-    def _send_list(self, packet, publish=False):
+    def _send_list(self, packet, publish=False, fitted=False):
         # Serialization and output must stay outside cv so stop never waits
         # for an expensive fit or a blocked output sink.
         try:
             item_count = len(packet["body"]["items"])
-            packet = self.fit(packet)
+            if not fitted:
+                packet = self.fit(packet)
             with self.cv:
                 # Fit can remove a representative or whole pair; recount only
                 # the actually emitted items. IDs have fixed length and sizes
@@ -728,7 +762,38 @@ class Scheduler:
             self._cache_events({pair.key: True for pair in candidate_pairs(packet["body"]["items"])
                                 if pair.automatic and pair.key not in self.event_cache})
             packet = self._decorate(packet)
-        return self._send_list(packet, publish=True)
+        # Fit/output remain outside cv so bye can interrupt slow serialization.
+        try:
+            packet = self.fit(packet)
+        except ValueError as exc:
+            self.log("list packet rejected: " + str(exc)[:200])
+            return None
+        with self.cv:
+            work = self.model_work
+            work.admitted = False
+            packet = self._decorate_events(packet)
+            if self._classify_enabled():
+                self._enqueue_classification(packet)
+            packet['body']['model'] = self._model_state(packet['body'])
+        sent = self._send_list(packet, publish=True, fitted=True)
+        with self.cv:
+            if sent is None:
+                # A rejected list must not launch work for invisible items.
+                flights = dict(classify=self.in_flight, analysis=self.analysis_in_flight,
+                               events=self.event_in_flight, topics=self.topic_in_flight, tone=self.tone_in_flight)
+                for lane in self.lanes:
+                    with lane.jobs.mutex:
+                        kept = []
+                        for queued_work, item in lane.jobs.queue:
+                            if queued_work is work:
+                                flights[lane.name].discard(item.key if lane.pair else item[0])
+                            else:
+                                kept.append((queued_work, item))
+                        lane.jobs.queue.clear()
+                        lane.jobs.queue.extend(kept)
+            work.admitted = True
+            self.cv.notify_all()
+        return sent
 
     def _run(self):
         while True:
@@ -744,6 +809,10 @@ class Scheduler:
                     if packet is not None:
                         resends[:] = [packet]
                 self._finish_model_rounds()
+                if not resends:
+                    changed = self._model_resend(set())
+                    if changed is not None:
+                        resends.append(changed)
                 self.cv.notify_all()
                 if self.active:
                     now = self.clock()
@@ -758,14 +827,18 @@ class Scheduler:
                 else:
                     due = self.next_round
                 if completed is None and not resends:
-                    self.cv.wait(max(0, due - self.clock()))
+                    wait = max(0, due - self.clock())
+                    work = self.model_work
+                    if work is not None and work.deadline is not None:
+                        remaining = work.deadline - self.model_clock()
+                        if remaining > 0:
+                            wait = min(wait, remaining)
+                    self.cv.wait(wait)
                     continue
             for packet in resends:
                 self._send_list(packet)
             if completed is not None:
-                packet = self._emit(*completed)
-                if packet is not None:
-                    self._enqueue_classification(packet)
+                self._emit(*completed)
                 with self.cv:
                     self.active = False
                     self.completed += 1

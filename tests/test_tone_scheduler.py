@@ -77,7 +77,8 @@ class ToneSchedulerTests(unittest.TestCase):
                         s.cv.notify_all()
                         return 'tone' in calls and not s.tone_in_flight and not s.topic_in_flight
                 eventually(accept_results, timeout=3)
-                self.assertEqual(calls, ['events', 'topics', 'topics', 'tone'])
+                # The old round's tone batch now retries under round 2 after failure.
+                self.assertEqual(calls, ['events', 'topics', 'topics', 'tone'] + (['tone'] if fail else []))
                 self.assertEqual(s.last_list['body']['topics']['pending'], 0)
                 self.assertEqual(s.last_list['body']['topics']['list'][0]['count'], 5)
                 self.assertEqual(s.model_work.failed, fail)

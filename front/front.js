@@ -181,7 +181,7 @@ export default function mount(ctx) {
   let latestAt = "", refreshAt = "", refreshNotice = "";
   let items = [];
   let received = false;
-  let modelState = "";
+  let modelState = "", modelReason = "";
   let selectedTheme = "";
   let selectedTopic = "";
   let savedView = null;
@@ -749,7 +749,7 @@ export default function mount(ctx) {
     const dividerIndex = prefix > 0 && prefix < groups.length ? prefix : -1;
     if (received) {
       const count = groups.filter(group => group.reports.some(isNew)).length;
-      const modelText = modelState === "working" ? "整理中" : modelState === "paused" ? "整理暫停，下次更新繼續" : "";
+      const modelText = modelState === "working" ? "整理中" : modelState === "paused" ? (modelReason === "waiting" ? "整理暫停，等待下次更新" : "整理暫停，下次更新繼續") : "";
       status.textContent = [updatedText, refreshNotice, modelText, count ? `${count} 則新` : "", failedText, classificationText]
         .filter(Boolean).join(" · ");
     }
@@ -844,6 +844,7 @@ export default function mount(ctx) {
     latestAt = text(body.at);
     refreshNotice = "";
     if (refreshTimer !== null && latestAt !== refreshAt) finishRefresh();
+    modelReason = typeof body.model?.reason === "string" ? body.model.reason : "";
     modelState = body.model && typeof body.model === "object" && ["working", "paused", "done", "off"].includes(body.model.state)
       ? body.model.state : "";
     received = true;

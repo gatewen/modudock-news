@@ -432,6 +432,9 @@ class ClassificationSchedulerTests(unittest.TestCase):
                     expected = deepcopy(initial)
                     expected.pop("classify")
                     expected.pop("analysis")
+                    self.assertEqual(body.pop('model'), {'state':'working','reason':''} if packet is update
+                                     else {'state':'paused','reason':'waiting'})
+                    expected.pop('model')
                     self.assertEqual(body, expected)
                 eventually(lambda: not scheduler.in_flight)
                 with self.assertRaises(queue.Empty):

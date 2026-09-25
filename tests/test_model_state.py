@@ -31,7 +31,7 @@ class ModelStateTests(unittest.TestCase):
                     s.start()
                     initial = sink.packets.get(timeout=2)
                     self.assertEqual(initial['body']['model'], {'state':'working','reason':''})
-                    eventually(lambda: s.last_list is not None and s.last_list['body']['model']['state'] == 'paused', timeout=3)
+                    eventually(lambda: s.last_list is not None and s.last_list['body']['model'] == {'state':'paused','reason':reason}, timeout=3)
                     self.assertEqual(s.last_list['body']['model']['reason'], reason)
                     self.assertEqual(s.last_list['body']['at'], initial['body']['at'])
                     eventually(lambda: not (s.topic_in_flight or s.tone_in_flight))
@@ -68,7 +68,7 @@ class ModelStateTests(unittest.TestCase):
         packet['body']['padding'] = 'x' * (MAX_PACKET - len(packet_bytes(packet)))
         initial = fit_packet(packet)
         self.assertLess(len(initial['body']['items']), 20)
-        for state, reason in [('working',''),('paused','failed'),('paused','budget'),('off','disabled')]:
+        for state, reason in [('working',''),('paused','failed'),('paused','budget'),('paused','waiting'),('off','disabled')]:
             changed = deepcopy(initial)
             changed['body']['model'] = {'state':state,'reason':reason}
             self.assertLessEqual(len(packet_bytes(changed)),MAX_PACKET)

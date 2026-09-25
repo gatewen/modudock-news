@@ -2650,3 +2650,12 @@ test('unmount cancels refresh timer and late messages cannot restart UI', t => {
   h.button.dispatchEvent(new h.window.Event('click'));
   assert.equal(h.sent.length,1);
 });
+
+test('paused waiting explains next update and validates reason without retaining it', t => {
+  const h = setup(t);
+  for (const reason of ['waiting', 'budget', 'failed', {}, undefined]) {
+    h.message({...listing([]), model:{state:'paused', reason}});
+    const status = h.container.querySelector('[role="status"]');
+    assert.match(status.textContent, reason === 'waiting' ? /整理暫停，等待下次更新/ : /整理暫停，下次更新繼續/);
+  }
+});

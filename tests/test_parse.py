@@ -66,7 +66,7 @@ class ParseTests(unittest.TestCase):
         self.assertNotIn("https://example.com/0", candidate)
         self.assertIn("https://example.com/0", seen)
 
-    def test_first_seen_over_capacity_does_not_cascade_or_refresh_fifo(self):
+    def test_first_seen_over_capacity_does_not_cascade_with_lru(self):
         data = rss(''.join(entry(link=f'/{i}') for i in range(1001)))
         first, old = parse(data)
         original = deepcopy(old)
@@ -75,12 +75,24 @@ class ParseTests(unittest.TestCase):
         self.assertEqual(len(new), 1000)
         self.assertEqual([i for i, (a, b) in enumerate(zip(first, second))
                           if a['published'] != b['published']], [0])
-        self.assertEqual(list(new), list(old)[1:] + [first[0]['link']])
+        self.assertEqual(list(new), list(old))
         self.assertTrue(all(item['time_guessed'] for item in second))
         # Subsequent rounds lose only the one truly evicted timestamp, not all 1001.
         third, _ = parse(data, new, now=NOW + timedelta(minutes=20))
         self.assertEqual([i for i, (a, b) in enumerate(zip(second, third))
-                          if a['published'] != b['published']], [1])
+                          if a['published'] != b['published']], [0])
+
+    def test_first_seen_lru_preserves_present_item_across_rounds(self):
+        seen = OrderedDict((f'https://example.com/{i}', '2026-01-01T00:00:00.000000Z') for i in range(1000))
+        original = deepcopy(seen)
+        data = rss(entry(link='/0') + entry(link='/new'))
+        first, candidate = parse(data, seen)
+        self.assertEqual(seen, original)
+        self.assertIn('https://example.com/0', candidate)
+        self.assertNotIn('https://example.com/1', candidate)
+        self.assertEqual(list(candidate)[-2:], ['https://example.com/0', 'https://example.com/new'])
+        second, _ = parse(data, candidate, now=NOW + timedelta(hours=1))
+        self.assertEqual(first, second)
 
     def test_future_dates_over_one_hour_use_stable_first_seen(self):
         for date, guessed in [('2026-09-21T00:59:59Z', False),
