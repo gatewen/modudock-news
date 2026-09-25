@@ -64,6 +64,7 @@ function eventId(item) {
 }
 
 let focusHeadingId = 0;
+let descriptionId = 0;
 let watchInputId = 0;
 const css = `
 .nw {
@@ -88,6 +89,7 @@ const css = `
 }
 .nw *, .nw *::before, .nw *::after { box-sizing: border-box; }
 .nw [hidden] { display: none !important; }
+.nw .nw-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; border: 0; }
 .nw button, .nw select, .nw input {
   font: inherit;
   color: var(--nw-fg);
@@ -318,8 +320,7 @@ export default function mount(ctx) {
   const themeLabel = document.createElement("span");
   const clearTheme = document.createElement("button");
   clearTheme.type = "button";
-  clearTheme.textContent = "清除";
-  clearTheme.setAttribute("aria-label", "取消題材篩選");
+  clearTheme.textContent = "清除篩選";
   themeFilter.append(themeLabel, clearTheme);
   const topicSources = make("span", "nw-hint nw-topic-sources");
   topicSources.hidden = true;
@@ -500,6 +501,17 @@ export default function mount(ctx) {
     summary.append(bar, make("span", "nw-hint", `報導基調：${ranked.map(([id, name]) => `${name} ${tone[id]}`).join("・")}`));
     return summary;
   }
+  function describe(button, value, parent) {
+    const previousId = button.getAttribute("aria-describedby");
+    const previous = previousId ? document.getElementById(previousId) : null;
+    if (previous && root.contains(previous)) previous.remove();
+    button.removeAttribute("aria-describedby");
+    if (!value) return;
+    const description = make("span", "nw-sr", value);
+    description.id = `nw-description-${++descriptionId}`;
+    parent.append(description);
+    button.setAttribute("aria-describedby", description.id);
+  }
   function drawFocus(groups) {
     if (topics.length) {
       focus.hidden = false;
@@ -513,7 +525,7 @@ export default function mount(ctx) {
         button.type = "button";
         button.dataset.topicId = topic.id;
         button.setAttribute("aria-pressed", String(selectedTopic === topic.id));
-        button.setAttribute("aria-label", `篩選話題：${topic.title}，${topic.sources} 家媒體・${topic.count} 則`);
+        describe(button, `篩選話題：${topic.title}`, row);
         button.append(make("span", "nw-focus-long", `${topic.sources} 家媒體・${topic.count} 則`),
           make("span", "nw-focus-short", `${topic.sources} 家`));
         const copy = make("div", "nw-focus-copy");
@@ -542,7 +554,7 @@ export default function mount(ctx) {
       const button = make("button", "nw-focus-count");
       button.type = "button";
       button.dataset.event = group.id;
-      button.setAttribute("aria-label", `展開 ${group.count} 家媒體的報導`);
+      describe(button, "展開同事件的其他報導", row);
       button.append(make("span", "nw-focus-long", `${group.count} 家媒體`),
         make("span", "nw-focus-short", `${group.count} 家`));
       row.append(newsTitle(group.reports[0], "nw-title", group.reports.some(isNew)), button);
@@ -618,10 +630,9 @@ export default function mount(ctx) {
     const politics = categories.value === "politics";
     panel.hidden = !world && !politics && !financial(categories.value);
     panel.setAttribute("aria-label", politics ? "政治議題分析" : world ? "國際局勢分析" : "財經分析");
-    clearTheme.setAttribute("aria-label", politics ? "取消議題篩選" : world ? "取消地區篩選" : "取消題材篩選");
     themeFilter.hidden = panel.hidden || !selectedTheme;
     themeLabel.textContent = selectedTheme ? `已篩選：${topicNames.get(selectedTheme)}` : "";
-    clearTheme.textContent = "清除";
+    clearTheme.textContent = "清除篩選";
     topicSources.hidden = !selectedTopic;
     topicSources.textContent = "";
     if (selectedTopic) {
@@ -638,7 +649,6 @@ export default function mount(ctx) {
       themeFilter.hidden = false;
       themeLabel.textContent = `話題：${title.slice(0, 24).join("")}${title.length > 24 ? "…" : ""}`;
       clearTheme.textContent = "取消話題篩選";
-      clearTheme.setAttribute("aria-label", "取消話題篩選");
     }
     if (panel.hidden) return;
     signalHeading.textContent = world ? "局勢走向" : "股市訊號";
@@ -717,10 +727,9 @@ export default function mount(ctx) {
         button.append(make("span", "nw-theme-name", names.get(id)), track, make("span", "nw-theme-count"));
       }
       button.setAttribute("aria-pressed", String(selectedTheme === id));
-      const directions = [count.bull ? `${world ? "升級 " : "▲"}${count.bull}` : "", count.bear ? `${world ? "緩和 " : "▼"}${count.bear}` : ""].filter(Boolean).join(" ");
-      const description = `${names.get(id)} ${count.count}` + (directions ? `（${directions}）` : "");
-      button.setAttribute("aria-label", description);
-      button.title = description;
+      const description = politics ? "" : `${world ? "升級" : "利多"} ${count.bull}、${world ? "緩和" : "利空"} ${count.bear}`;
+      describe(button, description, ranking);
+      button.title = `${names.get(id)} ${count.count}${description ? `（${description}）` : ""}`;
       button.querySelector(".nw-theme-count").textContent = String(count.count);
       const bar = button.querySelector(".nw-theme-bar");
       bar.style.width = `${count.count / ranked[0][1].count * 100}%`;

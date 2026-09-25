@@ -243,6 +243,8 @@ test('classification status requires literal false or a nonnegative integer pend
 
 const analysis = (overrides = {}) => ({market: 'positive', theme: 'memory', dir: 'bull', dir_p: 0.8, ...overrides});
 const financeArticle = (overrides = {}) => article({category: 'finance', analysis: analysis(), ...overrides});
+const rankLabel = button => `${button.querySelector('.nw-theme-name').textContent} ${button.querySelector('.nw-theme-count').textContent}`;
+const described = (h, button) => h.window.document.getElementById(button.getAttribute('aria-describedby'))?.textContent;
 const panel = h => h.container.querySelector('[aria-label=財經分析]');
 const themeButtons = h => [...h.container.querySelectorAll('[aria-label=題材排行] button')];
 const themeButton = (h, id) => themeButtons(h).find(button => button.dataset.topic === id);
@@ -292,7 +294,7 @@ test('panel counts scope, unknowns, pending and macro direction using validated 
     '正面 2、正反 1、無關 4、負面 1', '無關 1、未明 3',
     '大盤／總經  2 個事件利多 0利空 1',
   ]);
-  assert.deepEqual(themeButtons(h).map(b => b.getAttribute('aria-label')), ['記憶體 2（▲1）', '光通訊 1（▲1）', '能源 1']);
+  assert.deepEqual(themeButtons(h).map(rankLabel), ['記憶體 2', '光通訊 1', '能源 1']);
   choose(h, h.select, '甲');
   assert.equal(lines()[0], '7 個事件（7 則報導），1 個來源');
   assert.equal(lines()[1], '待分析 2');
@@ -319,10 +321,10 @@ test('ranking uses count then fixed table order, excludes macro/other and caps a
   assert.equal(themeButtons(h).length, 10);
   assert.deepEqual(themeButtons(h).map(b => b.dataset.topic),
     ['memory', 'foundry', 'ic_design', 'packaging', 'semi_equip', 'ai_server', 'cooling', 'pcb', 'optical', 'display']);
-  assert.equal(themeButton(h, 'memory').getAttribute('aria-label'), '記憶體 2');
+  assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 2');
   for (const group of [themes.slice(0, 10), themes.slice(10)]) {
     h.message(listing(group.map(([theme]) => financeArticle({analysis: analysis({theme, dir: 'neutral'})}))));
-    assert.deepEqual(themeButtons(h).map(b => b.getAttribute('aria-label')), group.map(([, name]) => `${name} 1`));
+    assert.deepEqual(themeButtons(h).map(rankLabel), group.map(([, name]) => `${name} 1`));
   }
 });
 
@@ -345,7 +347,7 @@ test('direction threshold 0.59/0.6 controls both ranking arrows and row prefixes
   assert.deepEqual(labels(), [['財經', '記憶體'], ['財經', '記憶體 ▲'], ['財經', '記憶體'], ['財經', '記憶體 ▼'],
     ['財經', '記憶體'], ['財經', '記憶體'], ['財經', '大盤 ▲'], ['財經', ''], ['財經', ''], ['科技', '記憶體 ▲'], ['社會', '']]);
   choose(h, h.categories, 'finance');
-  assert.equal(themeButton(h, 'memory').getAttribute('aria-label'), '記憶體 6（▲1 ▼1）');
+  assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 6');
 });
 
 test('theme filter toggles, cancels, preserves panel scope and survives same-at updates', t => {
@@ -362,9 +364,9 @@ test('theme filter toggles, cancels, preserves panel scope and survives same-at 
   assert.deepEqual(rowTitles(h), ['甲記憶體']);
   assert.equal(panel(h).textContent, stats);
   assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'true');
-  const clear = h.container.querySelector('[aria-label=取消題材篩選]');
+  const clear = h.container.querySelector('.nw-filter button');
   assert.equal(clear.parentElement.hidden, false);
-  assert.equal(clear.parentElement.textContent, '已篩選：記憶體清除');
+  assert.equal(clear.parentElement.textContent, '已篩選：記憶體清除篩選');
   themeButton(h, 'memory').click();
   assert.deepEqual(rowTitles(h), ['甲記憶體', '甲代工']);
   themeButton(h, 'memory').click();
@@ -392,8 +394,8 @@ test('selected theme remains cancellable after it disappears from new data', t =
   themeButton(h, 'memory').click();
   h.message(listing([financeArticle({analysis: analysis({theme: 'foundry'})})]));
   assert.deepEqual(rowTitles(h), []);
-  assert.equal(themeButton(h, 'foundry').getAttribute('aria-label'), '晶圓代工 1（▲1）');
-  h.container.querySelector('[aria-label=取消題材篩選]').click();
+  assert.equal(rankLabel(themeButton(h, 'foundry')), '晶圓代工 1');
+  h.container.querySelector('.nw-filter button').click();
   assert.equal(rowTitles(h).length, 1);
 });
 
@@ -437,7 +439,7 @@ test('analysis panel and prefixes remain text-only with hostile fields', t => {
   assert.equal(h.container.querySelectorAll('img,script').length, 0);
   assert.equal(h.container.querySelector('a').textContent, evil);
   assert.equal(h.container.querySelector('a').title, evil);
-  assert.equal(themeButton(h, 'memory').getAttribute('aria-label'), '記憶體 1（▲1）');
+  assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
   assert.equal(themeButtons(h).length, 1);
   assert.equal(h.container.querySelectorAll('li')[1].querySelector('.nw-category').textContent, '財經');
   assert.equal(h.container.querySelectorAll('li')[1].querySelector('.nw-tag'), null);
@@ -449,7 +451,7 @@ test('unmount removes theme delegation and clear-filter listeners', t => {
   choose(h, h.categories, 'finance');
   themeButton(h, 'memory').click();
   const button = themeButton(h, 'foundry');
-  const clear = h.container.querySelector('[aria-label=取消題材篩選]');
+  const clear = h.container.querySelector('.nw-filter button');
   const detachedList = h.container.querySelector('ul');
   const detachedPanel = panel(h);
   const text = detachedPanel.textContent;
@@ -624,7 +626,7 @@ test('empty state starts loading and clear filters resets source, category and t
 
 test('clear buttons are separate and only visible in their intended states', t => {
   const h = setup(t);
-  const themeClear = h.container.querySelector('[aria-label=取消題材篩選]');
+  const themeClear = h.container.querySelector('.nw-filter button');
   const emptyClear = h.container.querySelector('.nw-empty button');
   assert.notEqual(themeClear, emptyClear);
   // Check computed display along the ancestor chain: hidden attributes alone
@@ -646,7 +648,7 @@ test('clear buttons are separate and only visible in their intended states', t =
     assert.deepEqual(visibleClearButtons(), []);
   }
   themeButton(h, 'memory').click();
-  assert.deepEqual(visibleClearButtons(), ['清除']);
+  assert.deepEqual(visibleClearButtons(), ['清除篩選']);
   themeClear.click();
   assert.deepEqual(visibleClearButtons(), []);
   h.message(listing([]));
@@ -788,12 +790,12 @@ test('panel counts events and takes earliest valid analysis while retaining repo
   assert.equal(panel(h).querySelector('.nw-warning').hidden, false); // 10 reports but only 3 events.
   assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '正面 0、正反 1、無關 1、負面 1');
   assert.equal(panel(h).querySelector('.nw-macro').textContent, '大盤／總經  1 個事件利多 1利空 0');
-  assert.equal(themeButton(h, 'memory').getAttribute('aria-label'), '記憶體 1（▼1）');
+  assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
   assert.equal(panel(h).querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
   choose(h, h.select, '甲');
   assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（9 則報導），1 個來源');
   assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '正面 1、正反 1、無關 1、負面 0');
-  assert.equal(themeButton(h, 'memory').getAttribute('aria-label'), '記憶體 1（▲1）');
+  assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
 });
 
 test('representative compares actual timestamps and uses source order on equal dates', t => {
@@ -952,7 +954,7 @@ test('regions rank by event count then fixed order, include other, hide zeros an
   assert.deepEqual(regionButtons(h).map(b => b.dataset.topic),
     ['region:asia_pacific', 'region:us_china', 'region:middle_east', 'region:europe_russia', 'region:americas', 'region:other']);
   const asia = regionButton(h, 'asia_pacific');
-  assert.equal(asia.getAttribute('aria-label'), '亞太 3（升級 1 緩和 1）');
+  assert.equal(rankLabel(asia), '亞太 3');
   const bar = asia.querySelector('.nw-theme-bar');
   assert.equal(bar.style.width, '100%');
   assert.deepEqual([...bar.children].map(p => p.className), ['nw-segment nw-escalation', 'nw-segment nw-deescalation', 'nw-segment nw-idle']);
@@ -980,12 +982,12 @@ test('region filter acts before event folding, preserves scope and selections on
   assert.deepEqual(mainTitles(h), ['晚亞太', '獨立亞太']);
   assert.equal(worldPanel(h).textContent, before);
   assert.equal(regionButton(h, 'asia_pacific').getAttribute('aria-pressed'), 'true');
-  assert.equal(h.container.querySelector('.nw-filter').textContent, '已篩選：亞太清除');
+  assert.equal(h.container.querySelector('.nw-filter').textContent, '已篩選：亞太清除篩選');
   h.message(listing([...items, worldArticle({title: '新增亞太'})]));
   assert.equal(h.select.value, '甲');
   assert.equal(h.categories.value, 'world');
   assert.deepEqual(mainTitles(h), ['晚亞太', '獨立亞太', '新增亞太']);
-  h.container.querySelector('[aria-label=取消地區篩選]').click();
+  h.container.querySelector('.nw-filter button').click();
   assert.ok(mainTitles(h).includes('早美中'));
   regionButton(h, 'asia_pacific').click();
   regionButton(h, 'asia_pacific').click();
@@ -1050,7 +1052,7 @@ test('world region controls are inert after unmount', t => {
   choose(h, h.categories, 'world');
   regionButton(h, 'asia_pacific').click();
   const button = regionButton(h, 'other');
-  const clear = h.container.querySelector('[aria-label=取消地區篩選]');
+  const clear = h.container.querySelector('.nw-filter button');
   const list = h.container.querySelector('.nw-list');
   h.handle.unmount();
   button.click();
@@ -1099,7 +1101,7 @@ test('focus requires three distinct named sources, ranks by count latest time an
   assert.equal(focusArea(h).hidden, false);
   assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['000000000001', '000000000002',
     '000000000003', '000000000004', '000000000005']);
-  assert.equal(focusButtons(h)[0].getAttribute('aria-label'), '展開 4 家媒體的報導');
+  assert.equal(described(h, focusButtons(h)[0]), '展開同事件的其他報導');
   assert.equal(focusButtons(h)[0].querySelector('.nw-focus-long').textContent, '4 家媒體');
   assert.equal(focusButtons(h)[0].querySelector('.nw-focus-short').textContent, '4 家');
   assert.equal(focusArea(h).querySelector('a').textContent, '000000000001-0');
@@ -1357,7 +1359,7 @@ test('topic filter cancels via clear button, source change, category change and 
   const body = topicListing([article({topic:id}), article({title:'外面', source:'乙', category:'politics'})]);
   h.message(body);
   for (const cancel of [
-    () => h.container.querySelector('[aria-label="取消話題篩選"]').click(),
+    () => h.container.querySelector('.nw-filter button').click(),
     () => choose(h, h.select, '乙'),
     () => choose(h, h.categories, 'politics'),
   ]) {
@@ -1396,7 +1398,7 @@ test('new topic badge comes from any member and topic listeners are inert after 
   h.message(body);
   assert.equal(focusArea(h).querySelectorAll('.nw-new').length, 1);
   focusTopicButtons(h)[0].click();
-  const retained = focusTopicButtons(h)[0], clear = h.container.querySelector('[aria-label="取消話題篩選"]');
+  const retained = focusTopicButtons(h)[0], clear = h.container.querySelector('.nw-filter button');
   h.handle.unmount();
   retained.click(); clear.click();
   assert.equal(h.container.children.length, 0);
@@ -2015,7 +2017,7 @@ test('politics panel ranks neutral issues by events, filters and clears incompat
   buttons()[0].click(); assert.equal(mainRows(h).length,2);
   assert.equal(buttons()[0].getAttribute('aria-pressed'),'true');
   h.message(body); assert.equal(mainRows(h).length,2);
-  h.container.querySelector('[aria-label="取消議題篩選"]').click(); assert.equal(mainRows(h).length,6);
+  h.container.querySelector('.nw-filter button').click(); assert.equal(mainRows(h).length,6);
   buttons()[0].click(); buttons()[0].click(); assert.equal(mainRows(h).length,6);
   buttons()[0].click(); choose(h,h.categories,'finance');
   assert.equal(mainRows(h).length,1); assert.equal(surface.querySelector('.nw-market').hidden,false);
@@ -2033,4 +2035,56 @@ test('issue "other" ranks last even when it has more events', t => {
   const surface=h.container.querySelector('[aria-label="政治議題分析"]');
   assert.deepEqual([...surface.querySelectorAll('button[data-topic]')].map(b=>b.dataset.topic),
     ['issue:energy_env','issue:other']);
+});
+
+test('text buttons use visible names and external descriptions survive redraws and unmount cleanly', t => {
+  const h=setup(t), topic=topicRecord({title:'<img src=x> 完整話題標題'});
+  const reports=[...focusReports('111111111111',3,10,{topic:topic.id}),
+    financeArticle({analysis:analysis({dir:'bear'})}),worldArticle(),
+    article({category:'politics',analysis:{kind:'politics',issue:'budget'}})];
+  const scan=()=>{
+    for (const button of h.container.querySelectorAll('button')) {
+      if (button.textContent.trim()) assert.equal(button.hasAttribute('aria-label'),false);
+      const id=button.getAttribute('aria-describedby');
+      if (id) {
+        const node=h.window.document.getElementById(id);
+        assert.ok(node && h.container.contains(node));
+        assert.equal(node.className,'nw-sr');
+        assert.equal(button.contains(node),false);
+        assert.ok(node.textContent);
+        assert.doesNotMatch(node.textContent,/[▲▼]/);
+        assert.equal(node.hidden,false);
+      }
+    }
+    const ids=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
+    assert.equal(new Set(ids).size,ids.length);
+    assert.equal(ids.length,h.container.querySelectorAll('button[aria-describedby]').length);
+  };
+  h.message(listing(reports));
+  assert.equal(described(h,focusButtons(h)[0]),'展開同事件的其他報導');
+  scan();
+  const body=topicListing(reports,[topic]);
+  h.message(body);
+  assert.equal(described(h,focusTopicButtons(h)[0]),`篩選話題：${topic.title}`);
+  assert.equal(h.container.querySelector('img'),null);
+  choose(h,h.categories,'finance');
+  assert.equal(described(h,themeButton(h,'memory')),'利多 1、利空 1');
+  themeButton(h,'memory').click();
+  assert.equal(h.container.querySelector('.nw-filter button').textContent,'清除篩選');
+  scan();
+  const oldIds=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
+  h.message(body); scan();
+  for (const id of oldIds) assert.equal(h.window.document.getElementById(id),null);
+  choose(h,h.categories,'world');
+  assert.equal(described(h,regionButton(h,'asia_pacific')),'升級 1、緩和 0');
+  scan();
+  choose(h,h.categories,'politics');
+  assert.equal(h.container.querySelector('[data-topic="issue:budget"]').hasAttribute('aria-describedby'),false);
+  scan();
+  focusTopicButtons(h)[0].click();
+  assert.equal(h.container.querySelector('.nw-filter button').textContent,'取消話題篩選');
+  scan();
+  const finalIds=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
+  h.handle.unmount();
+  for (const id of finalIds) assert.equal(h.window.document.getElementById(id),null);
 });
