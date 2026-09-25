@@ -206,6 +206,25 @@ npm test
 ./scripts/dev-check.sh
 ```
 
+要量一次真實 RSS 與模型處理時間，可在模組 repo 執行：
+
+```sh
+/usr/local/bin/python3 scripts/real_run.py --timeout 120 --topic-min 20 --save /tmp/news-last.json
+```
+
+腳本繼承環境中的 `TYPESAFE_API_KEY`；**有 key 時會實際呼叫 jev API，產生費用**。
+沒有 key 也能跑，只驗 RSS 與 stdio 協定。不要把 key 放進命令列參數。
+`--root /path/to/news` 可指定另一份模組副本，預設使用腳本所在的 repo。
+腳本不使用 `NEWS_TEST_*` 測試覆寫。
+
+每收到一份列表就印秒數、各類待辦數、話題摘要與整理狀態；模型完成或關閉時結束，
+預設最多等 120 秒，最後送 `bye` 並等待後半退出。摘要列出首份列表、全部完成、
+首次出現至少 20 則報導話題的時間（可用 `--topic-min` 調整），以及已分類／已分析數、
+事件數、多報導事件數、話題家數與基調、後半的 `model round=` 統計。
+未達成的時間顯示「—」；逾時或失敗以非零狀態退出，不當成完成。
+`--save` 可省略；有設定時保存最後一份完整 list 封包，逾時也保留已收到的部分結果，
+尚未收到列表則不寫檔。
+
 dev-check 需要 Go 與提供內建 WebSocket 的 Node，會起自己的殼、連 `/ws` 比對
 完整 catalog 宣告，再關閉自己的 process group；8731 已占用時拒絕執行。
 此檢查不等於瀏覽器掛載驗收。協定測試使用真 subprocess；

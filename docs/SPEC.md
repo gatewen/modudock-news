@@ -1189,3 +1189,16 @@ cx-mod 以「每天早上看 3 分鐘的使用者」走查提出 5 項（皆不�
 **R33-3 未來日期上限**：發布時間比目前時間晚超過 1 小時者，視為不可信：改用 first_seen（推定時間，`time_guessed=true`）。
 **R33-4 比對用正規化去除零寬字元**：事件 `_bigrams` 與話題 `words()` 在比對前移除 U+200B、U+200C、U+2060、U+FEFF（**不移除** U+200D ZWJ，以免破壞 emoji 序列）；顯示文字不變。
 - 驗收：各一個單元測試（可直接改寫 r33_* 腳本）；既有事件自動合併的測試不得因 R33-1 失效（真實制式短標題若受影響需說明）；cc-mod 真實跑比對事件數與話題不退步。
+
+### 18.34 第 34 輪（開發工具：真實端到端腳本進 repo）
+
+第 33 輪結果：壓測 4 條修正（審核抓到 automatic 重算 bigram 的效能退化並修正）。並行耐久 22 分鐘 3 輪全正常。
+**動機**：本次進化每輪都靠 repo 外的臨時腳本做真 API 滿額驗證（~/.claude/.../evolve/run_e2e.py、ttf.py）；下次開發拿不到。
+
+**R34-A `scripts/real_run.py`**（純 stdlib，/usr/local/bin/python3 可跑）
+- 以 stdio 協定啟動 `back/news.py`（hello→up），印出每份列表的時間線（秒數、各類 pending、topics 清單摘要、model.state），直到 `model.state == "done"`／`"off"` 或逾時（`--timeout`，預設 120 秒），送 bye 並等待退出。
+- 結束時印摘要：首份列表時間、全部完成時間、焦點首次出現 ≥N 則話題的時間（`--topic-min`，預設 20）、分類／分析完成數、事件數與多報導事件數、話題清單（則數／家數／基調）、stderr 中的 `model round=` 行。
+- `--save OUT.json` 另存最後一份列表；`--root` 指定模組目錄（預設 repo 根）。
+- 不印 API key、不印新聞內容以外的敏感資訊；沒有 key 時照常跑（只驗 RSS 與協定）。
+- README「本機開發」加一段用法（會實際呼叫 jev API、產生費用）。
+- 驗收：cc-mod 用它跑一次真 API，輸出與 evolve 臨時腳本一致。
