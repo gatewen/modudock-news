@@ -6,6 +6,7 @@ Destination validation does not pin DNS answers (no rebinding guarantee).
 from dataclasses import dataclass, field
 import http.client
 import ipaddress
+import re
 import socket
 import ssl
 import os
@@ -74,6 +75,8 @@ class _Redirect(HTTPRedirectHandler):
         if self.count > 5:
             raise FetchError("redirect limit")
         target = urljoin(req.full_url, location)
+        if urlsplit(req.full_url).scheme == "https" and urlsplit(target).scheme == "http":
+            raise FetchError("HTTPS downgrade forbidden")
         self.fetcher.check_destination(target)
         self.check_deadline()
         new = Request(target, headers=dict(req.headers))
@@ -125,6 +128,13 @@ class Fetcher:
             raise FetchError("no CA certificates")
         port = parts.port or (443 if parts.scheme == "https" else 80)
         host = parts.hostname
+        if "%" in host:
+            raise FetchError("invalid hostname")
+        try:
+            ipaddress.ip_address(host)
+        except ValueError:
+            if re.fullmatch(r"[A-Za-z0-9.-]+", host) is None:
+                raise FetchError("invalid hostname")
         addresses = self.resolver(host, port, type=socket.SOCK_STREAM)
         if not addresses:
             raise FetchError("DNS returned no addresses")

@@ -222,7 +222,8 @@ class TopicSchedulerTests(unittest.TestCase):
             self.assertFalse(s.topic_cache)
 
     def test_seed_state_tracks_only_successfully_sent_lists_and_survives_round_stop(self):
-        items, _ = snapshot()
+        # Keep the older replacement seed visible under the per-source ceiling.
+        items, _ = snapshot(size=60)
         with server(response) as (url, _):
             s, sink = self.make(url, items)
             first = s._emit(s.caches, [])

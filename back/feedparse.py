@@ -34,6 +34,7 @@ MAX_POLITICS_ANALYSIS["kind"] = "politics"
 MAX_ANALYSIS = max((MAX_ANALYSIS, MAX_WORLD_ANALYSIS, MAX_POLITICS_ANALYSIS), key=lambda value: len(json.dumps(value)))
 ANALYSIS_RESERVE = len(json.dumps(MAX_ANALYSIS)) - len(json.dumps(None))
 MAX_ITEMS_LIST = 300
+MAX_ITEMS_SOURCE = 60
 MAX_PACKET = 900 * 1024
 # Titles can contain 300 non-BMP code points (12 ASCII bytes each on wire).
 TOPICS_RESERVE = len(json.dumps({'pending': MAX_ITEMS_LIST, 'tone_pending': MAX_ITEMS_LIST, 'list': [
@@ -136,7 +137,7 @@ class _Plain(HTMLParser):
 
 def plain(value, limit):
     parser = _Plain()
-    parser.feed(value)
+    parser.feed(value[:8192])
     parser.close()
     return " ".join(unescape("".join(parser.parts)).split())[:limit]
 
@@ -223,7 +224,7 @@ def parse_feed(data, final_url, source, first_seen, now):
             continue
         date = first(entry, "published" if atom else "pubDate") or first(entry, "updated")
         published = _date(date)
-        if published is not None and datetime.fromisoformat(published) - current > timedelta(hours=1):
+        if published is not None and datetime.fromisoformat(published) - current > timedelta(minutes=10):
             published = None
         guessed = published is None
         if guessed:
@@ -260,14 +261,19 @@ def merge_items(source_items):
         if len(reserved) < 3:
             reserved.append(dedup_key(item["link"]))
     selected = set()
+    counts = Counter()
     for keys in by_source.values():
         for key in keys:
             if len(selected) < MAX_ITEMS_LIST:
                 selected.add(key)
+                counts[winners[key]["source"]] += 1
     for item in result:
         if len(selected) >= MAX_ITEMS_LIST:
             break
-        selected.add(dedup_key(item["link"]))
+        key = dedup_key(item["link"])
+        if key not in selected and counts[item["source"]] < MAX_ITEMS_SOURCE:
+            selected.add(key)
+            counts[item["source"]] += 1
     return deepcopy([item for item in result if dedup_key(item["link"]) in selected])
 
 

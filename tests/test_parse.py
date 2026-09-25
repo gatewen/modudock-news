@@ -94,11 +94,11 @@ class ParseTests(unittest.TestCase):
         second, _ = parse(data, candidate, now=NOW + timedelta(hours=1))
         self.assertEqual(first, second)
 
-    def test_future_dates_over_one_hour_use_stable_first_seen(self):
-        for date, guessed in [('2026-09-21T00:59:59Z', False),
-                              ('2026-09-21T01:00:00Z', False),
-                              ('2026-09-21T09:00:00+08:00', False),
-                              ('2026-09-21T01:00:00.000001Z', True),
+    def test_future_dates_over_ten_minutes_use_stable_first_seen(self):
+        for date, guessed in [('2026-09-21T00:09:59Z', False),
+                              ('2026-09-21T00:10:00Z', False),
+                              ('2026-09-21T08:10:00+08:00', False),
+                              ('2026-09-21T00:10:00.000001Z', True),
                               ('2099-01-01T00:00:00Z', True),
                               ('1970-01-01T00:00:00Z', False)]:
             with self.subTest(date=date):
@@ -215,11 +215,11 @@ class MergeAndSizeTests(unittest.TestCase):
         self.assertEqual(fp.dedup_key(old["link"]), "https://example.com/x?a=1")
 
     def test_sort_ties_stable_and_300_cap(self):
-        items = [self.item(f"{i:03d}", f"https://example.com/{i}", source="B" if i % 2 else "A") for i in range(305)]
+        items = [self.item(f"{i:03d}", f"https://example.com/{i}", source=chr(65 + i % 5)) for i in range(305)]
         first = fp.merge_items([list(reversed(items))])
         self.assertEqual(first, fp.merge_items([items]))
         self.assertEqual(len(first), 300)
-        self.assertEqual([(x["source"], x["title"]) for x in first], sorted((x["source"], x["title"]) for x in items)[:300])
+        self.assertEqual([(x["source"], x["title"]) for x in first], sorted((x["source"], x["title"]) for x in items if int(x["title"]) < 300))
 
     def test_size_guard_reachable_and_matches_outbox(self):
         items = [dict(self.item("中" * 300, "https://example.com/" + "x" * 2028, source="源" * 64), summary="文" * 200, category="entertainment") for _ in range(300)]
@@ -265,7 +265,7 @@ class ClassifySizeTests(unittest.TestCase):
 class SourceFloorTests(unittest.TestCase):
     item = MergeAndSizeTests.item
     def test_old_source_keeps_latest_three_with_300_total(self):
-        recent = [self.item(str(i), f'https://example.com/new/{i}', '2026-09-25', 'A') for i in range(300)]
+        recent = [self.item(str(i), f'https://example.com/new/{i}', '2026-09-25', f'A{i % 5}') for i in range(300)]
         old = [self.item(str(i), f'https://example.com/old/{i}', f'2026-09-{i + 1:02d}', 'B') for i in range(10)]
         result = fp.merge_items([recent, old])
         self.assertEqual(len(result), fp.MAX_ITEMS_LIST)

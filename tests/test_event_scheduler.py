@@ -324,7 +324,8 @@ class EventSchedulerTests(unittest.TestCase):
                 self.assertEqual(packet['body']['at'], first['at'])
 
     def test_all_automatic_edges_exceeding_cache_capacity_still_merge_without_pending(self):
-        items = [article(i) for i in range(MAX_ITEMS_LIST)]
+        feeds = json.loads((Path(__file__).parents[1] / 'back/feeds.json').read_text())
+        items = [article(i, source=feeds[i % 5]['name']) for i in range(MAX_ITEMS_LIST)]
         scheduler, sink, _ = self.make(items, self.clients('http://127.0.0.1:9'))
         packet = scheduler._emit(scheduler.caches, [])
         body = self.round(sink)

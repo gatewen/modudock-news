@@ -574,18 +574,18 @@ class ClassificationSchedulerTests(unittest.TestCase):
         from tests.test_classify import server, answers
         gate, entered = self.gate(), threading.Event()
         group = [("a", 1)]
-        def fetch(*_):
+        def fetch(source, _):
             prefix, count = group[0]
             data = ('<rss><channel>' + ''.join(
                 f'<item><title>{prefix}{i}</title><link>https://example.com/{prefix}{i}</link></item>'
-                for i in range(count)) + '</channel></rss>').encode()
+                for i in range(int(source), count, 5)) + '</channel></rss>').encode()
             return Result("ok", data, "https://example.com")
         def respond(payload, *_):
             entered.set()
             gate.wait()
             return 200, answers(len(payload["state"])), {}
         with server(respond) as (url, received):
-            scheduler, sink, _ = self.create(fetch, classifier=self.classifier(url))
+            scheduler, sink, _ = self.create(fetch, count=5, classifier=self.classifier(url))
             before = threading.active_count()
             scheduler.start()
             try:
@@ -1095,7 +1095,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             gate.wait()
             return 200, model_answers(payload), {}
         with server(respond) as (url, received):
-            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels[0]), **self.clients(url))
+            scheduler, sink, _ = self.create(lambda source, _: analysis_feed(labels[0][int(source)::5]), count=5, **self.clients(url))
             with scheduler.cv:
                 for label in ['finance-a'] + [f'finance-b{i}' for i in range(100)] + [f'finance-c{i}' for i in range(MAX_ITEMS_LIST)]:
                     scheduler.classify_cache['https://example.com/' + label] = 'finance'
@@ -1123,7 +1123,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
                 gate.set()
 
     def test_300_items_always_have_analysis_even_without_key(self):
-        scheduler, sink, _ = self.create(lambda *_: analysis_feed([f'society-{i}' for i in range(305)]))
+        scheduler, sink, _ = self.create(lambda url, _: analysis_feed([f'society-{i}' for i in range(int(url) * 60, (int(url) + 1) * 60)]), count=5)
         scheduler.start()
         body = self.round(sink)
         self.assertEqual(len(body['items']), 300)
@@ -1243,7 +1243,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
         self.assertEqual(MAX_ITEMS_LIST, 300)
         labels = [f'finance-{i:03d}' for i in range(MAX_ITEMS_LIST)]
         with server(lambda p, *_: (200, model_answers(p), {})) as (url, received):
-            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels), **self.clients(url))
+            scheduler, sink, _ = self.create(lambda source, _: analysis_feed(labels[int(source)*60:(int(source)+1)*60]), count=5, **self.clients(url))
             if cached_categories:
                 with scheduler.cv:
                     scheduler.classify_cache.update({'https://example.com/' + label: 'finance' for label in labels})
