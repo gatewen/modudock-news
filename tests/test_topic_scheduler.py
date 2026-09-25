@@ -7,7 +7,7 @@ from back.classify import Classifier
 from back.analyze import Analyzer
 from back.events import EventMatcher, Pair, candidate_pairs
 from back.topics import TopicMatcher, TopicPair
-from back.scheduler import Scheduler, Cache, TopicResult, ModelRound
+from back.scheduler import Scheduler, Cache, TopicResult, AnalysisResult, ModelRound
 from back.fetch import Result
 from back.feedparse import MAX_PACKET, packet_bytes
 from tests.test_classify import server
@@ -144,8 +144,8 @@ class TopicSchedulerTests(unittest.TestCase):
                 return not all(q.empty() for q in [s.topic_jobs,s.event_jobs,s.analysis_jobs,s.classify_jobs])
             s._submit_classification = submit
             s._classify_worker()
-            self.assertEqual(calls, ['classify','analysis','events'] + (['topics'] if budget==100 else []))
-            self.assertIsInstance(results[-1], TopicResult)
+            self.assertEqual(calls, ['classify','events','topics'] + (['analysis'] if budget==100 else []))
+            self.assertIsInstance(results[-1], AnalysisResult)
             if budget==60: self.assertTrue(work.failed)
 
     def test_topic_cache_fifo_late_results_active_suppression_and_no_change_no_resend(self):

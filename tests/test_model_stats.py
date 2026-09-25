@@ -68,8 +68,8 @@ class ModelStatsTests(unittest.TestCase):
                 s._submit_classification = submit
                 s._classify_worker()
                 stats = [line for line in logs if line.startswith('model ')]
-                count = 2 if failure else 4 if budget == 80 else 5
+                count = 4 if failure or budget == 80 else 5
                 self.assertEqual(stats, [f'model round=7 requests={count} failed={int(bool(failure))} elapsed={count*20:.1f}s '
-                    f'classify=1 analysis=1 events={int(not failure)} topics={int(not failure)} tone={int(not failure and budget==100)}'])
+                    f'classify=1 analysis=1 events=1 topics=1 tone={int(not failure and budget==100)}'])
                 self.assertFalse(s.model_rounds)
                 self.assertFalse(any(secret in '\n'.join(logs) for secret in ['SECRET','private.invalid','NEWS-CONTENT']))

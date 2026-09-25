@@ -148,12 +148,12 @@ class Scheduler:
         self.lanes = (
             _Lane('classify', self.classify_jobs, False, _items_fit,
                   lambda batch: self.classifier.classify(batch), ClassifyResult, True),
-            _Lane('analysis', self.analysis_jobs, False, _items_fit,
-                  lambda batch, **options: self.analyzer.analyze(batch, **options), AnalysisResult),
             _Lane('events', self.event_jobs, True, pairs_fit,
                   lambda batch: self.matcher.match(batch), EventResult, True),
             _Lane('topics', self.topic_jobs, True, topics_fit,
                   lambda batch: self.topic_matcher.match(batch), TopicResult, True),
+            _Lane('analysis', self.analysis_jobs, False, _items_fit,
+                  lambda batch, **options: self.analyzer.analyze(batch, **options), AnalysisResult),
             _Lane('tone', self.tone_jobs, False, _items_fit,
                   lambda batch: self.tone_client.tone(batch), ToneResult),
         )

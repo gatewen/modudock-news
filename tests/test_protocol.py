@@ -334,9 +334,8 @@ class ProtocolTests(unittest.TestCase):
             self.assertTrue(all(len(i['event']) == 12 and i['event_size'] == 1 for i in initial['body']['items']))
             self.assertEqual(publish['t'], 'publish')
             self.assertTrue(entered.wait(2))
-            self.assertEqual([kind(p) for _, _, p in received], ['classify', 'analysis', 'events'])
-            # Drain ordinary classification/analysis updates before bye.
-            self.packet()
+            self.assertEqual([kind(p) for _, _, p in received], ['classify', 'events'])
+            # Drain the classification update before bye; analysis waits for events.
             self.packet()
             started = time.monotonic()
             self.send('bye')

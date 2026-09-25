@@ -149,7 +149,7 @@ class ToneSchedulerTests(unittest.TestCase):
                 return not all(q.empty() for q in [s.classify_jobs,s.analysis_jobs,s.event_jobs,s.topic_jobs,s.tone_jobs])
             s._submit_classification=submit
             s._classify_worker()
-            self.assertEqual(calls,['classify','analysis','events','topics']+(['tone'] if budget==100 else []))
+            self.assertEqual(calls,['classify','events','topics','analysis']+(['tone'] if budget==100 else []))
             self.assertIsInstance(results[-1],ToneResult)
 
     def test_fifo_success_only_active_late_results_and_disabled_counts(self):

@@ -153,7 +153,7 @@ class EventSchedulerTests(unittest.TestCase):
         self.assertNotIn(frozenset(('bad', 'value')), scheduler.event_cache)
         self.assertIs(scheduler.event_cache[frozenset(('x', 'y'))], False)
 
-    def test_pair_priority_below_classification_and_analysis_at_batch_boundary(self):
+    def test_pair_priority_below_classification_above_analysis_at_batch_boundary(self):
         gate, entered = self.gate(), threading.Event()
         def respond(payload, n, _):
             if n == 1:
@@ -180,8 +180,8 @@ class EventSchedulerTests(unittest.TestCase):
             stages = [kind(payload) for _, _, payload in received]
             self.assertEqual(stages[0], 'events')
             self.assertEqual(stages[1], 'classify')
-            self.assertTrue(all(stage == 'analysis' for stage in stages[2:-1]))
-            self.assertEqual(stages[-1], 'events')
+            self.assertEqual(stages[2], 'events')
+            self.assertTrue(all(stage == 'analysis' for stage in stages[3:]))
 
     def test_queue_capacity_from_merge_constant_and_dedup_processing_keys(self):
         items = [article(i, title=f'abcdefghij{i:03d}xyz{i:03d}') for i in range(50)]
@@ -212,7 +212,7 @@ class EventSchedulerTests(unittest.TestCase):
             self.assertEqual(len(received), 2)
 
     def test_auth_failure_in_any_stage_disables_all_three_and_releases_jobs(self):
-        for stage in ['classify', 'analysis', 'events']:
+        for stage in ['classify', 'events', 'analysis']:
             with self.subTest(stage=stage), server(lambda p, *_: (401, {}, {}) if kind(p) == stage else response(p)) as (url, received):
                 clients = self.clients(url)
                 scheduler, sink, _ = self.make(self.pair_items(), clients, cached=False)
@@ -224,7 +224,7 @@ class EventSchedulerTests(unittest.TestCase):
                     self.assertEqual(scheduler.last_list['body']['events']['pending'], 0)
                 self.assertEqual([kind(p) for _, _, p in received][-1], stage)
 
-    def test_shared_budget_classify_analysis_pair_and_remaining_work_next_round(self):
+    def test_shared_budget_classify_pair_analysis_and_remaining_work_next_round(self):
         now = [0]
         def respond(payload, *_):
             now[0] += 30
@@ -235,17 +235,18 @@ class EventSchedulerTests(unittest.TestCase):
             scheduler.start()
             self.round(sink)
             eventually(lambda: self.idle(scheduler))
-            self.assertEqual([kind(p) for _, _, p in received], ['classify', 'analysis'])
-            self.assertFalse(scheduler.event_cache)
+            self.assertEqual([kind(p) for _, _, p in received], ['classify', 'events'])
+            self.assertFalse(scheduler.analysis_cache)
             with scheduler.cv:
-                self.assertEqual(scheduler.last_list['body']['events']['pending'], 1)
+                self.assertEqual(scheduler.last_list['body']['events']['pending'], 0)
+                self.assertEqual(scheduler.last_list['body']['analysis']['pending'], 2)
             while not sink.packets.empty():
                 sink.packets.get_nowait()
             scheduler.refresh()
             self.round(sink)
             final = sink.packets.get(timeout=2)
-            self.assertEqual(final['body']['events']['pending'], 0)
-            self.assertEqual([kind(p) for _, _, p in received], ['classify', 'analysis', 'events'])
+            self.assertEqual(final['body']['analysis']['pending'], 0)
+            self.assertEqual([kind(p) for _, _, p in received], ['classify', 'events', 'analysis'])
 
     def test_fit_recounts_visible_groups_and_pending(self):
         items = self.pair_items() + [article(2, title='abcdef')]
@@ -296,7 +297,8 @@ class EventSchedulerTests(unittest.TestCase):
             self.assertEqual(len(first['items']), MAX_ITEMS_LIST)
             self.assertGreater(first['events']['pending'], 0)
             eventually(lambda: scheduler.completed == 1 and self.idle(scheduler), timeout=10)
-            eventually(lambda: scheduler.last_list['body']['events']['pending'] == 0, timeout=3)
+            eventually(lambda: scheduler.last_list['body']['events']['pending'] == 0
+                       and scheduler.last_list['body']['analysis']['pending'] == 0, timeout=3)
             with scheduler.cv:
                 final = deepcopy(scheduler.last_list['body'])
                 self.assertTrue(all(p.key in scheduler.event_cache for p in candidate_pairs(final['items'])))
@@ -305,7 +307,7 @@ class EventSchedulerTests(unittest.TestCase):
             self.assertEqual(final['analysis']['pending'], 0)
             self.assertEqual(len(final['items']), MAX_ITEMS_LIST)
             stages = [kind(p) for _, _, p in received]
-            self.assertEqual(stages, sorted(stages, key=['classify', 'analysis', 'events'].index))
+            self.assertEqual(stages, sorted(stages, key=['classify', 'events', 'analysis'].index))
             while not sink.packets.empty():
                 packet = sink.packets.get_nowait()
                 self.assertEqual(packet['t'], 'msg')
@@ -338,7 +340,10 @@ class EventSchedulerTests(unittest.TestCase):
                 after = scheduler._decorate(deepcopy(scheduler.last_list))['body']['events']['pending']
             self.assertGreater(after, 0)
             self.assertLess(after, first['events']['pending'])
-            self.assertEqual(now[0], 60)
+            # 15 classification batches, then event calls starting at 15..55.
+            # The last permitted request finishes at 65; analysis must wait.
+            self.assertEqual([kind(p) for _, _, p in received], ['classify'] * 15 + ['events'] * 5)
+            self.assertEqual(now[0], 65)
             while not sink.packets.empty():
                 sink.packets.get_nowait()
             scheduler.refresh()
