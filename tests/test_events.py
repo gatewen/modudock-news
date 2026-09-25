@@ -246,7 +246,7 @@ class MatcherTests(unittest.TestCase):
             now[0] += 30
             return respond(payload)
         with server(response) as (url, received):
-            client = self.client(url, clock=lambda: now[0])
+            client = self.client(url, clock=lambda: now[0], read_deadline=120)
             self.assertEqual([len(result) for result in client.match_round(disjoint(31))], [10, 10])
             self.assertEqual(len(received), 2)
             self.assertEqual(now[0], 60)

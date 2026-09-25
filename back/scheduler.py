@@ -237,15 +237,28 @@ class Scheduler:
             self.cv.notify_all()
             return True
 
+    def _cached_analysis(self, key):
+        # Coordinator only, under cv. Classification and analysis FIFO caches
+        # can evict independently, so a reclassified key may change kind.
+        analysis = self.analysis_cache.get(key)
+        category = self.classify_cache.get(key, "")
+        if category not in ANALYSIS_CATEGORIES:
+            return None  # Unknown category (e.g. evicted): keep the entry for later.
+        if analysis is not None and analysis.get("kind", "finance") != analysis_kind(category):
+            del self.analysis_cache[key]
+            return None
+        return analysis
+
     def _enqueue_analysis(self, work, item):
         # Coordinator only, under cv; work carries the shared original budget.
         key = item[0]
         category = self.classify_cache.get(key, "")
+        cached = self._cached_analysis(key)
         if category not in ANALYSIS_CATEGORIES:
             return
         if (self.analyzer is None or self.stopping or not self._classify_enabled()
                 or work.failed or (work.deadline is not None and self.model_clock() >= work.deadline)
-                or key in self.analysis_cache or key in self.analysis_in_flight):
+                or cached is not None or key in self.analysis_in_flight):
             return
         try:
             self.analysis_jobs.put_nowait((work, item))
@@ -333,7 +346,7 @@ class Scheduler:
         for item in body["items"]:
             key = dedup_key(item["link"])
             item["category"] = self.classify_cache.get(key, "")
-            item["analysis"] = (deepcopy(self.analysis_cache.get(key))
+            item["analysis"] = (deepcopy(self._cached_analysis(key))
                                 if self._classify_enabled() and item["category"] in ANALYSIS_CATEGORIES else None)
         enabled = self._classify_enabled()
         body["classify"] = {"enabled": enabled,
@@ -396,7 +409,8 @@ class Scheduler:
             self.analysis_in_flight.difference_update(candidate.analyses)
             accepted = set()
             for key, analysis in candidate.analyses.items():
-                if valid_analysis(analysis):
+                if (valid_analysis(analysis)
+                        and analysis.get("kind", "finance") == analysis_kind(self.classify_cache.get(key, ""))):
                     self.analysis_cache[key] = deepcopy(analysis)
                     accepted.add(key)
                     if len(self.analysis_cache) > 4000:

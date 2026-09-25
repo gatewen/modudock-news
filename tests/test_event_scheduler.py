@@ -230,7 +230,8 @@ class EventSchedulerTests(unittest.TestCase):
             now[0] += 30
             return response(payload)
         with server(respond) as (url, received):
-            scheduler, sink, _ = self.make(self.pair_items(), self.clients(url, clock=lambda: now[0]), cached=False)
+            # Isolate the shared round budget from the shorter response deadline.
+            scheduler, sink, _ = self.make(self.pair_items(), self.clients(url, clock=lambda: now[0], read_deadline=120), cached=False)
             scheduler.start()
             self.round(sink)
             eventually(lambda: self.idle(scheduler))

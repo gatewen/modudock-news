@@ -1019,7 +1019,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             now[0] += 40 if model_kind(payload) == 'classification' else 20
             return 200, model_answers(payload), {}
         with server(respond) as (url, received):
-            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels), **self.clients(url, clock=lambda: now[0]))
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(labels), **self.clients(url, clock=lambda: now[0], read_deadline=120))
             with scheduler.cv:
                 for label in labels[:21]:
                     scheduler.classify_cache['https://example.com/' + label] = 'finance'
@@ -1044,7 +1044,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             now[0] += 60
             return 200, model_answers(payload), {}
         with server(respond) as (url, received):
-            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a']), **self.clients(url, clock=lambda: now[0]))
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a']), **self.clients(url, clock=lambda: now[0], read_deadline=120))
             scheduler.start()
             self.round(sink)
             self.next_analysis(sink)
@@ -1400,3 +1400,68 @@ class AnalysisKindBatchTests(unittest.TestCase):
         calls, _ = self.run_batches([(first, 'a', 'finance', 'short'),
             (first, 'b', 'world', 'short'), (second, 'c', 'finance', 'short')])
         self.assertEqual(calls, [('finance', ['a']), ('world', ['b']), ('finance', ['c'])])
+
+
+class AnalysisCompatibilityTests(unittest.TestCase):
+    setUp = SchedulerTests.setUp
+    tearDown = SchedulerTests.tearDown
+    create = SchedulerTests.create
+    round = SchedulerTests.round
+    clients = AnalysisSchedulerTests.clients
+    next_analysis = AnalysisSchedulerTests.next_analysis
+
+    def test_evicted_classification_changes_kind_and_world_analysis_replaces_finance(self):
+        from back.scheduler import ClassifyResult, AnalysisResult
+        from tests.test_classify import server
+        from tests.test_analyze import world_answers
+        value = {'kind': 'finance', 'market': 'positive', 'theme': 'memory', 'dir': 'bull', 'dir_p': 0.9}
+        key = 'https://example.com/world-a'
+        with server(lambda p, *_: (200, world_answers(len(p['state'])), {})) as (url, received):
+            scheduler, sink, _ = self.create(lambda *_: analysis_feed(['world-a']), **self.clients(url))
+            with scheduler.cv:
+                scheduler._accept(ClassifyResult({key: 'finance'}))
+                scheduler._accept(AnalysisResult({key: value}))
+                scheduler._accept(ClassifyResult({f'other-{i}': 'politics' for i in range(4000)}))
+                self.assertNotIn(key, scheduler.classify_cache)
+                self.assertIn(key, scheduler.analysis_cache)
+                scheduler._accept(ClassifyResult({key: 'world'}))
+                packet = scheduler._decorate({'body': {'items': [{'link': key, 'source': '0',
+                    'title': 'world-a', 'summary': '', 'published': '2026-09-25T00:00:00Z'}]}})
+                self.assertIsNone(packet['body']['items'][0]['analysis'])
+                self.assertEqual(packet['body']['analysis']['pending'], 1)
+                self.assertNotIn(key, scheduler.analysis_cache)
+                # Exercise the independent enqueue guard too, before _emit.
+                scheduler.analysis_cache[key] = value
+                from back.scheduler import ModelRound
+                scheduler._enqueue_analysis(ModelRound(1), (key, 'world-a', ''))
+                self.assertNotIn(key, scheduler.analysis_cache)
+                self.assertEqual(scheduler.analysis_jobs.qsize(), 1)
+            scheduler.start()
+            first = self.round(sink)
+            if first['analysis']['pending']:
+                final = self.next_analysis(sink)
+            else:
+                final = first
+            self.assertEqual(final['analysis']['pending'], 0)
+            self.assertEqual(final['items'][0]['analysis']['kind'], 'world')
+            self.assertEqual(len(received), 1)
+            self.assertIn('trend_0', received[0][2]['questions'])
+
+    def test_late_mismatched_results_never_replace_current_analysis(self):
+        from back.scheduler import AnalysisResult
+        from types import SimpleNamespace
+        finance = {'kind': 'finance', 'market': 'positive', 'theme': 'memory', 'dir': 'bull', 'dir_p': 0.9}
+        world = {'kind': 'world', 'trend': 'escalation', 'region': 'asia_pacific'}
+        scheduler = Scheduler([{'name': 'A', 'url': 'unused'}], None, None, 1,
+                              classifier=SimpleNamespace(enabled=True))
+        for category, good, stale in [('world', world, finance), ('finance', finance, world), ('tech', finance, world)]:
+            with self.subTest(category=category), scheduler.cv:
+                scheduler.classify_cache['key'] = category
+                scheduler.analysis_cache.clear()
+                scheduler.analysis_in_flight.add('key')
+                scheduler._accept(AnalysisResult({'key': stale}, ('key',), round_id=-1))
+                self.assertNotIn('key', scheduler.analysis_cache)
+                self.assertNotIn('key', scheduler.analysis_in_flight)
+                scheduler._accept(AnalysisResult({'key': good}))
+                scheduler._accept(AnalysisResult({'key': stale}, round_id=-1))
+                self.assertEqual(scheduler.analysis_cache['key'], good)

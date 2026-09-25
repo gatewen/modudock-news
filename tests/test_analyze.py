@@ -231,7 +231,7 @@ class AnalyzeTests(unittest.TestCase):
             now[0] += 30
             return 200, answers(len(payload["state"])), {}
         with server(respond) as (url, received):
-            client = self.client(url, clock=lambda: now[0])
+            client = self.client(url, clock=lambda: now[0], read_deadline=120)
             self.assertEqual([len(r) for r in client.analyze_round(items(61))], [20, 20])
             self.assertEqual(len(received), 2)
             self.assertEqual(now[0], 60)

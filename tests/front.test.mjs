@@ -286,19 +286,19 @@ test('panel counts scope, unknowns, pending and macro direction using validated 
     panel(h).querySelector('.nw-market').title,
     panel(h).querySelector('.nw-macro').textContent];
   assert.deepEqual(lines(), [
-    '8 個事件（8 則報導），2 個來源', '分析中 2',
+    '8 個事件（8 則報導），2 個來源', '待分析 2',
     '正面 2、正反 1、無關 4、負面 1', '無關 1、未明 3',
     '大盤／總經  2 個事件利多 0利空 1',
   ]);
   assert.deepEqual(themeButtons(h).map(b => b.getAttribute('aria-label')), ['記憶體 2（▲1）', '光通訊 1（▲1）', '能源 1']);
   choose(h, h.select, '甲');
   assert.equal(lines()[0], '7 個事件（7 則報導），1 個來源');
-  assert.equal(lines()[1], '分析中 2');
+  assert.equal(lines()[1], '待分析 2');
   assert.equal(lines()[2], '正面 1、正反 1、無關 4、負面 1');
   assert.equal(lines()[3], '無關 1、未明 3');
   assert.equal(themeButton(h, 'optical'), undefined);
   h.message({...listing(items), classify: {enabled: false}});
-  assert.equal(lines()[1], '分析中 0');
+  assert.equal(lines()[1], '待分析 0');
 });
 
 test('ranking uses count then fixed table order, excludes macro/other and caps at ten', t => {
@@ -782,7 +782,7 @@ test('panel counts events and takes earliest valid analysis while retaining repo
   h.message(listing([...items].reverse()));
   choose(h, h.categories, 'finance');
   assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（10 則報導），2 個來源');
-  assert.equal(panel(h).querySelector('.nw-pending').textContent, '分析中 1');
+  assert.equal(panel(h).querySelector('.nw-pending').textContent, '待分析 1');
   assert.equal(panel(h).querySelector('.nw-warning').hidden, false); // 10 reports but only 3 events.
   assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '正面 0、正反 1、無關 1、負面 1');
   assert.equal(panel(h).querySelector('.nw-macro').textContent, '大盤／總經  1 個事件利多 1利空 0');
@@ -834,7 +834,7 @@ test('merging status shows only a positive integer and updates to zero safely', 
   const merging = h.container.querySelector('.nw-merging');
   h.message({...listing([financeArticle()]), events: {pending: 17}});
   assert.equal(merging.hidden, false);
-  assert.equal(merging.textContent, '・合併中 17');
+  assert.equal(merging.textContent, '・待合併 17');
   for (const pending of [0, -1, .5, '17', null, undefined, true, {}, [], NaN, Infinity]) {
     h.message({...listing([financeArticle()]), events: {pending}});
     assert.equal(merging.hidden, true);
@@ -917,8 +917,8 @@ test('world bar uses ordered escalation stalemate deescalation idle event counts
   choose(h, h.categories, 'world');
   const surface = worldPanel(h);
   assert.equal(surface.querySelector('.nw-sample-count').textContent, '8 個事件（9 則報導），1 個來源');
-  assert.equal(surface.querySelector('.nw-pending').textContent, '分析中 1');
-  assert.equal(surface.querySelector('.nw-merging').textContent, '・合併中 7');
+  assert.equal(surface.querySelector('.nw-pending').textContent, '待分析 1');
+  assert.equal(surface.querySelector('.nw-merging').textContent, '・待合併 7');
   const bar = surface.querySelector('.nw-market-bar');
   assert.equal(bar.getAttribute('aria-label'), '升級 2、僵持 1、緩和 2、無關 3');
   assert.deepEqual([...bar.children].map(p => p.style.width), ['25%', '12.5%', '25%', '37.5%']);
@@ -1034,7 +1034,7 @@ test('invalid world analysis and hostile fields stay text-only and count as unan
   assert.equal(mainRows(h).length, values.length);
   assert.equal(h.container.querySelectorAll('.nw-tag').length, 0);
   assert.equal(regionButtons(h).length, 0);
-  assert.equal(worldPanel(h).querySelector('.nw-pending').textContent, `分析中 ${values.length}`);
+  assert.equal(worldPanel(h).querySelector('.nw-pending').textContent, `待分析 ${values.length}`);
   assert.equal(worldPanel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), `升級 0、僵持 0、緩和 0、無關 ${values.length}`);
   assert.equal(h.container.querySelectorAll('img,script').length, 0);
   assert.equal(h.container.querySelector('.nw-title').textContent, evil);

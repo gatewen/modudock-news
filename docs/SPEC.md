@@ -699,3 +699,20 @@ feeds.json 追加四個（2026-09-23 以模組自己的 Fetcher＋parse_feed 實
 - 清單時間：發布時間在使用者當地的「今天」→ `HH:mm`；否則 → `M/D HH:mm`。
 - `time_guessed` 為 true 的項目時間前加「約」，元素 `title` 為「來源沒有提供發布時間，以收錄時間代替」。
 - 驗收：前半測試覆蓋今天、昨天、推定時間三種；只用 textContent。
+
+### 18.2 第 2 輪（穩定性）
+
+第 1 輪結果：全部完成 40.5s→28.1s；分類後分析補送 34→10；報導者 0→3。
+
+**R2-A jev 回應讀取總時限**
+- `_ChoiceClient._request` 讀 body 的迴圈加總時限 `read_deadline`（預設 30 秒，以 `self.clock` 計，從送出請求前開始算）；超過即放棄該批（回 None、log 固定字串「{label}: response deadline」，不帶內容）。
+- 共用設定：`shared=` 的 client 沿用同一個值。模組文件字串更新：DNS／慢速 header 仍無法回收（照實寫）。
+- 驗收：本機假 server 以每 0.2 秒 1 byte 滴流回應，client 在 read_deadline（測試設 1 秒）+ 一個讀取間隔內返回 None；正常回應不受影響。
+
+**R2-B 分析快取必須和目前類別相容**
+- 分析快取命中時，若 `analysis.kind != analysis_kind(目前類別)`：視為沒有分析——從 analysis_cache 刪除、不得裝飾到列表、重新排入分析（同一輪預算規則）。
+- 晚到的舊分析結果（kind 不符目前類別）同樣不收。
+- 驗收：重現 cx-mod 回報的情境（finance 分析仍在、分類被淘汰後改判 world）→ 列表不帶舊分析、analysis pending 正確計入、之後得到 world 分析。
+
+**R2-C 狀態文字不假裝在跑**
+- 「分析中 N」改為「待分析 N」、「・合併中 N」改為「・待合併 N」。前半不知道後半是否仍在工作，文字只陳述數量。

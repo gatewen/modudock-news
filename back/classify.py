@@ -7,7 +7,9 @@ or before starting another request once 60 seconds have elapsed. Inputs are
 do not call this object concurrently. Each new iterator is a new round.
 
 The budget is admission-only: an in-flight request can finish after it expires.
-Socket timeouts cannot reclaim a worker stuck in DNS or trickling headers.
+Body reads check a total response deadline starting before the request (30s
+by default). This is cooperative between socket reads; DNS and slow headers
+still cannot be reclaimed, and a blocked read waits for its socket timeout.
 """
 from dataclasses import dataclass
 import http.client
@@ -52,6 +54,10 @@ class _InvalidResponse(ValueError):
     pass
 
 
+class _ResponseDeadline(Exception):
+    pass
+
+
 @dataclass
 class _ClientState:
     enabled: bool
@@ -62,14 +68,14 @@ class _ChoiceClient:
 
     _label = "classify"
     def __init__(self, *, endpoint=ENDPOINT, key=None, clock=time.monotonic,
-                 timeout=15, budget=60, ssl_context=None, ca_file=None, log=None, shared=None):
+                 timeout=15, budget=60, read_deadline=30, ssl_context=None, ca_file=None, log=None, shared=None):
         if shared is not None:
             # One authentication switch and the exact same HTTP/TLS settings.
-            for name in ("endpoint", "_key", "clock", "timeout", "budget", "log",
+            for name in ("endpoint", "_key", "clock", "timeout", "budget", "read_deadline", "log",
                          "ssl_context", "has_ca", "_opener", "_state"):
                 setattr(self, name, getattr(shared, name))
             return
-        if timeout <= 0 or budget <= 0:
+        if timeout <= 0 or budget <= 0 or read_deadline <= 0:
             raise ValueError("timeouts must be positive")
         parts = urlsplit(endpoint)
         if (parts.scheme not in ("http", "https") or not parts.hostname
@@ -80,6 +86,7 @@ class _ChoiceClient:
         self._key = os.environ.get("TYPESAFE_API_KEY", "") if key is None else key
         self._state = _ClientState(bool(self._key))
         self.clock, self.timeout, self.budget = clock, timeout, budget
+        self.read_deadline = read_deadline
         self.log = log or (lambda message: print(message, file=sys.stderr, flush=True))
         # Reuse the exact CA fallback and verification policy without applying
         # the RSS destination/redirect policy or doing any network I/O.
@@ -149,6 +156,7 @@ class _ChoiceClient:
                               headers={"Authorization": "Bearer " + self._key,
                                        "Content-Type": "application/json", "User-Agent": USER_AGENT},
                               method="POST")
+            deadline = self.clock() + self.read_deadline
             try:
                 response = self._opener.open(request, timeout=self.timeout)
             except HTTPError as exc:
@@ -163,7 +171,11 @@ class _ChoiceClient:
                     return None
                 data = bytearray()
                 while True:
+                    if self.clock() >= deadline:
+                        raise _ResponseDeadline()
                     block = response.read1(min(65536, MAX_BODY + 1 - len(data)))
+                    if self.clock() >= deadline:
+                        raise _ResponseDeadline()
                     if not block:
                         if response.length not in (None, 0):
                             raise _InvalidResponse()
@@ -175,6 +187,9 @@ class _ChoiceClient:
             if not isinstance(document, dict) or not isinstance(document.get("answers"), dict):
                 raise _InvalidResponse()
             return self._decode(batch, document["answers"])
+        except _ResponseDeadline:
+            self.log(f"{self._label}: response deadline")
+            return None
         except (OSError, URLError, ValueError, http.client.HTTPException, RecursionError):
             # Never log exception text, response content or request headers:
             # any of them could contain the secret (including an echoed key).

@@ -23,7 +23,7 @@ def answers(n=2, probability=0.8):
 
 
 @contextmanager
-def server(respond=None):
+def server(respond=None, *, drip_interval=None):
     received = []
     release = threading.Event()
 
@@ -45,7 +45,14 @@ def server(respond=None):
                 if "Content-Length" not in headers:
                     self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(body)
+                if drip_interval is None:
+                    self.wfile.write(body)
+                else:
+                    for byte in body:
+                        self.wfile.write(bytes([byte]))
+                        self.wfile.flush()
+                        if release.wait(drip_interval):
+                            break
             except (BrokenPipeError, ConnectionResetError):
                 pass
 
@@ -280,7 +287,7 @@ class ClassifyTests(unittest.TestCase):
             now[0] += 30
             return 200, answers(len(payload["state"])), {}
         with server(respond) as (url, received):
-            client = self.client(url, clock=lambda: now[0])
+            client = self.client(url, clock=lambda: now[0], read_deadline=120)
             self.assertEqual([len(r) for r in client.classify_round(items(61))], [20, 20])
             self.assertEqual(now[0], 160)
             self.assertEqual(len(received), 2)
@@ -293,7 +300,7 @@ class ClassifyTests(unittest.TestCase):
             now[0] += 61
             return 200, answers(len(payload["state"])), {}
         with server(respond) as (url, received):
-            self.assertEqual([len(r) for r in self.client(url, clock=lambda: now[0]).classify_round(items(21))], [20])
+            self.assertEqual([len(r) for r in self.client(url, clock=lambda: now[0], read_deadline=120).classify_round(items(21))], [20])
             self.assertEqual(len(received), 1)
 
     def test_no_redirect_is_followed(self):
@@ -375,3 +382,41 @@ class ClassifyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ResponseDeadlineTests(unittest.TestCase):
+    def test_drip_body_stops_within_deadline_plus_one_interval(self):
+        logs = []
+        with server(drip_interval=0.2) as (url, received):
+            client = Classifier(endpoint=url, key='deadline-secret', read_deadline=1, log=logs.append)
+            started = time.monotonic()
+            self.assertIsNone(client.classify(items()))
+            elapsed = time.monotonic() - started
+            self.assertGreaterEqual(elapsed, 1)
+            self.assertLessEqual(elapsed, 1.2)
+            self.assertEqual(len(received), 1)
+            self.assertTrue(client.enabled)
+        self.assertEqual(logs, ['classify: response deadline'])
+
+    def test_deadline_starts_before_request_using_injected_clock(self):
+        now, logs = [0], []
+        def respond(*_):
+            now[0] = 2
+            return 200, answers(), {}
+        with server(respond) as (url, _):
+            client = Classifier(endpoint=url, key='test', clock=lambda: now[0], read_deadline=1, log=logs.append)
+            self.assertIsNone(client.classify(items()))
+        self.assertEqual(logs, ['classify: response deadline'])
+
+    def test_normal_response_and_shared_deadline_settings(self):
+        from back.analyze import Analyzer
+        from back.events import EventMatcher
+        with server() as (url, _):
+            client = Classifier(endpoint=url, key='test', read_deadline=7, log=lambda _: None)
+            self.assertEqual(client.classify(items()), {key: 'tech' for key, _, _ in items()})
+            self.assertEqual(Analyzer(shared=client).read_deadline, 7)
+            self.assertEqual(EventMatcher(shared=client).read_deadline, 7)
+        self.assertEqual(Classifier(key='test').read_deadline, 30)
+        for value in [0, -1]:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                Classifier(key='test', read_deadline=value)

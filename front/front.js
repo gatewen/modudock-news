@@ -370,9 +370,9 @@ export default function mount(ctx) {
     }
     const sourceCount = new Set(scoped.map(item => text(item.source)).filter(Boolean)).size;
     sampleCount.textContent = `${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源`;
-    pendingCount.textContent = `分析中 ${pending}`;
+    pendingCount.textContent = `待分析 ${pending}`;
     merging.hidden = eventsPending === 0;
-    merging.textContent = eventsPending > 0 ? `・合併中 ${eventsPending}` : "";
+    merging.textContent = eventsPending > 0 ? `・待合併 ${eventsPending}` : "";
     warning.hidden = groups.length >= 10;
     const values = world ? [counts.escalation, counts.stalemate, counts.deescalation, counts.not_conflict + counts.other]
       : [counts.positive, counts.mixed, counts.not_market + counts.other, counts.negative];
