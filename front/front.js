@@ -273,6 +273,17 @@ export default function mount(ctx) {
     const pad = (n) => String(n).padStart(2, "0");
     return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
   };
+  function newsTime(item) {
+    const value = localTime(item.published);
+    const date = new Date(text(item.published));
+    const today = new Date();
+    const sameDay = date.getFullYear() === today.getFullYear()
+      && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+    const label = value && `${sameDay ? "" : `${date.getMonth() + 1}/${date.getDate()} `}${value}`;
+    const node = make("span", "nw-time", `${item.time_guessed === true ? "約" : ""}${label}`);
+    if (item.time_guessed === true) node.title = "來源沒有提供發布時間，以收錄時間代替";
+    return node;
+  }
   function onRefresh() {
     if (up && !disposed) ctx.channel.send({ op: "refresh" });
   }
@@ -451,7 +462,7 @@ export default function mount(ctx) {
           name + (direction ? ` ${direction}` : "")));
       }
       meta.append(make("span", "nw-category", categoryNames.get(category) || "未分類"),
-        make("span", "nw-source", text(item.source)), make("span", "nw-time", localTime(item.published)));
+        make("span", "nw-source", text(item.source)), newsTime(item));
       row.append(newsTitle(item, "nw-title"), meta);
       if (group.reports.length > 1) {
         const toggle = make("button", "nw-expand", `另 ${group.reports.length - 1} 則報導`);
@@ -465,7 +476,7 @@ export default function mount(ctx) {
         for (const report of group.reports.slice(1)) {
           const entry = make("li", "nw-report");
           const details = make("div", "nw-report-meta");
-          details.append(make("span", "nw-source", text(report.source)), make("span", "nw-time", localTime(report.published)));
+          details.append(make("span", "nw-source", text(report.source)), newsTime(report));
           entry.append(newsTitle(report, "nw-report-title"), details);
           reports.append(entry);
         }

@@ -222,14 +222,30 @@ def parse_feed(data, final_url, source, first_seen, now):
 def merge_items(source_items):
     """Lists in feeds.json order. Equal date/key retains first encountered item."""
     winners = {}
+    source_order = {}
     for items in source_items:
         for item in items:
+            source_order.setdefault(item["source"], None)
             key = dedup_key(item["link"])
             if key not in winners or item["published"] > winners[key]["published"]:
                 winners[key] = item
     result = sorted(winners.values(), key=lambda item: (item["source"], item["title"]))
     result.sort(key=lambda item: item["published"], reverse=True)
-    return deepcopy(result[:MAX_ITEMS_LIST])
+    by_source = {source: [] for source in source_order}
+    for item in result:
+        reserved = by_source[item["source"]]
+        if len(reserved) < 3:
+            reserved.append(dedup_key(item["link"]))
+    selected = set()
+    for keys in by_source.values():
+        for key in keys:
+            if len(selected) < MAX_ITEMS_LIST:
+                selected.add(key)
+    for item in result:
+        if len(selected) >= MAX_ITEMS_LIST:
+            break
+        selected.add(dedup_key(item["link"]))
+    return deepcopy([item for item in result if dedup_key(item["link"]) in selected])
 
 
 def packet_bytes(packet):

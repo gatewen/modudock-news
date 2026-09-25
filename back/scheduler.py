@@ -274,12 +274,30 @@ class Scheduler:
                 kind = analysis_kind(self.classify_cache.get(item[0], "")) if analyzing else None
                 batch = [item]
                 chars = 0 if matching else len(item[1]) + len(item[2])
-                while not jobs.empty() and (matching or len(batch) < MAX_ITEMS):
+                if analyzing:
+                    # Leave other kinds in their original positions/order.
+                    # cv owns admission; the queue mutex protects its storage.
+                    with jobs.mutex:
+                        index = 0
+                        while index < len(jobs.queue) and len(batch) < MAX_ITEMS:
+                            next_work, next_item = jobs.queue[index]
+                            if next_work is not work:
+                                break
+                            if analysis_kind(self.classify_cache.get(next_item[0], "")) != kind:
+                                index += 1
+                                continue
+                            size = len(next_item[1]) + len(next_item[2])
+                            if chars + size > MAX_CHARS:
+                                break
+                            batch.append(next_item)
+                            chars += size
+                            del jobs.queue[index]
+                        jobs.not_full.notify_all()
+                while not analyzing and not jobs.empty() and (matching or len(batch) < MAX_ITEMS):
                     with jobs.mutex:
                         next_work, next_item = jobs.queue[0]
                     size = 0 if matching else len(next_item[1]) + len(next_item[2])
                     if (next_work is not work
-                            or (analyzing and analysis_kind(self.classify_cache.get(next_item[0], "")) != kind)
                             or (matching and not pairs_fit(batch + [next_item]))
                             or chars + size > MAX_CHARS):
                         break

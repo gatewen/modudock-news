@@ -209,3 +209,35 @@ class ClassifySizeTests(unittest.TestCase):
         self.assertLess(fitted["body"]["classify"]["pending"], 100)
         packet["body"]["classify"]["enabled"] = False
         self.assertEqual(fp.fit_packet(packet)["body"]["classify"]["pending"], 0)
+
+
+class SourceFloorTests(unittest.TestCase):
+    item = MergeAndSizeTests.item
+    def test_old_source_keeps_latest_three_with_300_total(self):
+        recent = [self.item(str(i), f'https://example.com/new/{i}', '2026-09-25', 'A') for i in range(300)]
+        old = [self.item(str(i), f'https://example.com/old/{i}', f'2026-09-{i + 1:02d}', 'B') for i in range(10)]
+        result = fp.merge_items([recent, old])
+        self.assertEqual(len(result), fp.MAX_ITEMS_LIST)
+        self.assertEqual([i['title'] for i in result if i['source'] == 'B'], ['9', '8', '7'])
+        self.assertEqual([i['published'] for i in result], sorted((i['published'] for i in result), reverse=True))
+        self.assertEqual(result, fp.merge_items([recent[::-1], old[::-1]]))
+
+    def test_floor_uses_dedup_winner_source_and_all_available_when_under_three(self):
+        old = [self.item(str(i), f'https://example.com/{i}', '2026-09-01', 'A') for i in range(4)]
+        new = [dict(old[0], published='2026-09-25', source='B')]
+        with patch.object(fp, 'MAX_ITEMS_LIST', 4):
+            result = fp.merge_items([old, new])
+        self.assertEqual(len(result), 4)
+        self.assertEqual([i['source'] for i in result].count('A'), 3)
+        self.assertEqual([i['source'] for i in result].count('B'), 1)
+        self.assertEqual(len({fp.dedup_key(i['link']) for i in result}), 4)
+
+    def test_floor_over_capacity_uses_source_order_but_output_time_order(self):
+        sources = [[self.item(str(i), f'https://example.com/{source}/{i}',
+                              f'2026-09-{i + 1:02d}', source) for i in range(4)] for source in ['Z', 'A', 'B']]
+        with patch.object(fp, 'MAX_ITEMS_LIST', 5):
+            result = fp.merge_items(sources)
+        self.assertEqual(len(result), 5)
+        self.assertEqual({i['link'] for i in result}, {sources[0][i]['link'] for i in [1, 2, 3]}
+                         | {sources[1][i]['link'] for i in [2, 3]})
+        self.assertEqual([i['published'] for i in result], sorted((i['published'] for i in result), reverse=True))

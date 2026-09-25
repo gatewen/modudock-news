@@ -1349,3 +1349,54 @@ class AnalysisSchedulerTests(unittest.TestCase):
         self.assertEqual(final['analysis']['pending'], 0)
         self.assertTrue(all(i['analysis'] == longest_world for i in final['items']))
         self.assertEqual(logs, [])
+
+
+class AnalysisKindBatchTests(unittest.TestCase):
+    def run_batches(self, entries):
+        from types import SimpleNamespace
+        calls, remaining = [], []
+        def analyze(batch, *, kind):
+            calls.append((kind, [item[0] for item in batch]))
+            with scheduler.analysis_jobs.mutex:
+                remaining.append([item[0] for _, item in scheduler.analysis_jobs.queue])
+            return {}
+        scheduler = Scheduler([{'name': 'A', 'url': 'unused'}], None, None, 1,
+                              classifier=SimpleNamespace(enabled=True),
+                              analyzer=SimpleNamespace(enabled=True, analyze=analyze))
+        for work, key, category, title in entries:
+            scheduler.classify_cache[key] = category
+            scheduler.analysis_jobs.put_nowait((work, (key, title, '')))
+        scheduler._submit_classification = lambda _: not scheduler.analysis_jobs.empty()
+        scheduler._classify_worker()
+        return calls, remaining
+
+    def test_300_interleaved_items_take_16_requests_and_preserve_remaining_order(self):
+        from back.scheduler import ModelRound
+        work = ModelRound(1)
+        entries = [(work, str(i), 'finance' if i % 2 == 0 else 'world', 'short') for i in range(300)]
+        calls, remaining = self.run_batches(entries)
+        self.assertEqual(len(calls), 16)  # ceil(150 / 20) for each kind.
+        self.assertEqual([len(keys) for kind, keys in calls if kind == 'finance'], [20] * 7 + [10])
+        self.assertEqual([len(keys) for kind, keys in calls if kind == 'world'], [20] * 7 + [10])
+        queued = [str(i) for i in range(300)]
+        for (kind, keys), rest in zip(calls, remaining):
+            self.assertTrue(all((int(key) % 2 == 0) == (kind == 'finance') for key in keys))
+            queued = [key for key in queued if key not in keys]
+            self.assertEqual(rest, queued)
+        self.assertEqual(queued, [])
+
+    def test_scanning_respects_character_limit_and_keeps_skipped_kind(self):
+        from back.scheduler import ModelRound
+        work = ModelRound(1)
+        calls, remaining = self.run_batches([(work, 'a', 'finance', 'x' * 4000),
+            (work, 'b', 'world', 'short'), (work, 'c', 'tech', 'x' * 4000),
+            (work, 'd', 'finance', 'x')])
+        self.assertEqual(calls, [('finance', ['a', 'c']), ('world', ['b']), ('finance', ['d'])])
+        self.assertEqual(remaining[0], ['b', 'd'])
+
+    def test_scanning_does_not_cross_work_boundary(self):
+        from back.scheduler import ModelRound
+        first, second = ModelRound(1), ModelRound(2)
+        calls, _ = self.run_batches([(first, 'a', 'finance', 'short'),
+            (first, 'b', 'world', 'short'), (second, 'c', 'finance', 'short')])
+        self.assertEqual(calls, [('finance', ['a']), ('world', ['b']), ('finance', ['c'])])

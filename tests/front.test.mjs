@@ -48,6 +48,7 @@ test('mount is synchronous, ready after registration; refresh only after up', t 
 });
 
 test('list rows, local time, link attributes, summary and status', t => {
+  t.mock.timers.enable({apis: ['Date'], now: new Date(2026, 8, 25, 12)});
   const h = setup(t);
   h.up();
   h.message(listing([article(), article({title: '第二則', source: '乙'})]));
@@ -66,7 +67,7 @@ test('list rows, local time, link attributes, summary and status', t => {
   assert.equal(row.lastElementChild.className, 'nw-meta');
   assert.equal(row.querySelector('.nw-category').textContent, '未分類');
   assert.equal(row.querySelector('.nw-source').textContent, '甲');
-  assert.equal(row.querySelector('.nw-time').textContent, local);
+  assert.equal(row.querySelector('.nw-time').textContent, `${date.getMonth() + 1}/${date.getDate()} ${local}`);
   const updated = new Date('2026-09-21T02:04:00Z');
   assert.equal(h.container.querySelector('[role=status]').textContent,
     `${pad(updated.getHours())}:${pad(updated.getMinutes())} 更新 · 失敗來源：1`);
@@ -703,7 +704,7 @@ test('events collapse to earliest report and toggle accessible other reports wit
   assert.equal(reports.hidden, false);
   assert.deepEqual([...reports.querySelectorAll('.nw-report-title')].map(a => a.textContent), ['中間', '最新']);
   assert.deepEqual([...reports.querySelectorAll('.nw-source')].map(a => a.textContent), ['乙', '甲']);
-  assert.ok([...reports.querySelectorAll('.nw-time')].every(time => /^\d{2}:\d{2}$/.test(time.textContent)));
+  assert.ok([...reports.querySelectorAll('.nw-time')].every(time => /^(?:\d{1,2}\/\d{1,2} )?\d{2}:\d{2}$/.test(time.textContent)));
   for (const a of reports.querySelectorAll('a')) {
     assert.equal(a.target, '_blank');
     assert.equal(a.rel, 'noopener noreferrer');
@@ -1053,4 +1054,28 @@ test('world region controls are inert after unmount', t => {
   clear.click();
   assert.equal(list.children.length, 1);
   assert.equal(h.container.childNodes.length, 0);
+});
+
+test('news times use local calendar today, yesterday and guessed markers, including event reports', t => {
+  const now = new Date(2026, 0, 1, 0, 30);
+  t.mock.timers.enable({apis: ['Date'], now});
+  const h = setup(t);
+  const today = new Date(2026, 0, 1, 0, 5).toISOString();
+  const yesterday = new Date(2025, 11, 31, 23, 55).toISOString();
+  const event = 'abcdefabcdef';
+  h.message(listing([
+    article({published: today, link: 'https://example.com/today'}),
+    article({published: yesterday, link: 'https://example.com/yesterday'}),
+    article({published: today, time_guessed: true, link: 'https://example.com/guessed'}),
+    article({published: yesterday, event, event_size: 2, link: 'https://example.com/old'}),
+    article({published: today, time_guessed: true, event, event_size: 2, link: 'https://example.com/child'}),
+    article({published: today, time_guessed: 'true', link: 'https://example.com/string'}),
+  ]));
+  const times = [...h.container.querySelectorAll('.nw-time')];
+  assert.deepEqual(times.map(node => node.textContent), ['00:05', '12/31 23:55', '約00:05',
+    '12/31 23:55', '約00:05', '00:05']);
+  for (const index of [2, 4]) assert.equal(times[index].title, '來源沒有提供發布時間，以收錄時間代替');
+  for (const index of [0, 1, 3, 5]) assert.equal(times[index].title, '');
+  h.container.querySelector('.nw-expand').click();
+  assert.equal(h.container.querySelector('.nw-reports .nw-time').textContent, '約00:05');
 });
