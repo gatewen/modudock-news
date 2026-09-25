@@ -452,8 +452,11 @@ export default function mount(ctx) {
         : {positive: 0, mixed: 1, negative: 3}[signal];
       bucket.values[index ?? (world ? 3 : 2)]++;
     }
+    const collapsed = buckets.filter(bucket => bucket.valid < 5).length >= 3;
     history.replaceChildren(make("h3", "nw-heading", "近 24 小時"),
-      make("span", "nw-hint", "每 6 小時一段，同一事件只算一次"));
+      make("span", "nw-hint", collapsed ? "樣本不足，無法比較 24 小時內的變化"
+        : "每 6 小時一段，同一事件只算一次"));
+    if (collapsed) return;
     buckets.forEach((bucket, i) => {
       const from = localTime(new Date(start + i * step).toISOString());
       const to = localTime(new Date(start + (i + 1) * step).toISOString());

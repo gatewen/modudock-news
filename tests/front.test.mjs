@@ -1663,6 +1663,35 @@ const hhmm = stamp => {
   return `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 };
 
+for (const category of ['finance', 'tech', 'world']) {
+  test(`${category} history collapses with three insufficient bins and restores at two`, t => {
+    const h = setup(t);
+    const report = hour => timedArticle(hour, {category,
+      analysis: category === 'world' ? worldAnalysis() : analysis()});
+    const enough = Array.from({length:5}, () => report(-22));
+    const nearly = Array.from({length:4}, () => report(-16));
+    const body = historyList([...enough, ...nearly, report(-16)]);
+    h.message(body);
+    choose(h, h.categories, category);
+    assert.equal(historyRows(h).length, 4);
+    assert.equal(historyResults(h).filter(value => value === '樣本不足').length, 2);
+    // A same-at replacement must remove old rows, not merely append a hint.
+    h.message(historyList([...enough, ...nearly, {...report(-16), analysis:null}]));
+    const history = h.container.querySelector('.nw-history');
+    assert.equal(history.querySelector('.nw-heading').textContent, '近 24 小時');
+    assert.equal(history.querySelector('.nw-hint').textContent, '樣本不足，無法比較 24 小時內的變化');
+    assert.equal(history.children.length, 2);
+    assert.equal(historyRows(h).length, 0);
+    assert.equal(history.querySelectorAll('.nw-history-bar').length, 0);
+    h.message(body);
+    assert.equal(historyRows(h).length, 4);
+    assert.equal(history.querySelector('.nw-hint').textContent, '每 6 小時一段，同一事件只算一次');
+    h.message(historyList([report(-22)]));
+    assert.equal(historyRows(h).length, 0);
+    assert.equal(history.querySelector('.nw-hint').textContent, '樣本不足，無法比較 24 小時內的變化');
+  });
+}
+
 test('history bins are left inclusive, exclude next boundary and include final endpoint', t => {
   const h = setup(t);
   const items = [-24, -18, -12, -6].flatMap((hour, i) => Array.from({length:5}, () =>
@@ -1720,11 +1749,12 @@ test('history deduplicates using representative time and first valid analysis, r
     timedArticle(-10, {event:'111111111111', event_size:3}),
     timedArticle(-22, {source:'乙', analysis:analysis({market:'negative'})}),
     timedArticle(-22, {category:'tech', analysis:analysis({market:'negative'})}),
+    ...Array.from({length:5}, () => timedArticle(-2)),
   ]);
   h.message(body);
   choose(h, h.categories, 'finance');
   choose(h, h.select, '甲');
-  assert.deepEqual(historyResults(h), ['正面 80%', '樣本不足', '樣本不足', '樣本不足']);
+  assert.deepEqual(historyResults(h), ['正面 80%', '樣本不足', '樣本不足', '正面 100%']);
   const before = h.container.querySelector('.nw-history').textContent;
   themeButton(h, 'memory').click();
   assert.equal(h.container.querySelector('.nw-history').textContent, before);
@@ -1734,8 +1764,11 @@ test('history deduplicates using representative time and first valid analysis, r
 
 test('world history uses escalation denominator, world colors and unrelated idle events', t => {
   const h = setup(t);
-  h.message(historyList(['escalation','escalation','stalemate','deescalation','not_conflict','other'].map(trend =>
-    timedArticle(-2, {category:'world', analysis:{kind:'world', trend, region:'us_china'}}))));
+  h.message(historyList([
+    ...Array.from({length:5}, () => timedArticle(-22, {category:'world', analysis:worldAnalysis()})),
+    ...['escalation','escalation','stalemate','deescalation','not_conflict','other'].map(trend =>
+      timedArticle(-2, {category:'world', analysis:{kind:'world', trend, region:'us_china'}})),
+  ]));
   choose(h, h.categories, 'world');
   assert.equal(historyResults(h)[3], '升級 2/4');
   const row = historyRows(h)[3], bar = row.querySelector('.nw-history-bar');
@@ -1748,7 +1781,7 @@ test('world history uses escalation denominator, world colors and unrelated idle
 test('history falls back to current time for missing or invalid at and stays fixed during filtering', t => {
   t.mock.timers.enable({apis:['Date'], now:historyEnd});
   const h = setup(t);
-  const items = Array.from({length:5}, () => timedArticle(-2));
+  const items = [-22, -2].flatMap(hour => Array.from({length:5}, () => timedArticle(hour)));
   for (const at of [undefined, null, {}, 'bad']) {
     h.message({...listing(items), at});
     choose(h, h.categories, 'finance');
