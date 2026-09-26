@@ -263,8 +263,10 @@ test('analysis panel appears only for finance or tech between toolbar and list',
     assert.equal(panel(h).hidden, !['finance', 'tech'].includes(category));
   }
   assert.equal(panel(h).nextElementSibling.className, 'nw-filter');
-  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.className, 'nw-hint nw-new-hint');
-  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.nextElementSibling.className, 'nw-shortcut-help');
+  const tools=panel(h).nextElementSibling.nextElementSibling;
+  assert.equal(tools.className,'nw-topic-tools');
+  assert.equal(tools.nextElementSibling.nextElementSibling.className, 'nw-hint nw-new-hint');
+  assert.equal(tools.nextElementSibling.nextElementSibling.nextElementSibling.className, 'nw-shortcut-help');
   assert.ok(h.container.querySelector('.nw-shortcut-help').nextElementSibling === h.container.querySelector('.nw-list'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
@@ -2044,7 +2046,7 @@ test('topic source distribution counts reports, orders feed ties, limits five an
   h.message({...body,items:[...reports,article({source:'G',topic:topic.id}),article({source:'G',topic:topic.id}),article({source:'G',topic:topic.id})]});
   assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1，另 2 家（共 7 家）');
   saveWatch(h,'A0'); watchControls(h).only.click();
-  assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1，另 2 家（共 7 家）');
+  assert.equal(hint.textContent,'A 3・B 0・C 0・D 0・E 0，另 2 家（共 7 家）');
   focusTopicButtons(h)[0].click();
   assert.equal(hint.hidden,true);
   assert.equal(hint.textContent,'');
@@ -4825,4 +4827,58 @@ test('R25 truncated source distribution states remaining and total outlet counts
   assert.equal(hint.textContent,'中央社 2・媒體0 1・媒體1 1・媒體2 1・媒體3 1，另 5 家（共 10 家）');
   assert.equal(hint.title,'中央社 2・'+Array.from({length:9},(_,i)=>`媒體${i} 1`).join('・')+'（共 10 家）');
   focusTopicButtons(h)[0].click();assert.equal(hint.hasAttribute('title'),false);
+});
+
+function readingTopic() {
+  const topic=topicRecord({count:5,sources:3});
+  const data=[['new','公視','2026-09-26T04:00:00Z','222222222222'],['old-copy','中央社 財經','2026-09-26T03:00:00Z','111111111111'],
+    ['middle','中央社 政治','2026-09-26T02:00:00Z','333333333333'],['old','中央社 國際','2026-09-25T02:00:00Z','111111111111'],['earliest','BBC','2026-09-24T02:00:00Z','444444444444']];
+  return {...topicListing(data.map(([title,source,published,event])=>financeArticle({title,source,published,event,event_size:2,topic:topic.id,link:`https://e.test/${title}`})),[topic]),
+    sources:['中央社 政治','中央社 財經','中央社 國際','公視','BBC'].map(name=>({name,ok:true,outlet:name.startsWith('中央社')?'中央社':name}))};
+}
+test('R26 chronological topic reading orders earliest reports, dates, keyboard and resets on return',t=>{
+  t.mock.timers.enable({apis:['Date'],now:new Date(2026,8,26,12)});
+  const h=setup(t),body=readingTopic();h.message(body);focusTopicButtons(h)[0].click();
+  const button=h.container.querySelector('.nw-topic-order');
+  assert.equal(button.getAttribute('aria-pressed'),'false');
+  button.click();assert.deepEqual(mainTitles(h),['earliest','old','middle','new']);
+  assert.deepEqual([...h.container.querySelectorAll('.nw-date-divider')].map(n=>n.textContent),['9/24','9/25','今天']);
+  assert.ok([...h.container.querySelectorAll('.nw-date-divider')].every(n=>n.title==='依發布時間，非事件發生時間'));
+  const links=[...h.container.querySelectorAll('.nw-list > .nw-row > a.nw-title')];
+  links[0].focus();links[0].dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'j',bubbles:true}));assert.equal(h.window.document.activeElement,links[1]);
+  h.message(body);assert.deepEqual(mainTitles(h),['earliest','old','middle','new']);
+  search(h,'middle');assert.deepEqual(mainTitles(h),['middle']);search(h,'');
+  h.container.querySelector('.nw-filter > button').click();assert.equal(h.container.querySelector('.nw-topic-tools').hidden,true);
+  focusTopicButtons(h)[0].click();assert.equal(button.getAttribute('aria-pressed'),'false');assert.deepEqual(mainTitles(h),['new','old','middle','earliest']);
+});
+test('R26 outlet combines feeds, matches button report count through intersections and restores original view',t=>{
+  const h=setup(t),body=readingTopic();h.message(body);choose(h,h.select,'公視');choose(h,h.categories,'finance');
+  focusTopicButtons(h)[0].click();
+  const outlet=()=>[...h.container.querySelectorAll('.nw-outlet')].find(b=>b.dataset.outlet==='中央社');
+  const reportCount=()=>mainRows(h).length+h.container.querySelectorAll('.nw-report').length;
+  assert.equal(outlet().textContent,'中央社 3');outlet().click();assert.equal(reportCount(),3);
+  assert.equal(h.select.value,'');assert.equal(outlet().getAttribute('aria-pressed'),'true');
+  assert.equal(h.container.querySelector('.nw-topic-outlet-label').textContent,'話題內・中央社');
+  outlet().click();assert.equal(reportCount(),5);
+  choose(h,h.categories,'finance');themeButton(h,'memory').click();search(h,'middle');
+  assert.equal(outlet().textContent,'中央社 1');outlet().click();assert.equal(reportCount(),1);
+  h.container.querySelector('.nw-topic-outlet-clear').click();assert.equal(reportCount(),1);
+  search(h,'');countButton(h,'signal:0').click();
+  assert.equal(outlet().textContent,'中央社 3');outlet().click();assert.equal(reportCount(),3);
+  h.container.querySelector('.nw-filter > button').click();assert.equal(h.select.value,'公視');assert.equal(h.categories.value,'finance');
+});
+
+test('R26 chronological outlet reading retains new-progress scope, survives resend and releases listeners',t=>{
+  const h=setup(t,w=>w.localStorage.setItem(seenKey,JSON.stringify('2026-09-26T01:00:00Z'))),body=readingTopic();
+  h.message(body);focusTopicButtons(h)[0].click();
+  const order=h.container.querySelector('.nw-topic-order');order.click();
+  const outlet=()=>[...h.container.querySelectorAll('.nw-outlet')].find(b=>b.dataset.outlet==='中央社');
+  h.container.querySelector('.nw-new-only').click();
+  assert.equal(outlet().textContent,'中央社 3');outlet().click();
+  assert.deepEqual(mainTitles(h).map(s=>s.replace(/^新/,'')),['old','middle']);
+  h.message({...body,at:'2026-09-26T05:00:00Z'});
+  assert.equal(order.getAttribute('aria-pressed'),'true');assert.equal(outlet().getAttribute('aria-pressed'),'true');
+  assert.equal(h.container.querySelectorAll('.nw-divider').length,0);
+  const oldOutlet=outlet(),clear=h.container.querySelector('.nw-topic-outlet-clear');
+  h.handle.unmount();order.click();oldOutlet.click();clear.click();assert.equal(h.container.children.length,0);
 });

@@ -107,6 +107,7 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
         label===`已篩選：${id==='region:other'?'其他地區':id==='issue:other'?'其他議題':name}`
         &&(namespace?id.startsWith(namespace):!id.includes(':')))?.[0]||'':'';
     return {label,topic:topicScope,count,theme,source:h.source.value,category:h.category.value,
+      outlet:h.q('.nw-topic-outlet-label').textContent.replace(/^話題內・/,''), chronological:h.q('.nw-topic-order').getAttribute('aria-pressed')==='true',
       watch:h.watch.getAttribute('aria-pressed')==='true',new:h.new.getAttribute('aria-pressed')==='true',query:searchText(h.search.value).trim()};
   }
   const isNew=group=>group.some(item=>Date.parse(item.published)>seen);
@@ -133,7 +134,9 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
     const newCount=node===h.new&&node.getAttribute('aria-pressed')!=='true'?Number(node.textContent.match(/\d+/)[0]):null;
     if(name==='theme')topicTheme=before.theme===node.dataset.topic?'':node.dataset.topic;
     if(name==='topic'||name==='count'||name==='clearAll')topicTheme='';
+    const outletCount=name==='outlet'&&node.getAttribute('aria-pressed')!=='true'?Number(node.textContent.match(/ (\d+)$/)[1]):null;
     node.focus();node.click();
+    if(outletCount!==null)assert.equal(h.qa('.nw-list > .nw-row').length+h.qa('.nw-report').length,outletCount,'outlet button vs reports');
     if(overview) {expectedView={source:expectedView?.source||'',category:overview};transientView.delete('category');}
     const after=state();
     if(before.topic&&!after.topic&&['clear','topic','count'].includes(name)) {expectedView={source:h.source.value,category:h.category.value};transientView=new Set();}
@@ -148,7 +151,10 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
   }
   function act() {
     const choice=Math.floor(rnd()*34);
-    if(choice>=26) {
+    if(choice===26) click('.nw-topic-order','topicOrder');
+    else if(choice===27) click('.nw-outlet','outlet');
+    else if(choice===28) click('.nw-topic-outlet-clear','outletClear');
+    else if(choice>=29) {
       // Browsing between edits is common; still assert all invariants after every key.
       const target=h.container.contains(document.activeElement)?document.activeElement:h.list;
       const key=pick(['j','k']);target.focus();note(`browse=${key}`);
@@ -195,7 +201,7 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
   function check() {
     assert.deepEqual(errors,[],'uncaught DOM callback error');
     const s=state(),rows=[...h.list.children].filter(n=>n.classList.contains('nw-row'));
-    const scope=last.items.filter(i=>(!s.source||i.source===s.source)&&(!s.category||i.category===s.category)&&(!s.topic||i.topic===s.topic));
+    const scope=last.items.filter(i=>(!s.source||i.source===s.source)&&(!s.category||i.category===s.category)&&(!s.topic||i.topic===s.topic)&&(!s.outlet||i.source===s.outlet));
     const panelGroups=groups(scope).filter(g=>!s.new||isNew(g));
     const base=groups(scope.filter(i=>!s.theme||topicOf(validAnalysis(i))===s.theme)).filter(g=>!s.count||signal(g,s.category,s.count));
     const words=JSON.parse(window.localStorage.getItem(prefix+'watch')||'[]');
@@ -208,6 +214,11 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
     assert.equal(h.watch.textContent,`只看追蹤 ${watched}`,'watch count includes all intersections');
     if(s.watch) assert.equal(watched,rows.length,'pressed watch count vs rows');
     assert.equal(rows.length,expected.length,`rows source=${s.source} category=${s.category} theme=${s.theme} topic=${s.topic} count=${s.count}`);
+    if(s.chronological&&s.topic) {
+      const stamps=rows.map(row=>Date.parse(last.items.find(item=>item.link===row.querySelector('a.nw-title')?.href)?.published));
+      assert.ok(stamps.every((stamp,index)=>index===0||stamp>=stamps[index-1]),'chronological row order');
+    }
+    for(const button of h.qa('.nw-outlet'))assert.equal(button.getAttribute('aria-pressed')==='true',button.dataset.outlet===s.outlet);
     const newCount=matching.filter(isNew).length;
     assert.equal(h.new.hidden,newCount===0,'new visibility');
     if(newCount)assert.equal(h.new.textContent,`新增 ${newCount} 個事件`);
@@ -272,7 +283,7 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
 test('walk campaign covers required operations',t=>{
   t.diagnostic(JSON.stringify(stats));
   if(seeds<200||steps<100)return; // Small single-seed reproductions remain useful.
-  for(const name of ['sameAt','newAt','source','category','count','topic','searchToggle','searchInput','Escape','new','tone','overview','?','categoryInTopic','topicDisappeared','refresh','watchWords'])
+  for(const name of ['sameAt','newAt','source','category','count','topic','searchToggle','searchInput','Escape','new','tone','overview','?','categoryInTopic','topicDisappeared','refresh','watchWords','topicOrder','outlet','outletClear'])
     assert.ok(stats.actions[name]>0,`missing action: ${name}`);
   assert.ok(stats.facetProbes>0);assert.ok(stats.overviewProbes>0);
   assert.equal(stats.assertions,seeds*steps);

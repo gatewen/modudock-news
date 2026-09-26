@@ -167,6 +167,10 @@ export const css = `
 .nw .nw-theme-count { text-align: right; }
 .nw .nw-note { display: block; margin-top: 16px; }
 .nw .nw-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0 0; color: var(--nw-muted); font-size: 12px; }
+.nw .nw-topic-tools { padding: 8px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-basis: 100%; }
+.nw .nw-outlet { font-size: 12px; background: transparent; padding: 2px 4px; }
+.nw .nw-outlet[aria-pressed="true"], .nw .nw-topic-order[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 0 -2px var(--nw-accent); }
+.nw .nw-date-divider { padding: 10px 16px; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-topic-sources { flex-basis: 100%; overflow-wrap: anywhere; }
 .nw .nw-list { list-style: none; margin: 0; padding: 0; }
 .nw .nw-row { padding: 14px 0; }

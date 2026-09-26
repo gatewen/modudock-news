@@ -184,6 +184,16 @@ export default function mount(ctx) {
   const topicSources = make("span", "nw-hint nw-topic-sources");
   topicSources.hidden = true;
   themeFilter.append(topicSources);
+  const topicTools = make("div", "nw-topic-tools");
+  topicTools.hidden = true;
+  const topicOrder = make("button", "nw-topic-order", "時間順讀");
+  topicOrder.type = "button";
+  topicOrder.title = "依發布時間，非事件發生時間";
+  const outletLabel = make("span", "nw-topic-outlet-label");
+  const outletClear = make("button", "nw-topic-outlet-clear", "清除");
+  outletClear.type = "button";
+  topicTools.append(topicOrder, outletLabel, outletClear);
+
   const panel = make("section", "nw-panel");
   const focus = make("section", "nw-focus-section");
   focus.hidden = true;
@@ -302,7 +312,7 @@ export default function mount(ctx) {
   statusGroup.append(status, modelDescription, markRead, undoRead, shortcutToggle);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
-  root.append(toolbar, focus, panel, themeFilter, watchHint, newHint, shortcutHelp, list, empty);
+  root.append(toolbar, focus, panel, themeFilter, topicTools, watchHint, newHint, shortcutHelp, list, empty);
   ctx.container.append(root);
 
   let narrow = false, panelOpen = false;
@@ -341,6 +351,7 @@ export default function mount(ctx) {
   let selectedTheme = "";
   let selectedCount = null;
   let selectedTopic = "";
+  let selectedOutlet = "", chronological = false;
   let savedView = null;
   let topics = [];
   let toneAudit = null;
@@ -717,6 +728,8 @@ export default function mount(ctx) {
       selectedTheme = "";
       selectedCount = null;
       onlyWatched = false;
+      selectedOutlet = "";
+      chronological = false;
       selectedTopic = button.dataset.topicId;
       drawItems();
       return;
@@ -851,24 +864,7 @@ export default function mount(ctx) {
     themeLabel.textContent = selectedTheme ? `已篩選：${selectedLabel}` : "";
     clearTheme.textContent = "清除篩選";
     describe(clearTheme, "", themeFilter);
-    topicSources.hidden = !selectedTopic;
-    topicSources.textContent = "";
-    topicSources.removeAttribute("title");
     if (selectedTopic) {
-      const counts = new Map(), outletOrder = new Map();
-      for (const [source, index] of sourceOrder) {
-        const outlet = sourceOutlets.get(source) || source;
-        if (!outletOrder.has(outlet)) outletOrder.set(outlet, index);
-      }
-      for (const item of items) {
-        const name = outletOf(item);
-        if (item?.topic === selectedTopic && name) counts.set(name, (counts.get(name) || 0) + 1);
-      }
-      const ranked = [...counts].sort((a, b) => b[1] - a[1]
-        || (outletOrder.get(a[0]) ?? Infinity) - (outletOrder.get(b[0]) ?? Infinity));
-      topicSources.textContent = ranked.slice(0, 5).map(([name, count]) => `${name} ${count}`).join("・")
-        + (ranked.length > 5 ? `，另 ${ranked.length - 5} 家（共 ${ranked.length} 家）` : "");
-      topicSources.title = ranked.map(([name, count]) => `${name} ${count}`).join("・") + `（共 ${ranked.length} 家）`;
       const title = Array.from(topics.find(topic => topic.id === selectedTopic).title);
       themeFilter.hidden = false;
       themeLabel.textContent = `話題：${title.slice(0, 24).join("")}${title.length > 24 ? "…" : ""}`;
@@ -878,7 +874,6 @@ export default function mount(ctx) {
     if (selectedCount) {
       themeLabel.textContent = `已篩選：${selectedCount.topic ? "話題內・" : ""}${countLabel(selectedCount.id)}`;
       clearTheme.textContent = "清除篩選";
-      topicSources.hidden = true;
       if (selectedCount.topic) describe(clearTheme, "清除數字篩選並返回原檢視", themeFilter);
     }
     panel.hidden ||= onlyWatched;
@@ -1025,6 +1020,8 @@ export default function mount(ctx) {
     const saved = savedView;
     savedView = null;
     selectedTopic = "";
+    selectedOutlet = "";
+    chronological = false;
     selectedCount = null;
     if (saved) {
       sources.value = [...sources.options].some(option => option.value === saved.source) ? saved.source : "";
@@ -1115,7 +1112,7 @@ export default function mount(ctx) {
     }
     for (const [selector, attribute] of [[".nw-tone-button", "toneKey"], [".nw-tone-audit .nw-summary-toggle", "summary"], [".nw-list .nw-summary-toggle", "summary"], [".nw-list .nw-expand", "event"],
       [".nw-focus-count[data-event]", "event"], [".nw-focus-count[data-topic-id]", "topicId"],
-      [".nw-theme[data-topic]", "topic"], [".nw-panel button[data-count]", "count"]]) {
+      [".nw-outlet[data-outlet]", "outlet"], [".nw-theme[data-topic]", "topic"], [".nw-panel button[data-count]", "count"]]) {
       if (node.matches(selector)) return {selector, attribute, value: node.dataset[attribute],
         rowHref: node.matches(".nw-expand, .nw-summary-toggle")
           ? node.closest(".nw-row")?.querySelector("a.nw-title")?.href : undefined};
@@ -1182,6 +1179,7 @@ export default function mount(ctx) {
     if (selectedCount && selectedCount.category !== categories.value) selectedCount = null;
     drawOverview();
     const scopeTopic = selectedTopic || selectedCount?.topic;
+    if (!scopeTopic) { selectedOutlet = ""; chronological = false; }
     let scoped = items.filter(item => item && typeof item === "object"
       && (!sources.value || text(item.source) === sources.value)
       && (!categories.value || text(item.category) === categories.value)
@@ -1189,6 +1187,7 @@ export default function mount(ctx) {
     // A theme filter matches individual reports. Validate before the optional
     // new-progress restriction so toggling it cannot discard the user's theme.
     if (selectedTheme && !scoped.some(item => topicOf(validAnalysis(item)) === selectedTheme)) selectedTheme = "";
+    if (selectedOutlet) scoped = scoped.filter(item => outletOf(item) === selectedOutlet);
     // Keep complete eligible events, including their older representative.
     if (onlyNew) {
       const eligible = new Set(groupItems(scoped).filter(group => group.reports.some(isNew)).flatMap(group => group.reports));
@@ -1216,6 +1215,8 @@ export default function mount(ctx) {
     const matchedGroups = searchedGroups.filter(group => !onlyWatched || matches.get(group));
     const count = matchedGroups.filter(group => group.reports.some(isNew)).length;
     const groups = matchedGroups.filter(group => !onlyNew || group.reports.some(isNew));
+    if (chronological && scopeTopic) groups.sort((a, b) => reportTime(a.reports[0]) - reportTime(b.reports[0]));
+    drawTopicTools(scopeTopic);
     markRead.hidden = lastSeen === null || count === 0 || undoReading !== null;
     markRead.disabled = !Number.isFinite(readingBoundary()) || (lastSeen !== null && readingBoundary() <= lastSeen);
     undoRead.hidden = undoReading === null;
@@ -1234,7 +1235,7 @@ export default function mount(ctx) {
     // when old groups follow it. New groups outside the prefix keep a badge.
     const firstOld = newGroups.indexOf(false);
     const prefix = lastSeen === null ? 0 : firstOld < 0 ? groups.length : firstOld;
-    const dividerIndex = prefix > 0 && prefix < groups.length ? prefix : -1;
+    const dividerIndex = !chronological && prefix > 0 && prefix < groups.length ? prefix : -1;
     if (received) {
       const modelText = modelState === "working" ? "整理中" : modelState === "paused" ? (modelReason === "waiting" ? "整理暫停，等待下次更新" : "整理暫停，下次更新繼續") : "";
       const before = [updatedText, refreshNotice, modelText].filter(Boolean).join(" · ");
@@ -1254,7 +1255,21 @@ export default function mount(ctx) {
         button.setAttribute("aria-expanded", "false"); button.setAttribute("aria-pressed", "false"); button.removeAttribute("aria-controls");
       });
     }
+    let previousDay = "";
     for (const [index, group] of groups.entries()) {
+      if (chronological && scopeTopic) {
+        const date = new Date(reportTime(group.reports[0]));
+        const valid = Number.isFinite(date.getTime());
+        const day = valid ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}` : "unknown";
+        if (day !== previousDay) {
+          const now = new Date();
+          const today = valid && date.toDateString() === now.toDateString();
+          const divider = make("li", "nw-date-divider", valid ? today ? "今天" : `${date.getMonth()+1}/${date.getDate()}` : "日期不明");
+          divider.title = "依發布時間，非事件發生時間";
+          rendered.append(divider);
+          previousDay = day;
+        }
+      }
       if (index === dividerIndex) {
         const divider = make("li", "nw-divider", "以下為上次離開前的新聞");
         divider.setAttribute("role", "separator");
@@ -1383,6 +1398,62 @@ export default function mount(ctx) {
     if (!restoreFocus(focused) && focusWasInside && unavailableFocus())
       list.focus({preventScroll: true});
   }
+  function reportTime(item) {
+    const stamp = Date.parse(text(item.published));
+    return Number.isFinite(stamp) ? stamp : Infinity;
+  }
+  function outletGroups(name, topic) {
+    const query = searchText(searchInput.value).trim();
+    return groupItems(items.filter(item => item && item.topic === topic && outletOf(item) === name
+      && (!categories.value || item.category === categories.value)
+      && (!selectedTheme || topicOf(validAnalysis(item)) === selectedTheme)))
+      .filter(group => (!selectedCount || contributes(group, selectedCount.id))
+        && (!onlyNew || group.reports.some(isNew))
+        && (!query || group.reports.some(item => [item.title, item.summary].some(value => searchText(value).includes(query))))
+        && (!onlyWatched || group.reports.some(item => trackedWords.some(word => [item.title, item.summary]
+          .some(value => text(value).toLowerCase().includes(word.toLowerCase()))))));
+  }
+  function drawTopicTools(topic) {
+    topicTools.hidden = !topic;
+    topicSources.hidden = !topic;
+    outletLabel.textContent = "";
+    topicOrder.setAttribute("aria-pressed", String(chronological));
+    topicSources.replaceChildren();
+    topicSources.removeAttribute("title");
+    if (!topic) return;
+    topicOrder.textContent = chronological ? "時間順讀" : "最新優先";
+    topicOrder.title = `切換為${chronological ? "最新優先" : "時間順讀"}；依發布時間，非事件發生時間`;
+    topicOrder.setAttribute("aria-pressed", String(chronological));
+    outletLabel.textContent = selectedOutlet ? `話題內・${selectedOutlet}` : "";
+    outletClear.hidden = !selectedOutlet;
+    const order = new Map();
+    for (const item of items.filter(item => item?.topic === topic)) {
+      const name = outletOf(item);
+      if (name) order.set(name, Math.min(order.get(name) ?? Infinity, sourceOrder.get(text(item.source)) ?? Infinity));
+    }
+    const ranked = [...order.keys()].map(name => [name, outletGroups(name, topic).reduce((n,g)=>n+g.reports.length,0)])
+      .sort((a,b)=>b[1]-a[1] || order.get(a[0])-order.get(b[0]));
+    ranked.slice(0,5).forEach(([name,count],index)=>{
+      if (index) topicSources.append(document.createTextNode("・"));
+      const button = make("button", "nw-outlet", `${name} ${count}`);
+      button.type = "button"; button.dataset.outlet = name;
+      button.setAttribute("aria-pressed", String(selectedOutlet === name));
+      topicSources.append(button);
+    });
+    if (ranked.length > 5) topicSources.append(document.createTextNode(`，另 ${ranked.length-5} 家（共 ${ranked.length} 家）`));
+    topicSources.title = ranked.map(([name,count])=>`${name} ${count}`).join("・") + `（共 ${ranked.length} 家）`;
+  }
+  function onTopicOrder() {
+    if (disposed || !(selectedTopic || selectedCount?.topic)) return;
+    chronological = !chronological; drawItems();
+  }
+  function onOutlet(event) {
+    const button = event.target?.closest?.("button[data-outlet]");
+    if (disposed || !button || !topicSources.contains(button)) return;
+    selectedOutlet = selectedOutlet === button.dataset.outlet ? "" : button.dataset.outlet;
+    sources.value = ""; drawItems();
+  }
+  function onOutletClear() { selectedOutlet = ""; drawItems(); }
   function readingBoundary() {
     const at = Date.parse(latestAt);
     return Math.min(Math.max(latestPublished ?? -Infinity, Number.isFinite(at) ? at : -Infinity), Date.now());
@@ -1683,6 +1754,9 @@ export default function mount(ctx) {
     syncPanelDisclosure();
   }) : null;
   panelObserver?.observe(root);
+  topicOrder.addEventListener("click", onTopicOrder);
+  topicSources.addEventListener("click", onOutlet);
+  outletClear.addEventListener("click", onOutletClear);
   panelToggle.addEventListener("click", onPanelToggle);
   shortcutToggle.addEventListener("click", toggleShortcuts);
   overview.addEventListener("click", onOverview);
@@ -1730,6 +1804,9 @@ export default function mount(ctx) {
       view.removeEventListener("pagehide", persistLastSeen);
       disposed = true;
       panelObserver?.disconnect();
+      topicOrder.removeEventListener("click", onTopicOrder);
+      topicSources.removeEventListener("click", onOutlet);
+      outletClear.removeEventListener("click", onOutletClear);
       panelToggle.removeEventListener("click", onPanelToggle);
       up = false;
       finishRefresh();
