@@ -190,7 +190,13 @@ export default function mount(ctx) {
   themeFilter.append(topicTotals, topicVisible, topicSources);
   const topicTools = make("div", "nw-topic-tools");
   topicTools.hidden = true;
-  const topicOrder = make("button", "nw-topic-order", "時間順讀");
+  const topicOrder = make("button", "nw-topic-order", "時間順序");
+  const topicLatest = make("button", "nw-topic-latest-order", "最新更新");
+  topicLatest.type = "button";
+  const orderGroup = make("div", "nw-topic-order-group");
+  orderGroup.setAttribute("role", "group");
+  orderGroup.setAttribute("aria-label", "報導排序");
+  const orderHint = make("span", "nw-hint nw-order-hint", "由舊到新，依發布時間");
   topicOrder.type = "button";
   topicOrder.title = "依發布時間，非事件發生時間";
   const outletLabel = make("span", "nw-topic-outlet-label");
@@ -201,7 +207,9 @@ export default function mount(ctx) {
   const outletChip = make("div", "nw-outlet-chip");
   outletChip.hidden = true;
   outletChip.append(outletLabel, outletClear);
+  const toneExplanation = "依標題與摘要判斷報導的語氣：正面＝強調成果、進展、合作或利多；負面＝強調分歧、受挫、風險、抗議或批評；中性＝主要陳述事實、行程或背景；正負並陳＝正反並陳；非媒體立場";
   const outletHeading = make("h3", "nw-heading", "各家基調對照（則）");
+  outletHeading.title = toneExplanation;
   const outletLegend = make("div", "nw-outlet-legend");
   const outletRows = make("div", "nw-outlet-rows");
   const outletExtra = make("div", "nw-outlet-rows");
@@ -210,7 +218,8 @@ export default function mount(ctx) {
   outletMore.type = "button";
   outletMore.setAttribute("aria-controls", outletExtra.id);
   topicSources.append(outletHeading, outletLegend, outletChip, outletRows, outletExtra, outletMore);
-  topicTools.append(topicOrder);
+  orderGroup.append(topicLatest, topicOrder);
+  topicTools.append(orderGroup, orderHint);
 
   const panel = make("section", "nw-panel");
   const focus = make("section", "nw-focus-section");
@@ -221,7 +230,11 @@ export default function mount(ctx) {
   const focusHeader = make("div", "nw-focus-heading");
   focusHeader.append(focusHeading, make("span", "nw-hint", "多家媒體同時報導"));
   const focusList = make("div", "nw-focus-list");
-  focus.append(focusHeader, focusList);
+  const focusToggle = make("button", "nw-focus-toggle");
+  focusToggle.type = "button";
+  focusList.id = `nw-focus-list-${++descriptionId}`;
+  focusToggle.setAttribute("aria-controls", focusList.id);
+  focus.append(focusToggle, focusHeader, focusList);
   panel.setAttribute("aria-label", "財經分析");
   panel.hidden = true;
   const searchScope = make("p", "nw-hint nw-search-scope");
@@ -437,6 +450,7 @@ export default function mount(ctx) {
   let selectedCount = null;
   let selectedTopic = "";
   let selectedOutlet = "", chronological = false;
+  let focusTopic = "", focusOpen = false;
   let comparisonTopic = "", outletsExpanded = false;
   let savedView = null;
   let topics = [];
@@ -523,9 +537,15 @@ export default function mount(ctx) {
     if (end.title) node.title = end.title;
     return node;
   }
-  function appendTone(meta, item) {
+  function appendTone(meta, item, reports = [item]) {
+    if (!(selectedTopic || selectedCount?.topic)) return;
+    const counts = toneLabels.map(([id]) => [id, reports.filter(report => report.tone === id).length]).filter(([,count]) => count);
+    if (counts.length > 1) {
+      const tag = make("span", "nw-tone-tag nw-tone-composition", counts.map(([id,count]) => `${({negative:"負",neutral:"中",mixed:"正負",positive:"正"})[id]} ${count}`).join("・"));
+      tag.title = toneExplanation;meta.append(tag);return;
+    }
     const names = new Map([["positive", "正面"], ["negative", "負面"], ["mixed", "正負並陳"], ["neutral", "中性"]]);
-    if (selectedTopic && typeof item.tone === "string" && names.has(item.tone))
+    if (typeof item.tone === "string" && names.has(item.tone))
       meta.append(make("span", `nw-tone-tag nw-tone-tag-${item.tone}`, names.get(item.tone)));
   }
   function groupItems(scoped) {
@@ -634,7 +654,7 @@ export default function mount(ctx) {
         bar.append(segment);
       }
       const labels = make("div", "nw-hint nw-tone-labels", "報導基調（則）：");
-      labels.title = "整個話題：按報導計，不隨清單篩選變動";
+      labels.title = `整個話題：按報導計，不隨清單篩選變動。 ${toneExplanation}`;
       for (const [id, name] of toneLabels.filter(([id]) => counts.get(id) > 0)) {
         const button = make("button", `nw-tone-button nw-tone-text-${id}`);
         button.append(toneSwatch(id), document.createTextNode(`${name} `), make("strong", "", String(counts.get(id))));
@@ -704,7 +724,13 @@ export default function mount(ctx) {
   }
   function drawFocus(groups) {
     focus.classList.remove("nw-focus-empty");
-    focusHeader.hidden = false;
+    const topicScope = selectedTopic || selectedCount?.topic || "";
+    if (topicScope !== focusTopic) { focusTopic = topicScope; focusOpen = false; }
+    if (topicScope) focus.prepend(focusToggle); else focusToggle.remove();
+    focusToggle.textContent = `焦點：${topics.length} 個話題 ${focusOpen ? "▾" : "▸"}`;
+    focusToggle.setAttribute("aria-expanded", String(!topicScope || focusOpen));
+    focusHeader.hidden = Boolean(topicScope);
+    focusList.hidden = Boolean(topicScope && !focusOpen);
     if (onlyWatched) { focus.hidden = true; return; }
     if (topics.length) {
       focusList.replaceChildren();
@@ -1349,9 +1375,7 @@ export default function mount(ctx) {
         const valid = Number.isFinite(date.getTime());
         const day = valid ? `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}` : "unknown";
         if (day !== previousDay) {
-          const now = new Date();
-          const today = valid && date.toDateString() === now.toDateString();
-          const divider = make("li", "nw-date-divider", valid ? today ? "今天" : `${date.getMonth()+1}/${date.getDate()}` : "日期不明");
+          const divider = make("li", "nw-date-divider", valid ? `${date.getMonth()+1}/${date.getDate()}` : "日期不明");
           divider.title = "依發布時間，非事件發生時間";
           rendered.append(divider);
           previousDay = day;
@@ -1426,7 +1450,7 @@ export default function mount(ctx) {
       }
       if (!categories.value) info.append(make("span", "nw-category", categoryNames.get(category) || "未分類"));
       info.append(make("span", "nw-source", text(item.source)), groupTime(group.reports));
-      appendTone(info, item);
+      appendTone(info, item, group.reports);
       row.append(newsTitle(item, "nw-title", newGroups[index] && index >= prefix), meta);
       let latest = item, latestTime = Date.parse(text(item.published));
       for (const report of group.reports) {
@@ -1509,6 +1533,8 @@ export default function mount(ctx) {
     topicSources.hidden = !topic;
     outletLabel.textContent = "";
     topicOrder.setAttribute("aria-pressed", String(chronological));
+    topicLatest.setAttribute("aria-pressed", String(!chronological));
+    orderHint.hidden = !chronological;
     outletRows.replaceChildren();
     outletExtra.replaceChildren();
     outletLegend.replaceChildren();
@@ -1526,9 +1552,11 @@ export default function mount(ctx) {
     const visibleReports = visibleGroups.reduce((count,group)=>count+group.reports.length,0);
     topicVisible.hidden = visibleReports >= members.length;
     topicVisible.textContent = topicVisible.hidden ? "" : `目前顯示：${visibleGroups.length} 個事件・${visibleReports} 則`;
-    topicOrder.textContent = "時間順讀";
-    topicOrder.title = `切換為${chronological ? "最新優先" : "時間順讀"}；依發布時間，非事件發生時間`;
+    topicOrder.textContent = "時間順序";
+    topicOrder.title = "由舊到新，依發布時間，非事件發生時間";
     topicOrder.setAttribute("aria-pressed", String(chronological));
+    topicLatest.setAttribute("aria-pressed", String(!chronological));
+    orderHint.hidden = !chronological;
     outletLabel.textContent = selectedOutlet ? `只看：${selectedOutlet}` : "";
     outletClear.hidden = !selectedOutlet;
     const order = new Map();
@@ -1581,9 +1609,13 @@ export default function mount(ctx) {
     outletMore.textContent = outletsExpanded ? `收合（共 ${total} 家）` : `另 ${total-5} 家（共 ${total} 家）`;
 
   }
-  function onTopicOrder() {
+  function onFocusToggle() {
+    if (disposed) return;
+    focusOpen = !focusOpen;drawItems();focusToggle.focus({preventScroll:true});
+  }
+  function onTopicOrder(event) {
     if (disposed || !(selectedTopic || selectedCount?.topic)) return;
-    chronological = !chronological; drawItems();
+    chronological = event.currentTarget === topicOrder; drawItems();
   }
   function onOutlet(event) {
     const button = event.target?.closest?.("button[data-outlet]");
@@ -1899,6 +1931,8 @@ export default function mount(ctx) {
   }) : null;
   panelObserver?.observe(root);
   topicOrder.addEventListener("click", onTopicOrder);
+  topicLatest.addEventListener("click", onTopicOrder);
+  focusToggle.addEventListener("click", onFocusToggle);
   topicSources.addEventListener("click", onOutlet);
   outletMore.addEventListener("click", onOutletMore);
   outletClear.addEventListener("click", onOutletClear);
@@ -1954,6 +1988,8 @@ export default function mount(ctx) {
       disposed = true;
       panelObserver?.disconnect();
       topicOrder.removeEventListener("click", onTopicOrder);
+      topicLatest.removeEventListener("click", onTopicOrder);
+      focusToggle.removeEventListener("click", onFocusToggle);
       topicSources.removeEventListener("click", onOutlet);
       outletMore.removeEventListener("click", onOutletMore);
       outletClear.removeEventListener("click", onOutletClear);

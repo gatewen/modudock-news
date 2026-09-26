@@ -238,5 +238,13 @@ export const css = `
 @media (prefers-reduced-motion: reduce) {
   .nw .nw-segment, .nw .nw-theme-bar { transition: none; }
 }
+
+.nw .nw-topic-order-group { display: inline-flex; gap: 0; }
+.nw .nw-topic-order-group button { border-radius: 0; }
+.nw .nw-topic-order-group button:first-child { border-radius: 4px 0 0 4px; }
+.nw .nw-topic-order-group button:last-child { border-radius: 0 4px 4px 0; }
+.nw .nw-topic-order-group button[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 0 -2px var(--nw-accent); }
+.nw .nw-order-hint { flex-basis: 100%; }
+.nw .nw-focus-toggle { width: 100%; text-align: left; }
 `;
 

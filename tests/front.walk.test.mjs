@@ -151,10 +151,11 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
   }
   function act() {
     const choice=Math.floor(rnd()*34);
-    if(choice===26) click('.nw-topic-order','topicOrder');
+    if(choice===26) click('.nw-topic-order, .nw-topic-latest-order','topicOrder');
     else if(choice===27) click('.nw-outlet','outlet');
     else if(choice===28) click('.nw-topic-outlet-clear','outletClear');
-    else if(choice>=29) {
+    else if(choice===29) click('.nw-focus-toggle','focusDisclosure');
+    else if(choice>=30) {
       // Browsing between edits is common; still assert all invariants after every key.
       const target=h.container.contains(document.activeElement)?document.activeElement:h.list;
       const key=pick(['j','k']);target.focus();note(`browse=${key}`);

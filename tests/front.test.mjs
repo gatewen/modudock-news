@@ -2021,12 +2021,12 @@ test('per-report tone appears only in topic filter and validates ids without inh
   h.message(topicListing(reports));
   assert.equal(h.container.querySelector('.nw-tone-tag'),null);
   focusTopicButtons(h)[0].click();
-  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'負面');
+  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'負 1・中 1・正負 1・正 1');
   h.container.querySelector('.nw-expand').click();
   assert.deepEqual([...h.container.querySelectorAll('.nw-report .nw-tone-tag')].map(n=>n.textContent),['正面','正負並陳','中性']);
   assert.equal(h.container.querySelector('img'),null);
   h.message(topicListing(reports.map((item,i)=>i===0?{...item,tone:null}:item)));
-  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag'),null);
+  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'中 1・正負 1・正 1');
   assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),'true');
   focusTopicButtons(h)[0].click();
   assert.equal(h.container.querySelector('.nw-tone-tag'),null);
@@ -4203,6 +4203,7 @@ test('R12 topic view uses the same full-topic evidence even with category and se
   body.items=body.items.map((item,i)=>({...item,category:i%2?'world':'finance'})); h.message(body);
   focusTopicButtons(h)[0].click(); choose(h,h.categories,'finance'); search(h,'不存在');
   assert.equal(mainRows(h).length,0);
+  h.container.querySelector('.nw-focus-toggle').click();
   auditButton(h,id,'positive').click(); assert.equal(auditRows(h).length,2);
   assert.equal(h.container.querySelectorAll('.nw-tone-audit').length,1);
   const anchor=auditRows(h)[0].querySelector('a'); anchor.focus();
@@ -4847,7 +4848,7 @@ test('R26 chronological topic reading orders earliest reports, dates, keyboard a
   const button=h.container.querySelector('.nw-topic-order');
   assert.equal(button.getAttribute('aria-pressed'),'false');
   button.click();assert.deepEqual(mainTitles(h),['earliest','old','middle','new']);
-  assert.deepEqual([...h.container.querySelectorAll('.nw-date-divider')].map(n=>n.textContent),['9/24','9/25','今天']);
+  assert.deepEqual([...h.container.querySelectorAll('.nw-date-divider')].map(n=>n.textContent),['9/24','9/25','9/26']);
   assert.ok([...h.container.querySelectorAll('.nw-date-divider')].every(n=>n.title==='依發布時間，非事件發生時間'));
   const links=[...h.container.querySelectorAll('.nw-list > .nw-row > a.nw-title')];
   links[0].focus();links[0].dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'j',bubbles:true}));assert.equal(h.window.document.activeElement,links[1]);
@@ -4891,10 +4892,10 @@ test('R26 chronological outlet reading retains new-progress scope, survives rese
 test('R27 chronological toggle has a fixed visible name and pressed state explains the mode',t=>{
   const h=setup(t);h.message(readingTopic());focusTopicButtons(h)[0].click();
   const button=h.container.querySelector('.nw-topic-order');
-  assert.equal(button.textContent,'時間順讀');assert.equal(button.getAttribute('aria-pressed'),'false');
-  assert.match(button.title,/切換為時間順讀/);button.click();
-  assert.equal(button.textContent,'時間順讀');assert.equal(button.getAttribute('aria-pressed'),'true');
-  assert.match(button.title,/切換為最新優先/);button.click();assert.equal(button.textContent,'時間順讀');
+  assert.equal(button.textContent,'時間順序');assert.equal(button.getAttribute('aria-pressed'),'false');
+  assert.match(button.title,/由舊到新/);button.click();
+  assert.equal(button.textContent,'時間順序');assert.equal(button.getAttribute('aria-pressed'),'true');
+  assert.match(button.title,/依發布時間/);h.container.querySelector('.nw-topic-latest-order').click();assert.equal(button.textContent,'時間順序');
 });
 test('R27 20px hysteresis stabilizes scrollbar width feedback without moving focus',t=>{
   const h=responsiveSetup(t);h.message(listing([financeArticle()]));choose(h,h.categories,'finance');
@@ -5010,9 +5011,9 @@ test('R29 removing reports without reducing event count still discloses the smal
 test('R29 tone scope explicitly remains whole topic before and after topic filtering',t=>{
   const h=setup(t),body=auditFixture();h.message(body);
   const label=()=>h.container.querySelector('.nw-tone-labels');
-  assert.equal(label().title,'整個話題：按報導計，不隨清單篩選變動');const text=label().textContent;
+  assert.match(label().title,/^整個話題：按報導計，不隨清單篩選變動/);const text=label().textContent;
   focusTopicButtons(h)[0].click();search(h,'no result');
-  assert.equal(label().title,'整個話題：按報導計，不隨清單篩選變動');assert.equal(label().textContent,text);
+  assert.match(label().title,/^整個話題：按報導計，不隨清單篩選變動/);assert.equal(label().textContent,text);
 });
 
 test('R29 full topic totals stay constant through new-progress and numeric/media intersections',t=>{
@@ -5123,4 +5124,39 @@ test('R32 narrow outlet groups keep the button above its bar and counts, with la
   assert.match(css, /\.nw\.nw-narrow \.nw-outlet \{ grid-column: 1 \/ -1; \}/);
   assert.doesNotMatch(css, /\.nw\.nw-narrow \.nw-outlet-values \{[^}]*grid-column:/);
   assert.match(css, /\.nw \.nw-outlet-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(36px, \.6fr\) minmax\(0, 1.5fr\)/);
+});
+
+test('R33 topic focus collapses on entry, preserves disclosure on resend and restores on exit', t => {
+  const h=setup(t),body=auditFixture();h.message(body);
+  focusTopicButtons(h)[0].focus();focusTopicButtons(h)[0].click();
+  const toggle=h.container.querySelector('.nw-focus-toggle'),cards=h.container.querySelector('.nw-focus-list');
+  assert.equal(toggle.textContent,'焦點：2 個話題 ▸');
+  assert.equal(toggle.getAttribute('aria-expanded'),'false');assert.equal(cards.hidden,true);
+  toggle.click();assert.equal(cards.hidden,false);assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  h.message(body);assert.equal(cards.hidden,false);
+  toggle.click();assert.equal(cards.hidden,true);
+  h.container.querySelector('.nw-filter > button').click();
+  assert.equal(cards.hidden,false);assert.equal(h.container.querySelector('.nw-focus-toggle'),null);
+});
+
+test('R33 ordering is an exclusive fixed-name group with chronological hint and resets on exit', t => {
+  const h=setup(t);h.message(readingTopic());focusTopicButtons(h)[0].click();
+  const group=h.container.querySelector('.nw-topic-order-group'),latest=group.children[0],chrono=group.children[1];
+  assert.equal(group.getAttribute('role'),'group');assert.equal(group.getAttribute('aria-label'),'報導排序');
+  assert.deepEqual([...group.children].map(n=>n.textContent),['最新更新','時間順序']);
+  assert.equal(latest.getAttribute('aria-pressed'),'true');assert.equal(chrono.getAttribute('aria-pressed'),'false');
+  chrono.click();chrono.click();
+  assert.equal(chrono.getAttribute('aria-pressed'),'true');assert.equal(latest.getAttribute('aria-pressed'),'false');
+  assert.equal(h.container.querySelector('.nw-order-hint').hidden,false);
+  assert.equal(h.container.querySelector('.nw-order-hint').textContent,'由舊到新，依發布時間');
+  latest.click();assert.equal(h.container.querySelector('.nw-order-hint').hidden,true);
+  assert.deepEqual(mainTitles(h),['new','old','middle','earliest']);
+});
+
+test('R33 tone explanations quote criteria and mixed event tags expose report composition', t => {
+  const h=setup(t),body=outletToneFixture();h.message(body);focusTopicButtons(h)[0].click();
+  for(const node of [h.container.querySelector('.nw-topic-sources h3'),h.container.querySelector('.nw-tone-labels')])
+    assert.match(node.title,/正面＝強調成果、進展、合作或利多；負面＝強調分歧、受挫、風險、抗議或批評/);
+  assert.match(h.container.querySelector('.nw-topic-sources h3').title,/非媒體立場/);
+  assert.equal(mainRows(h)[0].querySelector('.nw-tone-composition').textContent,'負 8・中 8・正負 8・正 8');
 });
