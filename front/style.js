@@ -52,6 +52,16 @@ export const css = `
 .nw .nw-search-match { color: var(--nw-accent); font-size: 12px; }
 .nw .nw-new-only[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 0 -2px var(--nw-accent); }
 .nw .nw-new-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-block: 8px; }
+.nw .nw-status-group { display: flex; align-items: baseline; gap: 4px; margin-left: auto; min-width: 0; max-width: 100%; }
+.nw .nw-status-group .nw-status { flex: 1; min-width: 0; margin-left: 0; }
+.nw .nw-shortcut-toggle { flex: none; font-size: 12px; padding: 1px 3px; border: 0; background: transparent; color: var(--nw-muted); }
+.nw .nw-shortcut-toggle:hover { text-decoration: underline; }
+.nw .nw-shortcut-icon { display: none; }
+.nw .nw-shortcut-help { margin: 8px 16px; padding: 12px; border: 1px solid var(--nw-line); border-radius: 5px; }
+.nw .nw-shortcut-help:focus-visible { outline: 2px solid var(--nw-focus); outline-offset: 2px; }
+.nw .nw-shortcut-list { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 4px 12px; margin: 8px 0 0; font-size: 12px; }
+.nw .nw-shortcut-list dt { font-weight: 600; }
+.nw .nw-shortcut-list dd { margin: 0; overflow-wrap: anywhere; }
 .nw .nw-status { margin-left: auto; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-watch-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; }
 .nw .nw-watch-input { flex: 1 1 220px; min-width: 0; }
@@ -183,9 +193,11 @@ export const css = `
   .nw .nw-history-long { display: none; }
   .nw .nw-history-short { display: inline; }
   .nw .nw-history-row { grid-template-columns: 7.5ch minmax(0, 1fr) 6em; }
+  .nw .nw-shortcut-name { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
+  .nw .nw-shortcut-icon { display: inline; }
   .nw .nw-focus-long { display: none; }
   .nw .nw-focus-short { display: inline; }
-  .nw .nw-status { flex-basis: 100%; margin-left: 0; }
+  .nw .nw-status-group { flex-basis: 100%; margin-left: 0; }
   .nw .nw-theme { grid-template-columns: minmax(0, 1fr) 3ch; }
   .nw .nw-theme-track { display: none; }
 }

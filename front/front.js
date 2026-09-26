@@ -10,6 +10,7 @@ let focusHeadingId = 0;
 let descriptionId = 0;
 let summaryId = 0;
 let watchInputId = 0;
+let shortcutId = 0;
 
 export default function mount(ctx) {
   const document = ctx.container.ownerDocument;
@@ -249,13 +250,40 @@ export default function mount(ctx) {
     return button;
   });
   toolbar.append(overview);
+  const shortcutToggle = make("button", "nw-shortcut-toggle");
+  shortcutToggle.type = "button";
+  shortcutToggle.append(make("span", "nw-shortcut-name", "快捷鍵"));
+  const shortcutIcon = make("span", "nw-shortcut-icon", "?");
+  shortcutIcon.setAttribute("aria-hidden", "true");
+  shortcutToggle.append(shortcutIcon);
+  shortcutToggle.setAttribute("aria-expanded", "false");
+  const shortcutHelp = make("section", "nw-shortcut-help");
+  shortcutHelp.id = `nw-shortcuts-${++shortcutId}`;
+  shortcutHelp.hidden = true;
+  shortcutHelp.tabIndex = -1;
+  shortcutHelp.setAttribute("role", "region");
+  shortcutHelp.setAttribute("aria-label", "鍵盤快捷鍵");
+  shortcutToggle.setAttribute("aria-controls", shortcutHelp.id);
+  shortcutHelp.append(make("h3", "nw-heading", "鍵盤快捷鍵"),
+    make("p", "nw-hint", "焦點在新聞模組內且不在輸入框時使用；不會鎖住焦點。"));
+  const shortcutList = make("dl", "nw-shortcut-list");
+  for (const [key, description] of [["j／k", "下一則／上一則新聞"], ["s", "開關目前新聞的摘要"],
+    ["e", "展開／收合同事件其他報導"], ["/", "開啟並聚焦搜尋"],
+    ["Esc", "依序：收起基調核對區、清除搜尋、收起本說明（每次一項）"], ["?（Shift+/）", "開關本說明"]]) {
+    shortcutList.append(make("dt", "", key), make("dd", "", description));
+  }
+  shortcutHelp.append(shortcutList);
+  const statusGroup = make("div", "nw-status-group");
+  toolbar.insertBefore(statusGroup, status);
+  statusGroup.append(status, shortcutToggle);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
-  root.append(toolbar, focus, panel, themeFilter, watchHint, newHint, list, empty);
+  root.append(toolbar, focus, panel, themeFilter, watchHint, newHint, shortcutHelp, list, empty);
   ctx.container.append(root);
 
   let up = false;
   let disposed = false;
+  let shortcutOrigin = null;
   let refreshTimer = null;
   let latestAt = "", refreshAt = "", refreshNotice = "";
   let items = [];
@@ -1037,7 +1065,7 @@ export default function mount(ctx) {
     const active = document.activeElement;
     return !root.contains(active) || Boolean(active?.closest("[hidden]")) || active?.disabled === true;
   }
-  function restoreFocus(identity) {
+  function restoreFocus(identity, revealReports = true) {
     if (!identity) return false;
     let target = [...root.querySelectorAll(identity.selector)].find(node => {
       if (identity.href === undefined) return node.dataset[identity.attribute] === identity.value;
@@ -1057,9 +1085,11 @@ export default function mount(ctx) {
     const reports = target?.closest(".nw-reports");
     if (reports?.hidden) {
       const row = reports.closest(".nw-row");
-      expanded.add(row.dataset.event);
-      reports.hidden = false;
-      row.querySelector(".nw-expand").setAttribute("aria-expanded", "true");
+      if (revealReports) {
+        expanded.add(row.dataset.event);
+        reports.hidden = false;
+        row.querySelector(".nw-expand").setAttribute("aria-expanded", "true");
+      } else target = row.querySelector(".nw-expand");
     }
     if (target) target.focus({preventScroll: true});
     return Boolean(target) && !unavailableFocus();
@@ -1318,7 +1348,33 @@ export default function mount(ctx) {
   }
   function onSearchClear() { clearSearch(); searchInput.focus(); }
   function onSearchKey(event) {
-    if (event.key === "Escape" && !event.isComposing) { event.preventDefault(); clearSearch(); }
+    if (event.key === "Escape" && !event.isComposing && !event.ctrlKey && !event.metaKey
+        && !event.altKey && !event.shiftKey && handleEscape()) event.preventDefault();
+  }
+  function toggleShortcuts() {
+    if (disposed) return;
+    if (!shortcutHelp.hidden) { closeShortcuts(); return; }
+    const node = document.activeElement;
+    shortcutOrigin = {node, identity: focusIdentity(node)};
+    shortcutHelp.hidden = false;
+    shortcutToggle.setAttribute("aria-expanded", "true");
+    shortcutHelp.focus();
+  }
+  function closeShortcuts() {
+    shortcutHelp.hidden = true;
+    shortcutToggle.setAttribute("aria-expanded", "false");
+    const origin = shortcutOrigin;
+    shortcutOrigin = null;
+    if (restoreFocus(origin?.identity, false)) return;
+    const node = origin?.node;
+    if (node && root.contains(node) && !node.closest("[hidden]") && !node.disabled) node.focus({preventScroll: true});
+    else shortcutToggle.focus({preventScroll: true});
+  }
+  function handleEscape() {
+    if (toneAudit) { closeToneAudit(); return true; }
+    if (searchInput.value) { clearSearch(); return true; }
+    if (!shortcutHelp.hidden) { closeShortcuts(); return true; }
+    return false;
   }
   function onClearAll() {
     searchInput.value = "";
@@ -1474,10 +1530,14 @@ export default function mount(ctx) {
   function onBrowseKey(event) {
     const target = event.target;
     if (disposed || !root.contains(target) || event.ctrlKey || event.metaKey || event.altKey
-        || event.shiftKey || event.isComposing || target.isContentEditable
+        || event.isComposing || target.isContentEditable
         || target.closest?.('input, select, textarea, [contenteditable]:not([contenteditable="false"])')) return;
-    if (event.key === "Escape" && toneAudit) { closeToneAudit(); event.preventDefault(); return; }
-    if (event.key === "Escape" && searchInput.value) { clearSearch(); event.preventDefault(); return; }
+    if (event.key === "?") {
+      if (!event.repeat) toggleShortcuts();
+      event.preventDefault(); return;
+    }
+    if (event.shiftKey) return;
+    if (event.key === "Escape" && handleEscape()) { event.preventDefault(); return; }
     if (event.key === "/") { openSearch(true); event.preventDefault(); return; }
     const row = target.closest?.(".nw-row");
     const current = row && list.contains(row) ? row : null;
@@ -1501,6 +1561,7 @@ export default function mount(ctx) {
       }
     }
   }
+  shortcutToggle.addEventListener("click", toggleShortcuts);
   overview.addEventListener("click", onOverview);
   newOnly.addEventListener("click", onNewOnly);
   newClear.addEventListener("click", onNewClear);
@@ -1546,6 +1607,8 @@ export default function mount(ctx) {
       up = false;
       finishRefresh();
       refresh.disabled = true;
+      shortcutToggle.removeEventListener("click", toggleShortcuts);
+      shortcutOrigin = null;
       overview.removeEventListener("click", onOverview);
       newOnly.removeEventListener("click", onNewOnly);
       newClear.removeEventListener("click", onNewClear);

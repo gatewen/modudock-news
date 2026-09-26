@@ -264,7 +264,8 @@ test('analysis panel appears only for finance or tech between toolbar and list',
   }
   assert.equal(panel(h).nextElementSibling.className, 'nw-filter');
   assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.className, 'nw-hint nw-new-hint');
-  assert.ok(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.nextElementSibling === h.container.querySelector('.nw-list'));
+  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.nextElementSibling.className, 'nw-shortcut-help');
+  assert.ok(h.container.querySelector('.nw-shortcut-help').nextElementSibling === h.container.querySelector('.nw-list'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
   assert.equal(panel(h).children.length, 7);
@@ -3048,7 +3049,8 @@ test('watch-only hides focus and every analysis panel, restores them and safely 
     const hint=h.container.querySelector('.nw-watch-hint');
     assert.equal(hint.hidden,false); assert.equal(hint.textContent,'只看追蹤：AI、<img>');
     assert.equal(hint.nextElementSibling.className,'nw-hint nw-new-hint');
-    assert.equal(hint.nextElementSibling.nextElementSibling.className,'nw-list');
+    assert.equal(hint.nextElementSibling.nextElementSibling.className,'nw-shortcut-help');
+    assert.equal(hint.nextElementSibling.nextElementSibling.nextElementSibling.className,'nw-list');
     assert.equal(hint.querySelector('img'),null);
     assert.equal(mainRows(h).length,1);
     watchControls(h).only.click();
@@ -4439,4 +4441,95 @@ for(const manual of [false,true]) test(`R14 Escape clears search expansion witho
   else assert.equal(h.window.document.activeElement.href,child.href);
   choose(h,h.select,''); h.message(body);
   assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),String(manual));
+});
+
+// §20.15: discoverability without a modal, focus trap, or persisted preference.
+const shortcutArea=h=>h.container.querySelector('[role=region][aria-label="鍵盤快捷鍵"]');
+const pressKey=(h,node,key,extra={})=>{
+  const event=new h.window.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true,...extra});
+  node.dispatchEvent(event); return event;
+};
+test('R15 question mark toggles nonmodal help and restores focus across list replacement',t=>{
+  const h=setup(t),body=listing([article()]); h.message(body);
+  const title=mainRows(h)[0].querySelector('a'),help=shortcutArea(h); title.focus();
+  assert.equal(help.hidden,true);
+  assert.equal(pressKey(h,title,'?',{shiftKey:true}).defaultPrevented,true);
+  assert.equal(help.hidden,false); assert.ok(h.window.document.activeElement===help);
+  assert.equal(help.getAttribute('aria-modal'),null); assert.equal(help.getAttribute('role'),'region');
+  assert.equal(h.container.querySelector('.nw-shortcut-toggle').getAttribute('aria-expanded'),'true');
+  assert.equal(h.container.querySelector('.nw-shortcut-toggle').getAttribute('aria-controls'),help.id);
+  h.message({...body,at:'2026-09-26T01:00:00Z'}); assert.equal(help.hidden,false);
+  pressKey(h,help,'?',{shiftKey:true}); assert.equal(help.hidden,true);
+  assert.equal(h.window.document.activeElement.href,title.href);
+  assert.equal(h.container.querySelector('.nw-shortcut-toggle').getAttribute('aria-expanded'),'false');
+  assert.equal(h.window.localStorage.length,0);
+});
+
+test('R15 visible shortcut entry lists only existing keys and Escape returns to the entry',t=>{
+  const h=setup(t); h.message(listing([article()]));
+  const toggle=h.container.querySelector('.nw-shortcut-toggle'),help=shortcutArea(h);
+  assert.equal(toggle.querySelector('.nw-shortcut-name').textContent,'快捷鍵');
+  assert.equal(toggle.querySelector('.nw-shortcut-icon').getAttribute('aria-hidden'),'true');
+  assert.equal(toggle.tagName,'BUTTON');
+  assert.equal(toggle.parentElement.className,'nw-status-group');
+  assert.equal(toggle.previousElementSibling.className,'nw-status');
+  toggle.focus(); toggle.click();
+  assert.deepEqual([...help.querySelectorAll('dt')].map(node=>node.textContent),['j／k','s','e','/','Esc','?（Shift+/）']);
+  assert.match(help.textContent,/下一則／上一則新聞/);
+  assert.equal(pressKey(h,help,'Tab').defaultPrevented,false); // No focus trap.
+  pressKey(h,help,'Escape'); assert.equal(help.hidden,true);
+  assert.ok(h.window.document.activeElement===toggle);
+});
+
+test('R15 question mark does not intercept editing, modifiers, composition or events outside this module',t=>{
+  const h=setup(t); h.message(listing([article()]));
+  const input=h.container.querySelector('.nw-search-input'); input.value='?';
+  for(const node of [input,h.categories,h.container.querySelector('.nw-watch-input')]) {
+    assert.equal(pressKey(h,node,'?',{shiftKey:true}).defaultPrevented,false);
+    assert.equal(shortcutArea(h).hidden,true);
+  }
+  assert.equal(input.value,'?');
+  const editable=h.window.document.createElement('div'); editable.contentEditable='true'; h.container.querySelector('.nw').append(editable);
+  assert.equal(pressKey(h,editable,'?',{shiftKey:true}).defaultPrevented,false);
+  const title=mainRows(h)[0].querySelector('a');
+  for(const extra of [{ctrlKey:true},{altKey:true},{metaKey:true},{isComposing:true},{repeat:true}]) {
+    pressKey(h,title,'?',{shiftKey:true,...extra}); assert.equal(shortcutArea(h).hidden,true);
+  }
+  assert.equal(pressKey(h,h.window.document.body,'?',{shiftKey:true}).defaultPrevented,false);
+  assert.equal(shortcutArea(h).hidden,true);
+});
+
+for(const fromInput of [false,true]) test(`R15 Escape priority is tone audit then search then help: input=${fromInput}`,t=>{
+  const h=setup(t),body=auditFixture(),id=body.topics.list[0].id; h.message(body);
+  h.container.querySelector('.nw-search-toggle').click(); search(h,'話題');
+  auditButton(h,id,'negative').click(); const opener=auditButton(h,id,'negative'); opener.focus();
+  pressKey(h,opener,'?',{shiftKey:true}); const help=shortcutArea(h),input=h.container.querySelector('.nw-search-input');
+  assert.equal(help.hidden,false); assert.ok(auditRows(h).length>0);
+  const escape=()=>{if(fromInput) input.focus(); pressKey(h,h.window.document.activeElement,'Escape');};
+  escape(); assert.equal(auditRows(h).length,0); assert.equal(input.value,'話題'); assert.equal(help.hidden,false);
+  escape(); assert.equal(input.value,''); assert.equal(help.hidden,false);
+  escape(); assert.equal(help.hidden,true); assert.ok(h.window.document.activeElement===auditButton(h,id,'negative'));
+});
+
+test('R15 missing return target falls back to shortcut entry and unmount removes help listeners',t=>{
+  const h=setup(t); h.message(listing([article()])); const title=mainRows(h)[0].querySelector('a'); title.focus();
+  pressKey(h,title,'?',{shiftKey:true}); h.message(listing([]));
+  pressKey(h,shortcutArea(h),'Escape');
+  const toggle=h.container.querySelector('.nw-shortcut-toggle'); assert.ok(h.window.document.activeElement===toggle);
+  toggle.click(); const help=shortcutArea(h),root=h.container.querySelector('.nw'); h.handle.unmount();
+  toggle.click(); pressKey(h,root,'?',{shiftKey:true}); pressKey(h,help,'Escape');
+  assert.equal(h.container.childElementCount,0);
+});
+
+test('R15 closing help after clearing search returns to expand control without reviving temporary expansion',t=>{
+  const h=setup(t),body=listing([eventStory('aaaaaaaaaaaa','代表',8,{link:'https://e/1'}),
+    eventStory('aaaaaaaaaaaa','子報導關鍵',9,{link:'https://e/2'})]);
+  h.message(body); h.container.querySelector('.nw-search-toggle').click(); search(h,'關鍵');
+  const child=h.container.querySelector('.nw-reports a'); child.focus(); pressKey(h,child,'?',{shiftKey:true});
+  const help=shortcutArea(h); pressKey(h,help,'Escape');
+  assert.equal(help.hidden,false); assert.equal(h.container.querySelector('.nw-reports').hidden,true);
+  pressKey(h,help,'Escape'); assert.equal(help.hidden,true);
+  assert.ok(h.window.document.activeElement===h.container.querySelector('.nw-expand'));
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),'false');
+  h.message(body); assert.equal(h.container.querySelector('.nw-reports').hidden,true);
 });
