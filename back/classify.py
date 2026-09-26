@@ -12,6 +12,7 @@ by default). This is cooperative between socket reads; DNS and slow headers
 still cannot be reclaimed, and a blocked read waits for its socket timeout.
 """
 from dataclasses import dataclass, field
+from contextvars import ContextVar
 import http.client
 import json
 import os
@@ -33,6 +34,8 @@ MAX_ITEMS = 20
 MAX_CHARS = 8000
 MAX_BODY = 1024 * 1024
 THRESHOLD = 0.35
+# Per worker invocation, not shared mutable client state; no payload/key exposure.
+_http_observer = ContextVar("news_http_observer", default=None)
 CRITERIA = {
     "politics": "台灣或各國政府、選舉、政黨、法案、外交",
     "finance": "股匯市、經濟數據、企業財報與併購、房市、產業景氣（科技公司的財報歸這裡）",
@@ -175,6 +178,9 @@ class _ChoiceClient:
             for attempt in range(3):
                 if not self.enabled:
                     return None
+                observer = _http_observer.get()
+                if observer is not None:
+                    observer(attempt > 0)
                 try:
                     response = self._opener.open(request, timeout=self.timeout)
                 except HTTPError as exc:

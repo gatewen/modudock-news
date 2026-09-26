@@ -5,6 +5,7 @@ from collections import Counter
 import json
 import math
 import os
+import re
 from pathlib import Path
 import selectors
 import subprocess
@@ -169,6 +170,13 @@ def run(args):
             # Preserve the complete last list envelope, including partial results.
             args.save.write_text(safe(json.dumps(last, ensure_ascii=False, indent=2)) + '\n', encoding='utf-8')
             say('Last list saved.')
+    # Sum completed rounds, never cumulative total_http snapshots. A timeout
+    # may lack a completion line; do not claim this is complete process usage.
+    measured = [dict(re.findall(r"\b(requests|http|retries)=(\d+)", stat)) for stat in stats]
+    say('model_usage (completed rounds): ' + ' '.join(
+        f'{name}={sum(int(row[name]) for row in measured)}'
+        if all(name in row for row in measured) else f'{name}=unknown'
+        for name in ('requests', 'http', 'retries')))
     for stat in stats:
         say(stat)
     return 0 if outcome in ('done', 'off') and process.returncode == 0 else 1

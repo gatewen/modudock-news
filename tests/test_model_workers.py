@@ -370,3 +370,29 @@ class ModelWorkerTests(unittest.TestCase):
                 finally:
                     s.stop(); worker.join(2)
                     self.assertFalse(worker.is_alive())
+
+    def test_unresolved_candidates_cached_by_list_identity_but_answers_stay_live(self):
+        from copy import deepcopy
+        from unittest.mock import patch
+        from back.events import candidate_pairs
+        packet={'body':{'items':[
+            {'link':f'https://e.test/{i}','title':title,'summary':'','source':'A',
+             'published':'2026-09-21T00:00:00Z'} for i,title in enumerate(
+                ('台積電宣布擴大投資計畫','台積電宣布擴大海外布局'))]}}
+        self.s.last_list=packet
+        key=candidate_pairs(packet['body']['items'])[0].key
+        with patch('back.scheduler.candidate_pairs',wraps=candidate_pairs) as generate:
+            with self.s.cv:
+                self.assertTrue(self.s._unresolved_events())
+                self.assertTrue(self.s._unresolved_events())
+                self.s.event_cache[key]=False
+                self.assertFalse(self.s._unresolved_events())
+                self.s.event_cache.clear()
+                self.assertTrue(self.s._unresolved_events())
+                self.assertEqual(generate.call_count,1)
+                self.s.last_list=deepcopy(packet)
+                self.assertTrue(self.s._unresolved_events())
+                self.assertEqual(generate.call_count,2)
+                self.s.last_list={'body':{'items':[]}}
+                self.assertFalse(self.s._unresolved_events())
+                self.assertEqual(generate.call_count,3)

@@ -1523,6 +1523,17 @@ export default function mount(ctx) {
       unavailable.length === 1 ? `${failureName(unavailable[0])} 失敗`
         : unavailable.length > 1 ? `${failureName(unavailable[0])}等 ${unavailable.length} 個來源失敗` : ""]
       .filter(Boolean).join(" · ");
+    if (records.length > 0 && failed.length === records.length) {
+      const latest = stale.reduce((best, source) => !best || confirmedAt(source) > confirmedAt(best) ? source : best, null);
+      if (latest) {
+        const date = confirmedAt(latest), today = new Date();
+        const sameDay = date.getFullYear() === today.getFullYear() && date.getMonth() === today.getMonth()
+          && date.getDate() === today.getDate();
+        const calendar = sameDay ? "" : `${date.getMonth()+1}/${date.getDate()} `;
+        updatedText = `更新失敗，沿用 ${calendar}${localTime(latest.last_success)} 的資料`;
+      } else updatedText = "尚未取得新聞：所有來源連線失敗；請按「重新整理」重試";
+      failedText = "";
+    }
     status.title = failed.map(source => confirmedAt(source) ? sourceDetail(source)
       : `${failureName(source)}${typeof source.error === "string" ? `：${Array.from(source.error).slice(0,80).join("")}` : ""}`).join("\n");
     all.title = status.title;

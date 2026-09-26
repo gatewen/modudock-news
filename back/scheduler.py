@@ -17,13 +17,13 @@ import time
 
 if __package__:
     from .feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
-    from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS
+    from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from .events import candidate_pairs, group_events, _fits as pairs_fit
     from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
     from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
-    from classify import CRITERIA, MAX_ITEMS, MAX_CHARS
+    from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from events import candidate_pairs, group_events, _fits as pairs_fit
     from topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
@@ -56,6 +56,8 @@ class ModelRound:
     failed: bool = False
     requests: dict = field(default_factory=lambda: dict.fromkeys(('classify', 'analysis', 'events', 'topics', 'tone'), 0))
     failures: int = 0
+    http: int = 0
+    retries: int = 0
     started: float | None = None
     running: int = 0
     awaiting: int = 0
@@ -68,6 +70,7 @@ class EventResult:
     matches: dict = field(default_factory=dict)
     finished: tuple = ()
     round_id: int = 0
+    accounted: bool = False  # This result owns one awaiting increment.
 
 
 @dataclass
@@ -75,6 +78,7 @@ class ToneResult:
     tones: dict = field(default_factory=dict)
     finished: tuple = ()
     round_id: int = 0
+    accounted: bool = False  # This result owns one awaiting increment.
 
 
 @dataclass
@@ -82,6 +86,7 @@ class TopicResult:
     matches: dict = field(default_factory=dict)
     finished: tuple = ()
     round_id: int = 0
+    accounted: bool = False  # This result owns one awaiting increment.
 
 
 @dataclass
@@ -89,6 +94,7 @@ class AnalysisResult:
     analyses: dict = field(default_factory=dict)
     finished: tuple = ()
     round_id: int = 0
+    accounted: bool = False  # This result owns one awaiting increment.
 
 
 @dataclass
@@ -98,6 +104,7 @@ class ClassifyResult:
     round_id: int = 0  # Diagnostic provenance only; never an acceptance guard.
     items: tuple = ()
     work: ModelRound | None = None
+    accounted: bool = False
 
 
 @dataclass(frozen=True)
@@ -140,9 +147,13 @@ class Scheduler:
         self.topic_in_flight = set()
         self.model_work = None
         self.model_rounds = {}
+        self.total_http = 0
+        self.total_retries = 0
         self.event_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST * 2)
         self.event_cache = OrderedDict()
         self.event_in_flight = set()
+        self._event_candidates_list = None
+        self._event_candidate_keys = ()
         self.model_clock = getattr(classifier, "clock", clock)
         self.model_budget = getattr(classifier, "budget", 60)
         self.analysis_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
@@ -357,7 +368,8 @@ class Scheduler:
             counts = work.requests
             elapsed = max(0, self.model_clock() - work.started)
             self.log(f"model round={round_id} requests={sum(counts.values())} failed={work.failures} "
-                     f"elapsed={elapsed:.1f}s " + ' '.join(f'{kind}={count}' for kind, count in counts.items()))
+                     f"elapsed={elapsed:.1f}s " + ' '.join(f'{kind}={count}' for kind, count in counts.items())
+                     + f" http={work.http} retries={work.retries} total_http={self.total_http} total_retries={self.total_retries}")
             work.logged = True
             del self.model_rounds[round_id]
 
@@ -377,8 +389,13 @@ class Scheduler:
         # resend outside cv. Check current cache, not that stale pending count.
         if self.last_list is None or self.matcher is None or not self._classify_enabled():
             return False
-        return any(not pair.automatic and pair.key not in self.event_cache
-                   for pair in candidate_pairs(self.last_list['body']['items']))
+        if self._event_candidates_list is not self.last_list:
+            self._event_candidate_keys = tuple(pair.key for pair in
+                candidate_pairs(self.last_list['body']['items']) if not pair.automatic)
+            self._event_candidates_list = self.last_list
+        # Cache only immutable candidate keys, never the resolved boolean: cache
+        # acceptance/eviction can change the answer without replacing last_list.
+        return any(key not in self.event_cache for key in self._event_candidate_keys)
 
     def _take_batch(self, lane, work, first):
         # Called under cv. Capture analysis kind here, before releasing cv for HTTP.
@@ -410,6 +427,15 @@ class Scheduler:
                     break
                 batch.append(jobs.get_nowait()[1])
         return batch, kind
+
+    def _record_http(self, work, retry):
+        # Count just before opener.open, including attempts that fail to connect.
+        # Captured work owns retries even after a refresh changes model_work.
+        with self.cv:
+            work.http += 1
+            work.retries += int(retry)
+            self.total_http += 1
+            self.total_retries += int(retry)
 
     def _call(self, lane, batch, kind=None):
         if lane.name == 'analysis':
@@ -458,14 +484,18 @@ class Scheduler:
                         self.model_rounds[work.round_id] = work
             result = None
             if allowed:
+                token = _http_observer.set(lambda retry: self._record_http(work, retry))
                 try:
                     result = self._call(lane, batch, kind)
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
+                finally:
+                    _http_observer.reset(token)
             with self.cv:
                 if allowed:
                     work.running -= 1
-                if not work.logged:
+                accounted = allowed and not work.logged
+                if accounted:
                     work.awaiting += 1
                 if allowed and result is None:
                     work.failures += 1
@@ -474,6 +504,7 @@ class Scheduler:
                 # Publish completion under the same cv acquisition: another
                 # worker must see dependency results before taking new work.
                 candidate = self._to_result(lane, work, batch, result)
+                candidate.accounted = accounted
                 if not self._submit_classification(candidate):
                     return
 
@@ -652,7 +683,7 @@ class Scheduler:
         self.processed_results += 1
         if isinstance(candidate, (ClassifyResult, AnalysisResult, EventResult, TopicResult, ToneResult)):
             work = self.model_rounds.get(candidate.round_id)
-            if work is not None:
+            if candidate.accounted and work is not None:
                 work.awaiting -= 1
         if isinstance(candidate, ToneResult):
             self.tone_in_flight.difference_update(candidate.finished)

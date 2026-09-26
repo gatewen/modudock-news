@@ -1657,7 +1657,7 @@ test('failed source status names all failures with bounded safe error tooltips',
   assert.equal(status.title, `甲：${'𠮷'.repeat(80)}\n<img>：timeout`);
   assert.equal(h.container.querySelector('img'), null);
   h.message(listing([], [{name:'乙', ok:false, error:{}}]));
-  assert.match(status.textContent, /乙 失敗/);
+  assert.match(status.textContent, /尚未取得新聞：所有來源連線失敗/);
   assert.equal(status.title, '乙');
   h.message(listing([], [{name:'乙', ok:true}]));
   assert.equal(status.title, '');
@@ -3455,10 +3455,11 @@ test('source confirmation success failure failure and 304 display freshness inde
     const option=[...h.select.options].find(o=>o.value==='甲');
     assert.equal(option.textContent,`甲 1${ok?'':`（${hhmm(last_success)} 資料）`}`);
     assert.equal(h.select.options[2].textContent,'乙 0（失敗）');
-    assert.match(status().textContent,/乙 失敗/);
+    if(ok) assert.match(status().textContent,/乙 失敗/);
+    else assert.match(status().title,/乙/);
     if(ok) assert.doesNotMatch(status().textContent,/沿用舊資料/);
     else {
-      assert.match(status().textContent,/1 個來源沿用舊資料/);
+      assert.match(status().textContent,/更新失敗，沿用/);
       assert.match(status().title,/甲：沿用舊資料；最後成功確認：2026-09-26/);
       assert.ok(status().title.includes(hhmm(last_success)));
     }
@@ -3481,12 +3482,12 @@ test('malformed confirmation times stay failures; stale source names remain text
   assert.notEqual(h.select.getAttribute('aria-describedby'),other.select.getAttribute('aria-describedby'));
   for(const value of [null,{},[],123,'bad-date','']) {
     h.message(listing([], [{name:'甲',ok:false,last_success:value}]));
-    assert.match(h.container.querySelector('[role=status]').textContent,/甲 失敗/);
+    assert.match(h.container.querySelector('[role=status]').textContent,/所有來源連線失敗/);
     assert.equal(h.select.options[1].textContent,'甲 0（失敗）');
   }
   h.message(listing([], [{name:evil,ok:false,last_success:'2026-09-25T23:59:59Z'},
     {name:'乙',ok:false,last_success:'2026-09-25T23:58:00Z'}]));
-  assert.match(h.container.querySelector('[role=status]').textContent,/2 個來源沿用舊資料/);
+  assert.match(h.container.querySelector('[role=status]').textContent,/更新失敗，沿用/);
   assert.equal(h.container.querySelector('img'),null);
   choose(h,h.select,evil);
   const description=h.window.document.getElementById(h.select.getAttribute('aria-describedby'));
@@ -4587,4 +4588,33 @@ for (const category of ['world','politics']) test(`R19 largest other bar scales 
   const buttons=[...h.container.querySelectorAll('button[data-topic]')];
   assert.equal(buttons.length,2); assert.ok(buttons[1].dataset.topic.endsWith(':other'));
   assert.deepEqual(buttons.map(b=>b.querySelector('.nw-theme-bar').style.width),['20%','100%']);
+});
+
+test('R20 all-source outage uses newest confirmation, local date, and recovers on 304', t => {
+  t.mock.timers.enable({apis:['Date'],now:new Date(2026,8,26,23,50)});
+  const h=setup(t),status=()=>h.container.querySelector('[role=status]');
+  const older=new Date(2026,8,26,22,0).toISOString(),newer=new Date(2026,8,26,23,10).toISOString();
+  const records=ok=>[{name:'甲',ok,last_success:older},{name:'乙',ok,last_success:newer}];
+  const body=ok=>({...listing([article({published:'2000-01-01T00:00:00Z'})],records(ok)),at:new Date().toISOString()});
+  h.message(body(true)); assert.match(status().textContent,/23:50 更新/);
+  h.message(body(false)); assert.match(status().textContent,/^更新失敗，沿用 23:10 的資料/);
+  assert.doesNotMatch(status().textContent,/23:50 更新|個來源沿用/);
+  assert.match(status().title,/甲：.*22:00:00/); assert.match(status().title,/乙：.*23:10:00/);
+  t.mock.timers.setTime(new Date(2026,8,27,0,5).getTime());
+  h.message(body(false)); assert.match(status().textContent,/^更新失敗，沿用 9\/26 23:10 的資料/);
+  // A 304 is delivered as ok=true with a fresh last_success, despite old articles.
+  const recovered=body(false); recovered.sources[1]={name:'乙',ok:true,last_success:new Date().toISOString()};
+  h.message(recovered); assert.match(status().textContent,/^00:05 更新/);
+  assert.match(status().textContent,/1 個來源沿用舊資料/);
+  assert.doesNotMatch(status().textContent,/更新失敗/);
+});
+
+test('R20 first all-source failure offers refresh and does not use packet time as freshness', t=>{
+  const h=setup(t);h.up();
+  h.message(listing([],[{name:'甲',ok:false,last_success:null},{name:'乙',ok:false,last_success:'invalid'}]));
+  const status=h.container.querySelector('[role=status]');
+  assert.match(status.textContent,/^尚未取得新聞：所有來源連線失敗；請按「重新整理」重試/);
+  assert.doesNotMatch(status.textContent,/\d\d:\d\d 更新/);
+  assert.equal(h.button.disabled,false);h.button.click();assert.deepEqual(h.sent,[{op:'refresh'}]);
+  h.message(listing([],[]));assert.doesNotMatch(status.textContent,/所有來源連線失敗/);
 });
