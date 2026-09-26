@@ -4533,3 +4533,21 @@ test('R15 closing help after clearing search returns to expand control without r
   assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),'false');
   h.message(body); assert.equal(h.container.querySelector('.nw-reports').hidden,true);
 });
+
+test('R17 module root contains visually hidden absolute positioning', t => {
+  const h = setup(t);
+  const root = h.container.querySelector('.nw');
+  const rules = [...root.querySelector('style').sheet.cssRules];
+  const base = rules.find(rule => rule.selectorText === '.nw').style;
+  assert.equal(base.position, 'relative');
+  assert.equal(h.window.getComputedStyle(root).position, 'relative');
+  // Establish a containing block without offsets or a new scrolling container.
+  for (const property of ['top', 'right', 'bottom', 'left', 'inset', 'overflow', 'z-index'])
+    assert.equal(base.getPropertyValue(property), '');
+  const sr = rules.find(rule => rule.selectorText === '.nw .nw-sr').style;
+  for (const [property, value] of Object.entries({
+    position: 'absolute', width: '1px', height: '1px', padding: '0px', margin: '-1px',
+    overflow: 'hidden', clip: 'rect(0, 0, 0, 0)', 'clip-path': 'inset(50%)',
+    'white-space': 'nowrap', border: '0px',
+  })) assert.equal(sr.getPropertyValue(property), value, property);
+});
