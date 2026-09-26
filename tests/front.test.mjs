@@ -5034,3 +5034,30 @@ test('R30 top and 4px tolerance never compensate inserted reports; scrolling bey
     assert.equal(mainRows(h)[0].querySelector('.nw-title').textContent,'new0');
   }
 });
+
+test('R26 switching directly to another topic resets chronological reading without requiring return',t=>{
+  const h=setup(t),body=readingTopic(),second=topicRecord({id:'bbbbbbbbbbbb',title:'另一話題',count:3,sources:3});
+  body.topics.list.push(second);
+  body.items.push(...['公視','BBC','中央社 政治'].map((source,i)=>article({source,topic:second.id,title:`另一話題${i}`,link:`https://e.test/second${i}`})));
+  h.message(body);focusTopicButtons(h)[0].click();
+  const order=h.container.querySelector('.nw-topic-order');order.click();assert.equal(order.getAttribute('aria-pressed'),'true');
+  focusTopicButtons(h).find(b=>b.dataset.topicId===second.id).click();
+  assert.equal(order.getAttribute('aria-pressed'),'false');assert.equal(h.container.querySelectorAll('.nw-date-divider').length,0);
+});
+test('R28 keyboard exemption is tested with a visible anchor that would otherwise need correction',t=>{
+  const h=scrollHarness(t);
+  h.container.querySelector('.nw-list').dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'j',bubbles:true}));
+  h.shift({a:800,b:860,c:920});h.message(h.body);
+  assert.equal(h.scroller.scrollTop,500);
+  assert.equal(h.window.document.activeElement.href,'https://e.test/a');
+});
+test('R28 explicit search never corrects scroll even when a surviving visible row moves, including microtasks',async t=>{
+  const h=scrollHarness(t);
+  for(const link of h.container.querySelectorAll('a.nw-title'))link.getBoundingClientRect=()=>{
+    const index=mainRows(h).indexOf(link.closest('.nw-row'));
+    const top=640+index*60-h.scroller.scrollTop;return {top,bottom:top+20};
+  };
+  search(h,'b');await new Promise(resolve=>h.window.queueMicrotask(resolve));
+  assert.deepEqual(mainTitles(h),['b']);assert.equal(h.scroller.scrollTop,500);
+  assert.equal(h.container.querySelector('a.nw-title').getBoundingClientRect().top,140);
+});
