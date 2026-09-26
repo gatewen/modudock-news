@@ -58,6 +58,13 @@ def preflight(feeds_path, python_version=None, expat_version=None):
             if parsed.username is not None or parsed.password is not None:
                 raise ValueError("source URL must not contain credentials")
             _ = parsed.port  # Reject malformed ports before ready.
+            domains = feed.get("link_domains", [])
+            if (not isinstance(domains, list) or len(domains) > 16
+                    or any(not isinstance(domain, str) or not domain
+                           or domain != domain.lower() or domain.startswith(".") or domain.endswith(".")
+                           or any(char not in "abcdefghijklmnopqrstuvwxyz0123456789.-" for char in domain)
+                           or ".." in domain for domain in domains)):
+                raise ValueError("link_domains must be lowercase DNS names")
         return feeds, None
     except (OSError, ValueError, UnicodeError) as exc:
         return [], ("feeds.json: " + str(exc))[:200]

@@ -10,8 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from html import unescape
-from html.parser import HTMLParser
 import json
+import re
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from xml.parsers import expat
 
@@ -118,28 +118,88 @@ def _xml(data):
     return root
 
 
-class _Plain(HTMLParser):
-    def __init__(self):
-        super().__init__(convert_charrefs=True)
-        self.parts = []
+class _MalformedHTML(ValueError):
+    pass
 
-    def handle_data(self, data):
-        self.parts.append(data)
 
-    def handle_starttag(self, tag, attrs):
-        if tag in ("br", "p", "div", "li"):
-            self.parts.append(" ")
+def _html_text(value):
+    """Single forward scan; never retry an unfinished suffix at each '<'.
 
-    def handle_endtag(self, tag):
-        if tag in ("p", "div", "li"):
-            self.parts.append(" ")
+    Only text and block separators matter here, not attributes or a DOM.
+    Entity decoding retains HTMLParser's previous two-pass text behavior.
+    """
+    parts, i, size = [], 0, len(value)
+    while i < size:
+        opening = value.find("<", i)
+        if opening < 0:
+            parts.append(unescape(value[i:]))
+            break
+        parts.append(unescape(value[i:opening]))
+        i = opening
+        if value.startswith("<!--", i):
+            end = re.compile(r"--\s*>").search(value, i + 4)
+            if end is None:
+                raise _MalformedHTML()
+            i = end.end()
+            continue
+        if value.startswith("<![", i):
+            # Unknown marked sections used to raise HTMLParser AssertionError.
+            if not value.startswith("<![CDATA[", i):
+                raise _MalformedHTML()
+            end = value.find("]]>", i + 9)
+            if end < 0:
+                raise _MalformedHTML()
+            i = end + 3
+            continue
+        closing = value.startswith("</", i)
+        name_start = i + (2 if closing else 1)
+        if closing:
+            while name_start < size and value[name_start].isspace():
+                name_start += 1
+        declaration = value.startswith(("<!", "<?"), i)
+        if not declaration and (name_start == size or not value[name_start].isascii()
+                                or not value[name_start].isalpha()):
+            parts.append("<")
+            i += 1
+            continue
+        end_name = name_start
+        while end_name < size and value[end_name] not in " \t\n\r\f/>\x00":
+            end_name += 1
+        name = value[name_start:end_name].lower()
+        end, quote = end_name, None
+        while end < size:
+            char = value[end]
+            if quote:
+                if char == quote:
+                    quote = None
+            elif char in "\"'":
+                quote = char
+            elif char == ">":
+                break
+            end += 1
+        if end == size:
+            raise _MalformedHTML()
+        if not declaration and (name in ("p", "div", "li") or (name == "br" and not closing)):
+            parts.append(" ")
+        self_closing = value[i:end].rstrip().endswith("/")
+        i = end + 1
+        if not declaration and not closing and not self_closing and name in ("script", "style"):
+            finish = re.compile(r"</\s*" + name + r"\s*>", re.I).search(value, i)
+            if finish is None:
+                break  # Same as HTMLParser's unclosed raw-text element.
+            parts.append(value[i:finish.start()])
+            i = finish.end()
+    return unescape("".join(parts))
 
 
 def plain(value, limit):
-    parser = _Plain()
-    parser.feed(value[:8192])
-    parser.close()
-    return " ".join(unescape("".join(parser.parts)).split())[:limit]
+    value = value[:8192]
+    try:
+        text = _html_text(value)
+    except _MalformedHTML:
+        # A malformed field remains literal text; never reject its whole feed.
+        text = unescape(value)
+    return " ".join(text.split())[:limit]
 
 
 def _iso(value):
@@ -243,15 +303,33 @@ def parse_feed(data, final_url, source, first_seen, now):
     return items, seen
 
 
-def merge_items(source_items):
-    """Lists in feeds.json order. Equal date/key retains first encountered item."""
+def merge_items(source_items, feeds=()):
+    """Trusted publisher domain, then configured order, owns cross-source keys.
+
+    Dates choose versions within one source only. Domains come from local feed
+    configuration, never from feed contents or redirect destinations.
+    """
     winners = {}
-    source_order = {}
+    source_order = {feed["name"]: i for i, feed in enumerate(feeds)}
+    domains = {}
+    for feed in feeds:
+        host = urlsplit(feed["url"]).hostname or ""
+        domains[feed["name"]] = feed.get("link_domains", [host.removeprefix("www.")])
+
+    def priority(item):
+        host = (urlsplit(item["link"]).hostname or "").lower().rstrip(".")
+        owned = any(host == domain or host.endswith("." + domain)
+                    for domain in domains.get(item["source"], ()) if domain)
+        return owned, -source_order[item["source"]]
+
     for items in source_items:
         for item in items:
-            source_order.setdefault(item["source"], None)
+            source_order.setdefault(item["source"], len(source_order))
             key = dedup_key(item["link"])
-            if key not in winners or item["published"] > winners[key]["published"]:
+            previous = winners.get(key)
+            if (previous is None
+                    or (item["source"] == previous["source"] and item["published"] > previous["published"])
+                    or (item["source"] != previous["source"] and priority(item) > priority(previous))):
                 winners[key] = item
     result = sorted(winners.values(), key=lambda item: (item["source"], item["title"]))
     result.sort(key=lambda item: item["published"], reverse=True)

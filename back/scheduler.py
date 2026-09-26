@@ -757,7 +757,7 @@ class Scheduler:
 
     def _emit(self, caches, statuses):
         packet = {"t": "msg", "seq": self.seq, "body": {
-            "op": "list", "items": merge_items([cache.items for cache in caches]),
+            "op": "list", "items": merge_items([cache.items for cache in caches], self.feeds),
             "sources": statuses, "at": self.now().isoformat()}}
         with self.cv:
             self.model_work = ModelRound(self.round_id)

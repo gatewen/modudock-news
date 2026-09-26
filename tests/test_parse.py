@@ -211,7 +211,7 @@ class MergeAndSizeTests(unittest.TestCase):
         old = self.item("old", "https://example.com/x?a=1&utm_source=x#top")
         newer = self.item("new", "https://example.com/x?a=1&fbclid=y", "2026-09-22T00:00:00.000000Z", "Z")
         tied = dict(newer, title="tie", source="A")
-        self.assertEqual(fp.merge_items([[old], [newer], [tied]]), [newer])
+        self.assertEqual(fp.merge_items([[old], [newer], [tied]]), [tied])  # A owns the key; its newest wins.
         self.assertEqual(fp.dedup_key(old["link"]), "https://example.com/x?a=1")
 
     def test_sort_ties_stable_and_300_cap(self):
@@ -277,7 +277,8 @@ class SourceFloorTests(unittest.TestCase):
         old = [self.item(str(i), f'https://example.com/{i}', '2026-09-01', 'A') for i in range(4)]
         new = [dict(old[0], published='2026-09-25', source='B')]
         with patch.object(fp, 'MAX_ITEMS_LIST', 4):
-            result = fp.merge_items([old, new])
+            result = fp.merge_items([old, new], [{"name":"B","url":"https://b.example/rss"},
+                                                   {"name":"A","url":"https://a.example/rss"}])
         self.assertEqual(len(result), 4)
         self.assertEqual([i['source'] for i in result].count('A'), 3)
         self.assertEqual([i['source'] for i in result].count('B'), 1)
