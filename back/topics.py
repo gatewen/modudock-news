@@ -55,20 +55,18 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None):
     seeds = [event for event, keys in events.items() if source_count(keys) >= 3]
     seed_events = set(seeds)
     seeds.sort(key=lambda event: (-source_count(events[event]), -max(dates[k].timestamp() for k in events[event]), event))
-    seed_candidates = [(event_of[seed], seed) for seed in previous if seed in records]
-    seed_candidates.extend((event, None) for event in seeds)
+    seed_candidates = [seed for seed in previous if seed in records]
+    seed_candidates.extend(min(events[event], key=order.get) for event in seeds)
     claimed, topics, pending = set(), [], []
-    for event, seed in seed_candidates:
-        remaining = events[event] - claimed
-        if seed is None:
-            if source_count(remaining) < 3:
-                continue
-            seed = min(remaining, key=order.get)
-        elif seed in claimed:
+    for seed in seed_candidates:
+        event = event_of[seed]
+        # Seed-qualified events are always claimed whole. Only smaller
+        # events can be partially claimed; they cannot create a new seed.
+        if seed in claimed:
             continue
         if len(topics) == MAX_BUILT_TOPICS:
             break
-        members = set(remaining)
+        members = events[event] - claimed
         latest = max(dates[key] for key in members)
         while True:
             terms = set().union(*(features[key] for key in members))

@@ -152,6 +152,7 @@ class Scheduler:
         self.topic_in_flight = set()
         self.model_work = None
         self.model_rounds = {}
+        self.model_running = 0  # Includes late work whose statistics are already logged.
         self.total_http = 0
         self.total_retries = 0
         self.event_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST * 2)
@@ -393,7 +394,7 @@ class Scheduler:
         # During a half-open probe, peers wait on cv rather than treating
         # the probe reservation as another failure of the recovering round.
         if (getattr(self.classifier, "service_circuit_open", False)
-                and any(work.running for work in self.model_rounds.values())):
+                and self.model_running):
             return None
         for lane in self.lanes:
             # Includes queued and completed-but-unaccepted event work. Lower
@@ -501,6 +502,7 @@ class Scheduler:
                         work.started = self.model_clock()
                     work.requests[lane.name] += 1
                     work.running += 1
+                    self.model_running += 1
                     if not work.logged:
                         self.model_rounds[work.round_id] = work
             result = None
@@ -521,6 +523,7 @@ class Scheduler:
             with self.cv:
                 if allowed:
                     work.running -= 1
+                    self.model_running -= 1
                 accounted = allowed and not work.logged
                 if accounted:
                     work.awaiting += 1

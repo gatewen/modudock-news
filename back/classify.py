@@ -71,6 +71,8 @@ class _ClientState:
     service_failures: int = 0
     service_rounds: set = field(default_factory=set, repr=False)
     service_probe_at: float = 0
+    service_success_round: int = -1
+    service_latest_round: int = -1
     lock: object = field(default_factory=threading.Lock, repr=False)
 
 
@@ -144,11 +146,15 @@ class _ChoiceClient:
                     return False, False
                 # Reserve the single probe across all clients and workers.
                 state.service_probe_at = self.clock() + 1800
+            if type(round_id) is int:
+                state.service_latest_round = max(state.service_latest_round, round_id)
             return True, probe
 
     def _service_unavailable(self, round_id):
         with self._state.lock:
             state = self._state
+            if type(round_id) is int and round_id < state.service_success_round:
+                return
             # Keep at most three identities; overlapping old completions
             # must not count the same round twice. Once open, count saturates.
             if round_id not in state.service_rounds and state.service_failures < 3:
@@ -157,8 +163,14 @@ class _ChoiceClient:
             if state.service_failures >= 3:
                 state.service_probe_at = self.clock() + 1800
 
-    def _service_success(self):
+    def _service_success(self, round_id=None):
         with self._state.lock:
+            # Transport always supplies the actual successful request round.
+            # The no-argument form supports standalone diagnostic calls.
+            if round_id is None:
+                round_id = self._state.service_latest_round
+            if type(round_id) is int:
+                self._state.service_success_round = max(self._state.service_success_round, round_id)
             self._state.service_failures = 0
             self._state.service_rounds.clear()
             self._state.service_probe_at = 0
@@ -280,7 +292,7 @@ class _ChoiceClient:
             if not isinstance(document, dict) or not isinstance(document.get("answers"), dict):
                 raise _InvalidResponse()
             result = self._decode(batch, document["answers"], context)
-            self._service_success()
+            self._service_success(round_id)
             return result
         except _ResponseDeadline:
             _failure_detail.set("connection")
