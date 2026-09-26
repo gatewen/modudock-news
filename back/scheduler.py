@@ -4,7 +4,7 @@ Workers return detached candidate state. Only the coordinator commits it.
 source_timeout starts when a worker takes a job; queued jobs are bounded by
 round_timeout. stop never joins blocked network workers.
 """
-from collections import OrderedDict, deque
+from collections import Counter, OrderedDict, deque
 from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -30,6 +30,8 @@ else:
 
 
 MODEL_WORKERS = 3
+SOURCE_LOG_MAX = 1024
+SOURCE_FAILURES = ("timeout", "http_4xx", "http_5xx", "parse", "other")
 
 
 @dataclass
@@ -47,6 +49,8 @@ class Candidate:
     cache: Cache | None = None
     error: str | None = None
     clear_validators: bool = False
+    outcome: str = "other"
+    elapsed: float = 0
 
 
 @dataclass
@@ -183,6 +187,7 @@ class Scheduler:
         self.results = deque()  # Producers wait at 32; no unbounded late results.
         self.caches = [Cache() for _ in feeds]
         self.last_success = [None for _ in feeds]
+        self.source_streaks = [0 for _ in feeds]
         self.stopping = False
         self.active = False
         self.pending_refresh = False
@@ -223,6 +228,10 @@ class Scheduler:
         self.round_end = self.clock() + self.round_timeout
         self.pending = set(range(len(self.feeds)))
         self.deadlines = {}
+        if len(self.source_streaks) != len(self.feeds):
+            self.source_streaks = [0 for _ in self.feeds]
+        self.source_outcomes = ["timeout" for _ in self.feeds]
+        self.source_elapsed = [0.0 for _ in self.feeds]
         self.status = [{"name": f["name"], "outlet": f.get("outlet", f["name"]), "ok": False, "error": None, "count": 0,
                         "last_success": self.last_success[i]} for i, f in enumerate(self.feeds)]
         while True:
@@ -248,22 +257,28 @@ class Scheduler:
                 self.cv.notify_all()
             feed = self.feeds[i]
             self.log(f"fetching round={rid} source={i}")
+            started = self.clock()
             candidate = Candidate(rid, i)
             try:
                 result = self.fetcher.fetch(feed["url"], cache.validators)
                 if result.status == "ok":
+                    candidate.outcome = "parse"
                     items, seen = parse_feed(result.data_bytes, result.final_url, feed["name"], cache.first_seen, self.now())
                     candidate.cache = Cache(items, deepcopy(result.validators), seen, True)
+                    candidate.outcome = "ok"
                 elif result.status == "not_modified":
                     if cache.available:
                         candidate.cache = cache
+                        candidate.outcome = "not_modified"
                     else:
                         candidate.error = "304 without cache"
                         candidate.clear_validators = True
                 else:
                     candidate.error = result.error[:200]
+                    candidate.outcome = getattr(result, "failure", "other")
             except Exception as exc:
                 candidate.error = ("fetch/parse: " + str(exc))[:200]
+            candidate.elapsed = max(0, self.clock() - started)
             with self.cv:
                 while not self.stopping and len(self.results) >= 32:
                     self.cv.wait()
@@ -799,7 +814,29 @@ class Scheduler:
             self.last_success[i] = self.now().isoformat()
         self.status[i].update(ok=candidate.error is None, error=candidate.error,
                               last_success=self.last_success[i])
+        self.source_outcomes[i] = (candidate.outcome if candidate.outcome in
+                                   ("ok", "not_modified", *SOURCE_FAILURES) else "other")
+        self.source_elapsed[i] = candidate.elapsed
         self.pending.discard(i)
+
+    def _source_summary(self):
+        # Coordinator only, once per completed fetch round. No remote text.
+        counts = Counter(self.source_outcomes)
+        streaks = []
+        for i, outcome in enumerate(self.source_outcomes):
+            self.source_streaks[i] = (0 if outcome in ("ok", "not_modified")
+                                     else self.source_streaks[i] + 1)
+            if self.source_streaks[i] and len(streaks) < 5:
+                name = ''.join(c if c.isalnum() or c in ' -_（）' else '_'
+                               for c in self.feeds[i]['name'][:20])
+                streaks.append(f"{name}:{self.source_streaks[i]}")
+        line = (f"sources round={self.round_id} ok={counts['ok']} "
+                f"not_modified={counts['not_modified']} "
+                f"failed={sum(counts[code] for code in SOURCE_FAILURES)} "
+                + ' '.join(f"{code}={counts[code]}" for code in SOURCE_FAILURES)
+                + f" slow={sum(elapsed > 10 for elapsed in self.source_elapsed)} "
+                + "streaks=" + ('|'.join(streaks) or '-'))
+        return line.encode('utf-8')[:SOURCE_LOG_MAX].decode('utf-8', errors='ignore')
 
     def _send_list(self, packet, publish=False, fitted=False):
         # Serialization and output must stay outside cv so stop never waits
@@ -878,6 +915,7 @@ class Scheduler:
         while True:
             resends = []
             completed = None
+            source_summary = None
             with self.cv:
                 if self.stopping:
                     return
@@ -898,9 +936,12 @@ class Scheduler:
                     for i in list(self.pending):
                         if now >= min(self.round_end, self.deadlines.get(i, self.round_end)):
                             self.status[i].update(ok=False, error="deadline")
+                            self.source_outcomes[i] = "timeout"
+                            self.source_elapsed[i] = max(0, now - (self.deadlines[i] - self.source_timeout)) if i in self.deadlines else 0
                             self.pending.remove(i)
                     if not self.pending:
                         completed = deepcopy(self.caches), deepcopy(self.status)
+                        source_summary = self._source_summary()
                     else:
                         due = min([self.round_end] + [self.deadlines[i] for i in self.pending if i in self.deadlines])
                 else:
@@ -914,6 +955,8 @@ class Scheduler:
                             wait = min(wait, remaining)
                     self.cv.wait(wait)
                     continue
+            if source_summary is not None:
+                self.log(source_summary)
             for packet in resends:
                 self._send_list(packet)
             if completed is not None:

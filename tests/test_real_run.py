@@ -18,6 +18,7 @@ class RealRunTests(unittest.TestCase):
             with self.subTest(stats=stats), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root/'back').mkdir()
+                source_stat = 'sources round=1 ok=11 not_modified=1 failed=1 timeout=0 http_4xx=0 http_5xx=1 parse=0 other=0 slow=1 streaks=自由時報即時:3'
                 (root/'back/news.py').write_text('''import json, sys
 for line in sys.stdin:
     packet=json.loads(line)
@@ -27,10 +28,11 @@ for line in sys.stdin:
         print(json.dumps({'t':'msg','body':{'op':'list','items':[],'sources':[],
             'model':{'state':'done'},'topics':{'list':[]}}}),flush=True)
     elif packet['t']=='bye': break
-'''.replace('STATS', repr(stats)))
+'''.replace('STATS', repr([source_stat, *stats])))
                 result = subprocess.run([sys.executable, 'scripts/real_run.py', '--root', directory,
                                          '--timeout', '3'], capture_output=True, text=True, timeout=6,
                                         env={k:v for k,v in os.environ.items() if k!='TYPESAFE_API_KEY'})
                 self.assertEqual(result.returncode,0,result.stdout+result.stderr)
                 self.assertIn('result=done exit=0',result.stdout)
+                self.assertEqual(result.stdout.count(source_stat),1)
                 self.assertIn('model_usage (completed rounds): '+expected,result.stdout)

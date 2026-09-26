@@ -44,6 +44,7 @@ def run(args):
     lists = 0
     outcome = 'timeout'
     stats = []
+    source_stats = []
     # A real run must not accidentally inherit test endpoint/feed overrides.
     env = {k: v for k, v in os.environ.items() if not k.startswith('NEWS_TEST_')}
     process = subprocess.Popen([sys.executable, 'back/news.py'], cwd=args.root,
@@ -77,6 +78,8 @@ def run(args):
             for line in parts:
                 if stream is process.stderr:
                     text = line.decode('utf-8', errors='replace')
+                    if text.startswith("sources round="):
+                        source_stats.append(text)
                     if text.startswith('model round='):
                         stats.append(text)
                 elif line:
@@ -177,7 +180,7 @@ def run(args):
         f'{name}={sum(int(row[name]) for row in measured)}'
         if all(name in row for row in measured) else f'{name}=unknown'
         for name in ('requests', 'http', 'retries')))
-    for stat in stats:
+    for stat in source_stats + stats:
         say(stat)
     return 0 if outcome in ('done', 'off') and process.returncode == 0 else 1
 

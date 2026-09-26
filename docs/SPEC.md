@@ -1412,6 +1412,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **停止**：bye 不等待卡住的網路 worker，不 join RSS 或模型執行緒；維持後半一秒內退出的協定政策。這不代表能在 process 存活時強制回收卡住的 DNS／header 請求。（出處：§5、§18.2、§18.32）
 - **列表與補送**：每 item 永遠有 category、analysis（null 或物件）、event、event_size；topic／tone 只在適用時出現。body 有 classify、analysis、events、topics、model 的進度。初始 list 後 publish `news.fetched`；補送不改 at、不另 publish。配對結果只有可見 event／event_size 改變、pending 歸零或模型狀態需更新時補送；一般成功結果只影響可見項目時才需補內容。Outbox 對尚未開始寫出的 list 原位取代，同步更新其後對應 publish 的 count／at；put 拒收不更新 last_list。（出處：§12.6、§16.5、§18.9、§18.20、§18.24、§18.37）
 - **大小守衛**：model 額外預留 failed 的 failure 固定代碼最長形狀（§20.21）。完整 JSON envelope（ensure_ascii、含換行）限 900 KiB，從 items 尾端裁切。未分類預留最長 category；尚未分析且類別為空或可分析者預留三種 analysis 中最長形狀；event_size 預留三位數，另預留 topic、tone、最多五個話題與 model 狀態。裁切後重算來源 count、classify／analysis pending、event_size，協調者再裝飾事件／話題進度。補送理應不減少首次已送 items；若仍裁切，stderr 記一行後照送，不 raise。空 items 的 envelope 仍超限則拒送。（出處：§12.3、§13.4、§16.5、§18.5、§18.14、§18.16、§18.20）
+- **來源摘要**：每個抓取輪收尾另印一次 `sources round=`：2xx 成功解析／有效 304／失敗分開計；失敗為 timeout、http_4xx、http_5xx、parse、other；實際抓取加解析超過 10 秒為 slow，不計排隊。連敗歸零於成功或有效 304，最多列五個名稱（各20字），整行最多1024 UTF-8 bytes，不含 URL 或錯誤內文。僅 stderr，不增加 sources 封包欄位；real_run 摘要保留此行（§20.41）。
 - **stderr 統計**：有模型准入的 work 在 queued／running／awaiting 均清空後，僅寫一次 `model round={id} requests={n} failed={m} elapsed={s:.1f}s classify={a} analysis={b} events={c} topics={d} tone={e}`。requests 是准入批次數，429／529 的 HTTP 重試不另加；行尾另附 http（實際 HTTP 嘗試）、retries（其中重試次數）、total_http／total_retries（本 process 已發起的累計嘗試與重試，跨輪可能包含其他在途 work）。三 worker 以每次呼叫的 context 綁定原 work，重試不改歸到新輪。沒有模型請求的輪次不寫（§20.20）。內容不含新聞、URL 或 key。（出處：§18.15、§18.31、§18.32、§18.37、§18.38）
 
 `body.model` 的現行判斷順序如下；pending 指 classify／analysis／events／topics.pending 與 topics.tone_pending 的任一正值。（出處：§18.20、§18.37、§18.44）
@@ -1958,3 +1959,11 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 
 - **本輪驗證結果**：Python 全套 374/374、前半 npm test 513/513 通過。真實 HTTP 硬上限 60，實際 requests=50、http=50、retries=0、failed=0（分類15／分析11／配對8／話題13／基調3），模型 elapsed=7.4s；300 則、model done，各 pending 全零。
 - **人工品質核對**：沿用 R35 準則逐則讀標題與摘要，三話題共46則：峰會40則／11家、載板3則／3家、K型經濟3則／3家。45則相關、一則待核對（ETtoday「對中貿易赤字狂降近40%」，摘要未明示與峰會的連結），無明確不相關。R35 四則已知誤入都仍在本次300則中，但均沒有 topic。與 r36 峰會39則相比新增3、移出2；資料時間及模型隨機性不同，不把淨增一則全部歸因於新規則。本次峰會中達三家資格的事件為種子本身（八則／四家），沒有額外非種子大事件供實測整組納入，該分支以 R39 PoC／回歸測試驗證。逐則記錄在 scratchpad/feedexp/r40-review.json。
+
+### 20.41 第 41 輪：來源故障可定位、可統計（jev 0）
+
+- **時機／格式**：協調者每輪抓取全部收到或到期後、送出首份列表前，stderr 僅印一次 `sources round=N ok=A not_modified=B failed=C timeout=D http_4xx=E http_5xx=F parse=G other=H slow=S streaks=名稱:輪數|名稱:輪數`。無連敗時 streaks=-。ok 不含 304，且須成功解析；有效 304 須已有快取，無快取的 304 算 other。ok＋not_modified＋failed 等於設定來源數，五個失敗子類加總等於 failed。
+- **固定故障碼**：Fetcher 回內部結構欄位 failure，以 HTTP status、TimeoutError／URLError.reason 型別或總 deadline 判定，不解析遠端錯誤文字。XML／feed 解析例外為 parse，其餘為 other；協調者 source_timeout／round_timeout 到期為 timeout。逾期／舊輪結果丟棄，不重複計數或改寫連敗。現有前半 sources 與錯誤顯示不變。
+- **耗時與連敗**：worker 實際呼叫 fetch 前起算，含讀取及解析，不含佇列等待；嚴格 >10 秒為 slow。協調者超時則依已開始時間計算；尚未開始就輪超時不算 slow。每來源連敗跨輪累計，成功或有效 304 歸零，依 feeds 順序僅列前五個連敗來源；不額外排重試。
+- **安全與界限**：名稱截前20個 Unicode 字元，僅保留字母／數字／空格／連字號／底線／全形括號，其餘換底線，避免換行、控制字元與 log 分隔符注入。不印 URL、新聞、金鑰或錯誤內文；完整行（不含換行）限1024 UTF-8 bytes，截斷不拆 Unicode 字元。統計容器按來源數有界。
+- **維運與測試**：scripts/real_run.py 收集並在結束摘要印 sources 行，不把它混入模型請求合計。假 HTTP server 覆蓋 404／503／socket timeout／壞 XML／其他拒絕、成功→失敗→失敗→304→失敗→成功；假 clock 驗慢來源及協調者超時、晚到不重計，另驗名稱與行長界限、包裝 TimeoutError，以及 subprocess 摘要恰好列一次。全程無 jev／真 API。

@@ -26,6 +26,7 @@ class Result:
     final_url: str = ""
     validators: dict = field(default_factory=dict)
     error: str = ""
+    failure: str = ""  # Internal diagnostic code; never exception text.
 
 
 class FetchError(ValueError):
@@ -148,6 +149,7 @@ class Fetcher:
 
     def fetch(self, url, validators=None):
         started = self.clock()
+        failure = "other"
 
         def check_deadline():
             if self.clock() - started >= self.deadline:
@@ -175,6 +177,8 @@ class Fetcher:
                 if response.code == 304:
                     return Result("not_modified")
                 if not 200 <= response.code < 300:
+                    failure = ("http_4xx" if 400 <= response.code < 500 else
+                               "http_5xx" if 500 <= response.code < 600 else "other")
                     raise FetchError(f"HTTP {response.code}")
                 data = bytearray()
                 while True:
@@ -194,4 +198,7 @@ class Fetcher:
                 })
         except (FetchError, OSError, URLError, ValueError, http.client.HTTPException) as exc:
             reason = "deadline" if self.clock() - started >= self.deadline else str(exc)
-            return Result("error", error=reason[:200])
+            if (self.clock() - started >= self.deadline or isinstance(exc, TimeoutError)
+                    or isinstance(exc, URLError) and isinstance(exc.reason, TimeoutError)):
+                failure = "timeout"
+            return Result("error", error=reason[:200], failure=failure)
