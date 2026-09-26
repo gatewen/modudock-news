@@ -263,7 +263,8 @@ test('analysis panel appears only for finance or tech between toolbar and list',
     assert.equal(panel(h).hidden, !['finance', 'tech'].includes(category));
   }
   assert.equal(panel(h).nextElementSibling.className, 'nw-filter');
-  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling, h.container.querySelector('.nw-list'));
+  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.className, 'nw-hint nw-new-hint');
+  assert.ok(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.nextElementSibling === h.container.querySelector('.nw-list'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
   assert.equal(panel(h).children.length, 7);
@@ -290,19 +291,19 @@ test('panel counts scope, unknowns, pending and macro direction using validated 
     panel(h).querySelector('.nw-market').title,
     panel(h).querySelector('.nw-macro').textContent];
   assert.deepEqual(lines(), [
-    '8 個事件（8 則報導），2 個來源', '待分析 2',
-    '偏多 2、多空互見 1、與股市無關 4、偏空 1', '與股市無關 1、未明 3',
+    '8 個事件（8 則報導），2 個來源・已分析 6／8', '待判定 2',
+    '偏多 2、多空互見 1、與股市無關 2、偏空 1', '與股市無關 1、未明 1',
     '大盤方向：大盤／總經 2 個事件利多 0利空 1',
   ]);
   assert.deepEqual(themeButtons(h).map(rankLabel), ['記憶體 2', '光通訊 1', '能源 1']);
   choose(h, h.select, '甲');
-  assert.equal(lines()[0], '7 個事件（7 則報導），1 個來源');
-  assert.equal(lines()[1], '待分析 2');
-  assert.equal(lines()[2], '偏多 1、多空互見 1、與股市無關 4、偏空 1');
-  assert.equal(lines()[3], '與股市無關 1、未明 3');
+  assert.equal(lines()[0], '7 個事件（7 則報導），1 個來源・已分析 5／7');
+  assert.equal(lines()[1], '待判定 2');
+  assert.equal(lines()[2], '偏多 1、多空互見 1、與股市無關 2、偏空 1');
+  assert.equal(lines()[3], '與股市無關 1、未明 1');
   assert.equal(themeButton(h, 'optical'), undefined);
   h.message({...listing(items), classify: {enabled: false}});
-  assert.equal(lines()[1], '待分析 0');
+  assert.equal(panel(h).querySelector('.nw-pending').hidden, true);
 });
 
 test('ranking uses count then fixed table order, excludes macro/other and caps at ten', t => {
@@ -421,8 +422,8 @@ test('invalid analysis is entirely treated as missing and never coerces field ty
   assert.equal(h.container.querySelectorAll('li').length, bad.length);
   assert.ok([...h.container.querySelectorAll('li')].every(li => li.querySelector('.nw-category') === null && !li.querySelector('.nw-tag')));
   assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'),
-    `偏多 0、多空互見 0、與股市無關 ${bad.length}、偏空 0`);
-  assert.equal(panel(h).querySelector('.nw-market').title, `與股市無關 0、未明 ${bad.length}`);
+    `偏多 0、多空互見 0、與股市無關 0、偏空 0`);
+  assert.equal(panel(h).querySelector('.nw-market').title, `與股市無關 0、未明 0`);
   assert.equal(themeButtons(h).length, 0);
   for (const dir_p of [0, 1]) {
     h.message(listing([financeArticle({analysis: analysis({dir_p})})]));
@@ -533,9 +534,9 @@ test('market bar has four ordered proportional segments, complete accessible cou
   h.message(listing(['positive', 'positive', 'mixed', 'not_market', 'other', null, 'negative', 'negative']
     .map(market => financeArticle({analysis: market ? analysis({market}) : null}))));
   assert.equal(bar.dataset.empty, 'false');
-  assert.equal(bar.getAttribute('aria-label'), '偏多 2、多空互見 1、與股市無關 3、偏空 2');
-  assert.deepEqual(parts.map(part => part.style.width), ['25%', '12.5%', '37.5%', '25%']);
-  assert.deepEqual([...panel(h).querySelectorAll('.nw-value')].map(value => value.textContent), ['2', '1', '3', '2']);
+  assert.equal(bar.getAttribute('aria-label'), '偏多 2、多空互見 1、與股市無關 2、偏空 2');
+  assert.deepEqual(parts.map(part => part.style.width), [2, 1, 2, 2].map(n => `${n / 7 * 100}%`));
+  assert.deepEqual([...panel(h).querySelectorAll('.nw-value')].map(value => value.textContent), ['2', '1', '2', '2']);
   h.message(listing([financeArticle()]));
   assert.equal(bar.firstElementChild, parts[0]); // Keep nodes so width transitions can run on resends.
   assert.equal(parts[0].style.width, '100%');
@@ -786,16 +787,16 @@ test('panel counts events and takes earliest valid analysis while retaining repo
   ];
   h.message(listing([...items].reverse()));
   choose(h, h.categories, 'finance');
-  assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（10 則報導），2 個來源');
-  assert.equal(panel(h).querySelector('.nw-pending').textContent, '待分析 1');
+  assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（10 則報導），2 個來源・已分析 2／3');
+  assert.equal(panel(h).querySelector('.nw-pending').textContent, '待判定 1');
   assert.equal(panel(h).querySelector('.nw-warning').hidden, false); // 10 reports but only 3 events.
-  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '偏多 0、多空互見 1、與股市無關 1、偏空 1');
+  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '偏多 0、多空互見 1、與股市無關 0、偏空 1');
   assert.equal(panel(h).querySelector('.nw-macro').textContent, '大盤方向：大盤／總經 1 個事件利多 1利空 0');
   assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
   assert.equal(panel(h).querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
   choose(h, h.select, '甲');
-  assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（9 則報導），1 個來源');
-  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '偏多 1、多空互見 1、與股市無關 1、偏空 0');
+  assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（9 則報導），1 個來源・已分析 2／3');
+  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '偏多 1、多空互見 1、與股市無關 0、偏空 0');
   assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
 });
 
@@ -922,15 +923,15 @@ test('world bar uses ordered escalation stalemate deescalation idle event counts
   h.message({...listing(items), events: {pending: 7}});
   choose(h, h.categories, 'world');
   const surface = worldPanel(h);
-  assert.equal(surface.querySelector('.nw-sample-count').textContent, '8 個事件（9 則報導），1 個來源');
-  assert.equal(surface.querySelector('.nw-pending').textContent, '待分析 1');
+  assert.equal(surface.querySelector('.nw-sample-count').textContent, '8 個事件（9 則報導），1 個來源・已分析 7／8');
+  assert.equal(surface.querySelector('.nw-pending').textContent, '待判定 1');
   assert.equal(surface.querySelector('.nw-merging').textContent, '・待合併 7');
   const bar = surface.querySelector('.nw-market-bar');
-  assert.equal(bar.getAttribute('aria-label'), '升級 2、僵持 1、緩和 2、無關 3');
-  assert.deepEqual([...bar.children].map(p => p.style.width), ['25%', '12.5%', '25%', '37.5%']);
+  assert.equal(bar.getAttribute('aria-label'), '升級 2、僵持 1、緩和 2、無關 2');
+  assert.deepEqual([...bar.children].map(p => p.style.width), [2, 1, 2, 2].map(n => `${n / 7 * 100}%`));
   assert.deepEqual([...bar.children].map(p => p.className),
     ['nw-segment nw-escalation', 'nw-segment nw-mixed', 'nw-segment nw-deescalation', 'nw-segment nw-idle']);
-  assert.deepEqual([...surface.querySelectorAll('.nw-value')].map(p => p.textContent), ['2', '1', '2', '3']);
+  assert.deepEqual([...surface.querySelectorAll('.nw-value')].map(p => p.textContent), ['2', '1', '2', '2']);
   const rules = [...h.container.querySelector('style').sheet.cssRules];
   const base = rules.find(rule => rule.selectorText === '.nw').style;
   assert.equal(base.getPropertyValue('--nw-danger'), 'var(--md-danger, light-dark(#b42318, #ff8b82))');
@@ -1040,8 +1041,8 @@ test('invalid world analysis and hostile fields stay text-only and count as unan
   assert.equal(mainRows(h).length, values.length);
   assert.equal(h.container.querySelectorAll('.nw-tag').length, 0);
   assert.equal(regionButtons(h).length, 0);
-  assert.equal(worldPanel(h).querySelector('.nw-pending').textContent, `待分析 ${values.length}`);
-  assert.equal(worldPanel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), `升級 0、僵持 0、緩和 0、無關 ${values.length}`);
+  assert.equal(worldPanel(h).querySelector('.nw-pending').textContent, `待判定 ${values.length}`);
+  assert.equal(worldPanel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), `升級 0、僵持 0、緩和 0、無關 0`);
   assert.equal(h.container.querySelectorAll('img,script').length, 0);
   assert.equal(h.container.querySelector('.nw-title').textContent, evil);
   assert.equal(h.container.querySelector('.nw-title').title, evil);
@@ -1201,6 +1202,8 @@ test('first visit has no new markers and only saves latest valid publication on 
     article({published:'2026-09-24T00:00:00Z'})]));
   assert.equal(h.container.querySelector('.nw-new'), null);
   assert.ok(!h.container.querySelector('[role=status]').textContent.includes('新增'));
+  assert.equal(h.container.querySelector('.nw-new-only').hidden, true);
+  assert.equal(h.container.querySelector('.nw-new-only').disabled, true);
   assert.equal(h.window.localStorage.getItem(seenKey), null);
   h.handle.unmount();
   assert.equal(h.window.localStorage.getItem(seenKey), JSON.stringify('2026-09-25T00:00:00.000Z'));
@@ -1226,7 +1229,8 @@ test('new markers use frozen mount baseline, include focus and grouped reports, 
   assert.match(h.container.querySelector('[role=status]').textContent, /新增 1 個事件/);
   choose(h, h.select, '媒體0');
   assert.equal(h.container.querySelector('.nw-new'), null);
-  assert.ok(!h.container.querySelector('[role=status]').textContent.includes('新增'));
+  assert.equal(h.container.querySelector('.nw-new-only').textContent, '新增 0 個事件');
+  assert.equal(h.container.querySelector('.nw-new-only').disabled, true);
   h.handle.unmount();
   assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2099-01-01T00:00:00.000Z'); // Persistence respects the newer stored value; display still uses frozen L.
 });
@@ -2053,7 +2057,7 @@ test('politics panel ranks neutral issues by events, filters and clears incompat
   assert.equal(surface.querySelector('.nw-history').hidden,true);
   assert.equal(surface.querySelector('.nw-macro').hidden,true);
   assert.match(surface.querySelector('.nw-sample-count').textContent,/6 個事件（7 則報導）/);
-  assert.equal(surface.querySelector('.nw-pending').textContent,'待分析 2');
+  assert.equal(surface.querySelector('.nw-pending').textContent,'待判定 2');
   const buttons=()=>[...surface.querySelectorAll('button[data-topic]')];
   assert.deepEqual(buttons().map(b=>b.dataset.topic),['issue:budget','issue:cross_strait','issue:other']);
   assert.deepEqual(buttons().map(b=>b.querySelector('.nw-theme-count').textContent),['2','1','1']);
@@ -3038,7 +3042,8 @@ test('watch-only hides focus and every analysis panel, restores them and safely 
     assert.equal(h.container.querySelector('.nw-panel').hidden,true); assert.equal(focusArea(h).hidden,true);
     const hint=h.container.querySelector('.nw-watch-hint');
     assert.equal(hint.hidden,false); assert.equal(hint.textContent,'只看追蹤：AI、<img>');
-    assert.equal(hint.nextElementSibling.className,'nw-list');
+    assert.equal(hint.nextElementSibling.className,'nw-hint nw-new-hint');
+    assert.equal(hint.nextElementSibling.nextElementSibling.className,'nw-list');
     assert.equal(hint.querySelector('img'),null);
     assert.equal(mainRows(h).length,1);
     watchControls(h).only.click();
@@ -3302,7 +3307,7 @@ for (const category of ['finance','tech','world']) for (const source of ['', '�
     const h=setup(t), body=listing(countFixture(category)); h.message(body);
     choose(h,h.categories,category); choose(h,h.select,source);
     const expected = source === '甲' ? [[8],[2],[3],[1,5]]
-      : source === '乙' ? [[1,6],[],[4,7],[]] : [[1,6,8],[2],[3,4,7],[5]];
+      : source === '乙' ? [[1,6],[],[4],[]] : [[1,6,8],[2],[3,4],[5]];
     if(category==='world') [expected[2],expected[3]]=[expected[3],expected[2]];
     const cases = expected.map((ids,i)=>[`signal:${i}`,ids]);
     if(category!=='world') cases.push(['macro:all',source==='甲'?[3,5,8]:source==='乙'?[6]:[3,5,6,8]],
@@ -3946,3 +3951,158 @@ test('R9 macro buttons use gap without floating separators and keep visible acce
   assert.ok([...macro.querySelectorAll('button')].every(n=>!n.hasAttribute('aria-label')));
   assert.equal(h.window.getComputedStyle(macro).gap,'6px 16px');
 });
+
+// §20.11: missing analysis is not an unrelated signal.
+for (const category of ['finance', 'world']) {
+  test(`R11 analysis coverage and count drill-down conserve events through resends: ${category}`, t => {
+    const h=setup(t), rows=countFixture(category).slice(0,5).map(item=>({...item,analysis:null}));
+    const send=items=>h.message({...listing(items), classify:{enabled:true},model:{state:'working'}});
+    const values=()=>[0,1,2,3].map(i=>Number(countButton(h,`signal:${i}`).querySelector('.nw-value').textContent));
+    send(rows); choose(h,h.categories,category);
+    assert.deepEqual(values(),[0,0,0,0]);
+    assert.match(h.container.querySelector('.nw-sample-count').textContent,/已分析 0／3/);
+    assert.equal(h.container.querySelector('.nw-pending').textContent,'待判定 3');
+    assert.equal(h.container.querySelector('.nw-pending').hidden,false);
+    assert.equal(h.container.querySelector('.nw-market-bar').dataset.empty,'true');
+    for(const [index,covered] of [[1,1],[3,2],[4,3]]) {
+      rows[index]={...countFixture(category)[index]}; send(rows);
+      assert.equal(values().reduce((a,b)=>a+b,0),covered);
+      assert.match(h.container.querySelector('.nw-sample-count').textContent,new RegExp(`已分析 ${covered}／3`));
+      assert.equal(h.container.querySelector('.nw-pending').textContent,`待判定 ${3-covered}`);
+      for(let i=0;i<4;i++) {
+        const count=values()[i]; countButton(h,`signal:${i}`).click();
+        assert.equal(mainRows(h).length,count);
+        countButton(h,`signal:${i}`).click();
+      }
+    }
+    assert.equal(h.container.querySelector('.nw-pending').hidden,true);
+    for(const [state,reason,enabled] of [['off','auth',false],['off','no_key',false],['paused','failed',true]]) {
+      h.message({...listing(rows.map(item=>({...item,analysis:null}))),classify:{enabled},model:{state,reason}});
+      assert.deepEqual(values(),[0,0,0,0]);
+      assert.equal(h.container.querySelector('.nw-pending').hidden,true);
+      assert.match(h.container.querySelector('.nw-status').textContent,state==='paused'?/整理暫停/:/分類.*金鑰/);
+    }
+  });
+}
+
+const r11Rows=()=>[
+  eventStory('111111111111','舊代表',9,{category:'finance',analysis:analysis(),source:'甲'}),
+  eventStory('111111111111','台積電新進展',11,{category:'finance',analysis:analysis(),source:'乙'}),
+  eventStory('222222222222','舊事件',8,{category:'finance',analysis:analysis(),source:'甲'}),
+  eventStory('333333333333','能源新進展',12,{category:'finance',analysis:analysis({theme:'energy',market:'negative'}),source:'甲'}),
+];
+
+test('R11 new progress keeps old representatives, marks new children, survives resends and clears', t=>{
+  const h=setup(t,withSeen(seenAt)); h.message(listing(r11Rows()));
+  const toggle=h.container.querySelector('.nw-new-only');
+  assert.equal(toggle.textContent,'新增 2 個事件'); assert.equal(toggle.tagName,'BUTTON');
+  assert.equal(toggle.getAttribute('aria-pressed'),'false');
+  toggle.focus(); toggle.click();
+  assert.ok(h.window.document.activeElement===toggle);
+  assert.equal(toggle.getAttribute('aria-pressed'),'true');
+  assert.deepEqual(mainTitles(h),['舊代表','能源新進展']);
+  assert.match(h.container.querySelector('.nw-new-hint').textContent,/只看上次離開後的新進展（2 個事件）/);
+  mainRows(h)[0].querySelector('.nw-expand').click();
+  assert.equal(mainRows(h)[0].querySelectorAll('.nw-report-title .nw-new').length,1);
+  for(const at of ['2026-09-21T02:04:00Z','2026-09-26T01:00:00Z']) {
+    h.message({...listing(r11Rows()),at});
+    assert.equal(toggle.getAttribute('aria-pressed'),'true'); assert.equal(mainRows(h).length,2);
+  }
+  h.container.querySelector('.nw-new-hint button').click();
+  assert.equal(toggle.getAttribute('aria-pressed'),'false'); assert.equal(mainRows(h).length,3);
+  assert.equal(h.container.querySelectorAll('.nw-report-title .nw-new').length,0);
+  assert.ok(h.window.document.activeElement===toggle);
+  h.handle.unmount(); toggle.click();
+  assert.equal(h.container.childElementCount,0);
+  assert.equal(h.window.localStorage.getItem('modudock.module.news.onlyNew'),null);
+});
+
+test('R11 new progress intersects source category theme signal search and watch filters', t=>{
+  const h=setup(t,withSeen(seenAt)); h.message(listing(r11Rows()));
+  const toggle=h.container.querySelector('.nw-new-only'); toggle.click();
+  choose(h,h.categories,'finance');
+  assert.match(panel(h).querySelector('.nw-sample-count').textContent,/已分析 2／2/);
+  countButton(h,'signal:0').click(); assert.equal(mainRows(h).length,1);
+  assert.equal(countButton(h,'signal:0').querySelector('.nw-value').textContent,'1');
+  countButton(h,'signal:0').click(); themeButton(h,'memory').click(); assert.equal(mainRows(h).length,1);
+  search(h,'台積電'); assert.equal(mainRows(h).length,1);
+  choose(h,h.select,'甲'); assert.equal(mainRows(h).length,0); assert.equal(toggle.disabled,true);
+  choose(h,h.select,''); search(h,'');
+  if(themeButton(h,'memory').getAttribute('aria-pressed')==='true') themeButton(h,'memory').click();
+  const watch=watchControls(h); watch.input.value='能源'; watch.save.click(); watch.only.click();
+  assert.equal(mainRows(h).length,1); assert.equal(toggle.textContent,'新增 1 個事件');
+  search(h,'台積電'); assert.equal(mainRows(h).length,0);
+  h.container.querySelector('.nw-new-hint button').click();
+  assert.equal(toggle.getAttribute('aria-pressed'),'false');
+  assert.equal(watch.only.getAttribute('aria-pressed'),'true');
+});
+
+test('R11 zero and absent baseline cannot activate new filter; zero while active still has an exit',t=>{
+  const fresh=setup(t); fresh.message(listing(r11Rows()));
+  assert.equal(fresh.container.querySelector('.nw-new-only').hidden,true);
+  const h=setup(t,withSeen(seenAt)); h.message(listing(r11Rows()));
+  const toggle=h.container.querySelector('.nw-new-only'); toggle.click();
+  h.message(listing([r11Rows()[2]]));
+  assert.equal(toggle.disabled,true); assert.equal(toggle.getAttribute('aria-pressed'),'true');
+  assert.equal(mainRows(h).length,0);
+  h.container.querySelector('.nw-new-hint button').click(); assert.equal(mainRows(h).length,1);
+  toggle.dispatchEvent(new h.window.Event('click'));
+  assert.equal(toggle.getAttribute('aria-pressed'),'false');
+});
+
+test('R11 history bars and theme ratios exclude missing analysis without changing directional denominators',t=>{
+  const h=setup(t), at='2026-09-25T00:00:00Z', rows=[];
+  for(let bucket=0;bucket<4;bucket++) for(let i=0;i<6;i++) rows.push(financeArticle({
+    published:`2026-09-24T${String(bucket*6+1).padStart(2,'0')}:00:00Z`,
+    analysis:i===5?null:analysis({market:i===4?'not_market':'positive',theme:'memory'})}));
+  h.message({...listing(rows),at}); choose(h,h.categories,'finance');
+  h.container.querySelector('.nw-history-toggle').click();
+  const history=[...h.container.querySelectorAll('.nw-history-row')];
+  assert.equal(history.length,4);
+  for(const row of history) {
+    assert.deepEqual([...row.querySelector('.nw-history-bar').children].map(node=>node.style.width),['80%','0%','20%','0%']);
+    assert.match(row.textContent,/偏多 4\/4/);
+  }
+  assert.equal(rankLabel(themeButton(h,'memory')),'記憶體 20');
+  assert.match(h.container.querySelector('.nw-sample-count').textContent,/已分析 20／24/);
+});
+
+test('R11 topic return preserves new filter and clearing all cancels it',t=>{
+  const h=setup(t,withSeen(seenAt)), topic=topicRecord();
+  h.message(topicListing(r11Rows().map(item=>({...item,topic:topic.id})),[topic]));
+  const toggle=h.container.querySelector('.nw-new-only'); toggle.click();
+  focusTopicButtons(h)[0].click(); choose(h,h.categories,'finance');
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(toggle.getAttribute('aria-pressed'),'true');
+  search(h,'不存在的新聞');
+  h.container.querySelector('.nw-empty button').click();
+  assert.equal(toggle.getAttribute('aria-pressed'),'false');
+  assert.equal(mainRows(h).length,3);
+});
+
+for (const [category,name] of [['finance','財經'],['tech','科技'],['world','國際'],['politics','政治']]) {
+  test(`R11 panel states new-progress scope alongside search exclusion: ${category}`,t=>{
+    const h=setup(t,withSeen(seenAt));
+    const rows=r11Rows().map(item=>({...item,category,analysis:category==='world'?worldAnalysis():
+      category==='politics'?{kind:'politics',issue:'budget'}:item.analysis}));
+    const body=listing(rows); h.message(body); choose(h,h.categories,category);
+    const p=h.container.querySelector('.nw-panel'), sample=p.querySelector('.nw-sample-count');
+    const full=sample.textContent;
+    assert.match(full,/^3 個事件（4 則報導）/);
+    h.container.querySelector('.nw-new-only').click();
+    const narrowed=sample.textContent;
+    assert.match(narrowed,/^上次離開後的新進展：2 個事件（3 則報導）/);
+    assert.equal(h.categories.selectedOptions[0].textContent,`${name} 3`);
+    search(h,'台積電'); assert.equal(mainRows(h).length,1);
+    assert.equal(sample.textContent,narrowed);
+    const hint=p.querySelector('.nw-search-scope');
+    assert.equal(hint.hidden,false); assert.equal(hint.textContent,`統計為全部${name}，未套用搜尋`);
+    for(const at of [body.at,'2026-09-26T01:00:00Z']) {
+      h.message({...body,at}); assert.equal(sample.textContent,narrowed);
+      assert.equal(hint.hidden,false); assert.equal(mainRows(h).length,1);
+    }
+    h.container.querySelector('.nw-new-hint button').click();
+    assert.equal(sample.textContent,full); assert.equal(hint.hidden,false);
+    search(h,''); assert.equal(hint.hidden,true); assert.equal(sample.textContent,full);
+  });
+}

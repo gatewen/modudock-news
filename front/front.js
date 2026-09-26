@@ -127,7 +127,7 @@ export default function mount(ctx) {
   watchOnly.title = watchDescription.textContent;
   watchDescription.id = `nw-watch-description-${++descriptionId}`;
   watchOnly.setAttribute("aria-describedby", watchDescription.id);
-  let trackedWords = watchWords(), onlyWatched = false;
+  let trackedWords = watchWords(), onlyWatched = false, onlyNew = false;
   watchInput.value = trackedWords.join(" ");
   watchOnly.disabled = trackedWords.length === 0;
   watchOnly.hidden = trackedWords.length === 0;
@@ -137,6 +137,19 @@ export default function mount(ctx) {
   const status = make("span", "nw-status");
   status.setAttribute("role", "status");
   status.textContent = "等待模組就緒";
+  const statusBefore = document.createTextNode("");
+  const statusAfter = document.createTextNode("");
+  const newOnly = make("button", "nw-new-only");
+  newOnly.type = "button";
+  newOnly.hidden = true;
+  newOnly.disabled = true;
+  newOnly.setAttribute("aria-pressed", "false");
+  const newHint = make("div", "nw-hint nw-new-hint");
+  newHint.hidden = true;
+  const newHintText = make("span", "");
+  const newClear = make("button", "", "關閉新進展篩選");
+  newClear.type = "button";
+  newHint.append(newHintText, newClear);
   const list = make("ul", "nw-list");
   list.tabIndex = -1;
   list.setAttribute("aria-keyshortcuts", "j k s e");
@@ -223,7 +236,7 @@ export default function mount(ctx) {
   toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, watchDescription, searchToggle, status, searchBox, watchSettings);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
-  root.append(toolbar, focus, panel, themeFilter, watchHint, list, empty);
+  root.append(toolbar, focus, panel, themeFilter, watchHint, newHint, list, empty);
   ctx.container.append(root);
 
   let up = false;
@@ -492,7 +505,7 @@ export default function mount(ctx) {
     if (!ranked.length) {
       const hasEvent = groupItems(items.filter(item => item && typeof item === "object"))
         .some(group => new Set(group.reports.map(outletOf).filter(Boolean)).size >= 3);
-      const filtered = sources.value || categories.value || selectedTheme || selectedCount || selectedTopic
+      const filtered = onlyNew || sources.value || categories.value || selectedTheme || selectedCount || selectedTopic
         || searchText(searchInput.value).trim();
       focus.hidden = Boolean(hasEvent || filtered);
       if (!focus.hidden) {
@@ -529,7 +542,7 @@ export default function mount(ctx) {
           scroller = scroller.parentElement;
         }
         scroller ||= document.scrollingElement;
-        savedView = {source:sources.value, category:categories.value, theme:selectedTheme, count:selectedCount, watched:onlyWatched,
+        savedView = {source:sources.value, category:categories.value, theme:selectedTheme, count:selectedCount, watched:onlyWatched, newOnly:onlyNew,
           scroller, scrollTop:scroller?.scrollTop || 0, focus:focusIdentity(document.activeElement)};
       }
       sources.value = "";
@@ -564,7 +577,8 @@ export default function mount(ctx) {
       if (!Number.isFinite(stamp) || stamp < start || stamp > historyAt) continue;
       const bucket = buckets[Math.min(3, Math.floor((stamp - start) / step))];
       const analysis = group.reports.map(validAnalysis).find(Boolean);
-      if (analysis) bucket.valid++;
+      if (!analysis) continue;
+      bucket.valid++;
       const signal = world ? analysis?.trend : analysis?.market;
       const index = world ? {escalation: 0, stalemate: 1, deescalation: 2}[signal]
         : {positive: 0, mixed: 1, negative: 3}[signal];
@@ -607,6 +621,7 @@ export default function mount(ctx) {
   }
   function contributes(group, id) {
     const analysis = group.reports.map(validAnalysis).find(Boolean);
+    if (!analysis) return false;
     if (id.startsWith("signal:")) {
       const signal = categories.value === "world" ? analysis?.trend : analysis?.market;
       const index = categories.value === "world"
@@ -712,8 +727,7 @@ export default function mount(ctx) {
     for (const group of groups) {
       const analysis = group.reports.map(validAnalysis).find(Boolean);
       if (!analysis) {
-        counts.other++;
-        if (analysisEnabled) pending++;
+        pending++;
         continue;
       }
       if (!politics) counts[world ? analysis.trend : analysis.market]++;
@@ -724,18 +738,19 @@ export default function mount(ctx) {
       if (world ? analysis.trend === "deescalation" : direction === "▼") theme.bear++;
     }
     const sourceCount = new Set(scoped.map(item => text(item.source)).filter(Boolean)).size;
-    sampleCount.textContent = `${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源`;
-    pendingCount.textContent = `待分析 ${pending}`;
-    pendingCount.hidden = pending === 0;
+    const analyzed = groups.length - pending;
+    sampleCount.textContent = `${onlyNew ? "上次離開後的新進展：" : ""}${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源・已分析 ${analyzed}／${groups.length}`;
+    pendingCount.textContent = `待判定 ${pending}`;
+    pendingCount.hidden = pending === 0 || !analysisEnabled || modelState === "paused";
     merging.hidden = eventsPending === 0;
     merging.textContent = eventsPending > 0 ? `・待合併 ${eventsPending}` : "";
     warning.hidden = groups.length >= 10;
     const values = marketParts.map((_, i) => groups.filter(group => contributes(group, `signal:${i}`)).length);
-    marketBar.dataset.empty = String(groups.length === 0);
+    marketBar.dataset.empty = String(analyzed === 0);
     marketBar.setAttribute("aria-label", marketParts.map((part, i) => `${part.name} ${values[i]}`).join("、"));
     market.title = `${world ? "無關" : "與股市無關"} ${world ? counts.not_conflict : counts.not_market}、未明 ${counts.other}`;
     marketParts.forEach((part, i) => {
-      part.segment.style.width = `${groups.length ? values[i] / groups.length * 100 : 0}%`;
+      part.segment.style.width = `${analyzed ? values[i] / analyzed * 100 : 0}%`;
       part.value.textContent = String(values[i]);
       part.entry.dataset.count = `signal:${i}`;
       part.entry.setAttribute("aria-pressed", String(selectedCount?.id === `signal:${i}`));
@@ -817,6 +832,7 @@ export default function mount(ctx) {
       selectedTheme = saved.theme;
       selectedCount = saved.count || null;
       onlyWatched = saved.watched && trackedWords.length > 0;
+      onlyNew = Boolean(saved.newOnly);
     }
     drawItems(false);
     if (selectedTheme && ![...ranking.querySelectorAll("button[data-topic]")].some(button => button.dataset.topic === selectedTheme)) {
@@ -960,10 +976,15 @@ export default function mount(ctx) {
     if (selectedTheme && !applicable.has(selectedTheme)) selectedTheme = "";
     if (selectedCount && selectedCount.category !== categories.value) selectedCount = null;
     const scopeTopic = selectedTopic || selectedCount?.topic;
-    const scoped = items.filter(item => item && typeof item === "object"
+    let scoped = items.filter(item => item && typeof item === "object"
       && (!sources.value || text(item.source) === sources.value)
       && (!categories.value || text(item.category) === categories.value)
       && (!scopeTopic || item.topic === scopeTopic));
+    // Keep complete eligible events, including their older representative.
+    if (onlyNew) {
+      const eligible = new Set(groupItems(scoped).filter(group => group.reports.some(isNew)).flatMap(group => group.reports));
+      scoped = scoped.filter(item => eligible.has(item));
+    }
     // Match the panel's event counts, even when watch-only hides the panel.
     if (selectedTheme && !groupItems(scoped).some(group =>
       topicOf(group.reports.map(validAnalysis).find(Boolean)) === selectedTheme)) selectedTheme = "";
@@ -984,7 +1005,16 @@ export default function mount(ctx) {
     watchOnly.textContent = `只看追蹤 ${watchedCount}`;  // Events, like the list and status.
     const query = searchText(searchInput.value).trim();
     const hits = item => !query || (searchIndex.get(item) || []).some(value => value.includes(query));
-    const groups = allGroups.filter(group => (!onlyWatched || matches.get(group)) && group.reports.some(hits));
+    const matchedGroups = allGroups.filter(group => (!onlyWatched || matches.get(group)) && group.reports.some(hits));
+    const count = matchedGroups.filter(group => group.reports.some(isNew)).length;
+    const groups = matchedGroups.filter(group => !onlyNew || group.reports.some(isNew));
+    newOnly.hidden = lastSeen === null;
+    newOnly.disabled = count === 0;
+    newOnly.textContent = lastSeen === null ? "" : `新增 ${count} 個事件`;
+    newOnly.setAttribute("aria-pressed", String(onlyNew));
+    newHint.hidden = !onlyNew;
+    newHintText.textContent = `只看上次離開後的新進展（${groups.length} 個事件）`;
+
     searchHint.hidden = !query;
     searchHint.textContent = query ? `搜尋「${searchInput.value.trim()}」：${groups.length} 個事件` : "";
     searchToggle.setAttribute("aria-pressed", String(Boolean(query)));
@@ -995,10 +1025,12 @@ export default function mount(ctx) {
     const prefix = lastSeen === null ? 0 : firstOld < 0 ? groups.length : firstOld;
     const dividerIndex = prefix > 0 && prefix < groups.length ? prefix : -1;
     if (received) {
-      const count = groups.filter(group => group.reports.some(isNew)).length;
       const modelText = modelState === "working" ? "整理中" : modelState === "paused" ? (modelReason === "waiting" ? "整理暫停，等待下次更新" : "整理暫停，下次更新繼續") : "";
-      status.textContent = [updatedText, refreshNotice, modelText, count ? `新增 ${count} 個事件` : "", failedText, classificationText]
-        .filter(Boolean).join(" · ");
+      const before = [updatedText, refreshNotice, modelText].filter(Boolean).join(" · ");
+      const after = [failedText, classificationText].filter(Boolean).join(" · ");
+      if (newOnly.parentNode !== status) status.replaceChildren(statusBefore, newOnly, statusAfter);
+      statusBefore.textContent = before + (before && !newOnly.hidden ? " · " : "");
+      statusAfter.textContent = after ? `${before || !newOnly.hidden ? " · " : ""}${after}` : "";
     }
     watchHint.hidden = !onlyWatched;
     watchHint.textContent = onlyWatched ? `只看追蹤：${trackedWords.join("、")}` : "";
@@ -1107,7 +1139,7 @@ export default function mount(ctx) {
           details.append(make("span", "nw-source", text(report.source)), newsTime(report));
           mark(details, report);
           appendTone(details, report);
-          entry.append(newsTitle(report, "nw-report-title", false), details);
+          entry.append(newsTitle(report, "nw-report-title", onlyNew && isNew(report)), details);
           reports.append(entry);
         }
         row.append(reports);
@@ -1140,6 +1172,17 @@ export default function mount(ctx) {
     if (!restoreFocus(focused) && focusWasInside && unavailableFocus())
       list.focus({preventScroll: true});
   }
+  function onNewOnly() {
+    if (disposed || newOnly.disabled) return;
+    onlyNew = !onlyNew;
+    drawItems();
+  }
+  function onNewClear() {
+    if (disposed) return;
+    onlyNew = false;
+    drawItems();
+    if (!newOnly.disabled) newOnly.focus();
+  }
   function onSearch() { if (!disposed) drawItems(true, true); }
   function openSearch(open) {
     searchBox.hidden = !open;
@@ -1163,6 +1206,7 @@ export default function mount(ctx) {
     selectedCount = null;
     selectedTopic = "";
     onlyWatched = false;
+    onlyNew = false;
     drawItems();
   }
   function renderList(body) {
@@ -1330,6 +1374,8 @@ export default function mount(ctx) {
       }
     }
   }
+  newOnly.addEventListener("click", onNewOnly);
+  newClear.addEventListener("click", onNewClear);
   searchToggle.addEventListener("click", onSearchToggle);
   searchInput.addEventListener("input", onSearch);
   searchInput.addEventListener("keydown", onSearchKey);
@@ -1370,6 +1416,8 @@ export default function mount(ctx) {
       up = false;
       finishRefresh();
       refresh.disabled = true;
+      newOnly.removeEventListener("click", onNewOnly);
+      newClear.removeEventListener("click", onNewClear);
       searchToggle.removeEventListener("click", onSearchToggle);
       searchInput.removeEventListener("input", onSearch);
       searchInput.removeEventListener("keydown", onSearchKey);

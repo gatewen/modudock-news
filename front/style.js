@@ -44,6 +44,8 @@ export const css = `
 .nw .nw-search-input { flex: 1 1 180px; min-width: 0; max-width: 100%; }
 .nw .nw-search-hint { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .nw .nw-search-match { color: var(--nw-accent); font-size: 12px; }
+.nw .nw-new-only[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 0 -2px var(--nw-accent); }
+.nw .nw-new-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-block: 8px; }
 .nw .nw-status { margin-left: auto; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-watch-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; }
 .nw .nw-watch-input { flex: 1 1 220px; min-width: 0; }
@@ -152,7 +154,7 @@ export const css = `
 .nw .nw-report-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .nw .nw-empty { padding: 32px 0; text-align: center; color: var(--nw-muted); }
 .nw .nw-empty button { display: block; margin: 12px auto 0; }
-.nw .nw-toolbar, .nw .nw-filter, .nw .nw-watch-hint, .nw .nw-row { padding-inline: 16px; }
+.nw .nw-toolbar, .nw .nw-filter, .nw .nw-watch-hint, .nw .nw-new-hint, .nw .nw-row { padding-inline: 16px; }
 @container (min-width: 560px) {
   .nw .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
