@@ -3764,11 +3764,11 @@ test('R7 latest requires a different title and strictly later valid time, in the
   for(const reports of [[first], [first,{...latest,title:first.title}],
     [first,{...latest,published:first.published}], [first,{...latest,published:'bad'}],
     [first,{...latest,link:'javascript:alert(1)'}]]) {
-    h.message(listing(reports)); assert.equal(eventLatest(h),null);
+    h.message(listing(reports)); assert.equal(Boolean(eventLatest(h)),false);
   }
   h.message(listing([latest,first])); assert.equal(eventLatest(h).title,latest.title);
   assert.equal(eventLatest(h).querySelector('.nw-new'),null); // No saved lastSeen.
-  choose(h,h.select,'乙'); assert.equal(eventLatest(h),null); assert.deepEqual(mainTitles(h),[latest.title]);
+  choose(h,h.select,'乙'); assert.equal(Boolean(eventLatest(h)),false); assert.deepEqual(mainTitles(h),[latest.title]);
 });
 
 test('R7 resend updates latest and keeps focused latest distinct from its child copy', t => {

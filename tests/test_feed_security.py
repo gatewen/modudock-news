@@ -44,6 +44,13 @@ def hostile_feed(field, count=None):
 
 
 class ParseSecurityTests(unittest.TestCase):
+    def test_plain_limits_raw_input_before_html_and_whitespace_processing(self):
+        # Invisible padding must not allow text beyond the input budget through.
+        for limit in (200, 300):
+            with self.subTest(limit=limit):
+                self.assertEqual(fp.plain(' ' * 8191 + 'AB', limit), 'A')
+                self.assertEqual(fp.plain(' ' * 8192 + '<b>outside</b>', limit), '')
+
     def test_full_feed_cpu_under_two_seconds_for_unfinished_and_dense_markup(self):
         for pattern in ('<a\t', '<a x="', '<!--', '</a ', '<![', '<a ', '< ', '<i>x</i>', '&#', '&amp;', '<a x=" >', "<a x=' >", '<![if !IE]>'):
             with self.subTest(pattern=pattern):
@@ -160,3 +167,18 @@ class MergeSecurityTests(unittest.TestCase):
             for domains in ('cna.com.tw',['*.cna.com.tw'],['cna.com.tw/evil'],[''],['CNA.COM.TW'],[5],['a..b']):
                 path.write_text(json.dumps([{'name':'A','url':'https://a.example/rss','link_domains':domains}]))
                 self.assertIsNotNone(preflight(path)[1])
+
+    def test_domain_config_accepts_sixteen_domains_but_rejects_seventeen(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'feeds.json'
+            for count in (16, 17):
+                with self.subTest(count=count):
+                    domains = [f'publisher{i}.example' for i in range(count)]
+                    path.write_text(json.dumps([{'name': 'A', 'url': 'https://a.example/rss',
+                                                 'link_domains': domains}]))
+                    feeds, error = preflight(path)
+                    if count == 16:
+                        self.assertIsNone(error)
+                        self.assertEqual(feeds[0]['link_domains'], domains)
+                    else:
+                        self.assertIsNotNone(error)
