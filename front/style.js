@@ -55,8 +55,8 @@ export const css = `
 .nw .nw-new-hint { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-block: 8px; }
 .nw .nw-status-group { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; margin-left: auto; min-width: 0; max-width: 100%; }
 .nw .nw-status-group .nw-status { flex: 1; min-width: 0; margin-left: 0; }
-.nw .nw-mark-read, .nw .nw-undo-read, .nw .nw-shortcut-toggle { flex: none; font-size: 12px; padding: 1px 3px; border: 0; background: transparent; color: var(--nw-muted); }
-.nw .nw-mark-read:hover, .nw .nw-undo-read:hover, .nw .nw-shortcut-toggle:hover { text-decoration: underline; }
+.nw .nw-new-only, .nw .nw-mark-read, .nw .nw-undo-read, .nw .nw-shortcut-toggle { flex: none; box-sizing: border-box; min-height: 30px; font-size: 12px; padding: 5px 9px; border: 1px solid var(--nw-line); background: transparent; color: var(--nw-fg); }
+.nw .nw-new-only:hover, .nw .nw-mark-read:hover, .nw .nw-undo-read:hover, .nw .nw-shortcut-toggle:hover { border-color: var(--nw-accent); text-decoration: underline; }
 .nw .nw-shortcut-icon { display: none; }
 .nw .nw-shortcut-help { margin: 8px 16px; padding: 12px; border: 1px solid var(--nw-line); border-radius: 5px; }
 .nw .nw-shortcut-help:focus-visible { outline: 2px solid var(--nw-focus); outline-offset: 2px; }
@@ -196,6 +196,7 @@ export const css = `
   .nw .nw-history-row { grid-template-columns: 7.5ch minmax(0, 1fr) 6em; }
   .nw .nw-shortcut-name { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
   .nw .nw-shortcut-icon { display: inline; }
+  .nw .nw-shortcut-toggle { border-radius: 50%; width: 30px; height: 30px; padding: 0; }
   .nw .nw-focus-long { display: none; }
   .nw .nw-focus-short { display: inline; }
   .nw .nw-status-group { flex-basis: 100%; margin-left: 0; }

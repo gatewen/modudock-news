@@ -294,7 +294,7 @@ test('panel counts scope, unknowns, pending and macro direction using validated 
   assert.deepEqual(lines(), [
     '8 個事件（8 則報導），2 個來源・已分析 6／8', '待判定 2',
     '偏多 2、多空互見 1、與股市無關 2、偏空 1', '與股市無關 1、未明 1',
-    '大盤方向：大盤／總經 2 個事件利多 0利空 1',
+    '大盤方向：大盤／總經 2 個事件利多 0利空 1其餘 1 件無明確方向',
   ]);
   assert.deepEqual(themeButtons(h).map(rankLabel), ['記憶體 2', '光通訊 1', '能源 1']);
   choose(h, h.select, '甲');
@@ -1411,7 +1411,7 @@ test('new topic badge comes from any member and topic listeners are inert after 
     article({title:'後續', topic:topic.id, published:'2026-09-25T00:00:00Z'})]);
   h.message(body);
   assert.equal(focusArea(h).querySelectorAll('.nw-title > .nw-new').length, 1);
-  assert.equal(focusArea(h).querySelectorAll('.nw-topic-latest > .nw-new').length, 1);
+  assert.equal(focusArea(h).querySelectorAll('.nw-topic-latest > .nw-new').length, 0);
   focusTopicButtons(h)[0].click();
   const retained = focusTopicButtons(h)[0], clear = h.container.querySelector('.nw-filter button');
   h.handle.unmount();
@@ -1486,11 +1486,11 @@ test('topic tone needs five judged reports, sorts positive counts and uses a dec
   h.message(toneListing(topicRecord({count:41, tone:toneCounts({negative:4})})));
   assert.equal(focusArea(h).querySelector('.nw-tone'), null);
   h.message(toneListing(topicRecord({count:41, tone:toneCounts({negative:5})})));
-  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調：負面 5 則報導');
+  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調（則）：負面 5');
   assert.equal(focusArea(h).querySelectorAll('.nw-tone .nw-segment').length, 1);
   h.message(toneListing(topicRecord({count:41, tone:{positive:4, negative:17, neutral:15, mixed:5}})));
   const tone = focusArea(h).querySelector('.nw-tone');
-  assert.equal(tone.querySelector('.nw-hint').textContent, '報導基調：負面 17 則報導中性 15 則報導正反 5 則報導正面 4 則報導');
+  assert.equal(tone.querySelector('.nw-hint').textContent, '報導基調（則）：負面 17中性 15正負並陳 5正面 4');
   const bar = tone.querySelector('.nw-tone-bar');
   assert.equal(bar.getAttribute('aria-hidden'), 'true');
   assert.equal(h.window.getComputedStyle(bar).height, '4px');
@@ -1516,7 +1516,7 @@ test('bad topic tone is ignored without losing the topic or interpreting hostile
     assert.equal(focusArea(h).querySelector('img'), null);
   }
   h.message(toneListing(topicRecord({count:10, tone:toneCounts({positive:5, neutral:5})})));
-  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調：中性 5 則報導正面 5 則報導');
+  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調（則）：中性 5正面 5');
   focusTopicButtons(h)[0].focus();
   h.message(toneListing(topicRecord({count:10, tone:toneCounts({negative:5, neutral:5})})));
   assert.equal(h.window.document.activeElement, focusTopicButtons(h)[0]);
@@ -1912,7 +1912,7 @@ test('seen divider precedes first old group, omits child markers and retains foc
   assert.equal(line.hasAttribute('tabindex'), false);
   assert.equal(h.container.querySelector('.nw-list .nw-title .nw-new, .nw-list .nw-report-title .nw-new'), null);
   assert.equal(focusArea(h).querySelectorAll('.nw-new').length, 1);
-  assert.equal(mainRows(h)[0].querySelector('.nw-event-latest .nw-new').textContent, '新');
+  assert.equal(mainRows(h)[0].querySelector('.nw-event-latest .nw-new'), null);
   assert.equal(mainRows(h).length, 2);
   assert.match(h.container.querySelector('[role=status]').textContent, /新增 1 個事件/);
   const css = h.container.querySelector('style').textContent;
@@ -2020,7 +2020,7 @@ test('per-report tone appears only in topic filter and validates ids without inh
   focusTopicButtons(h)[0].click();
   assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'負面');
   h.container.querySelector('.nw-expand').click();
-  assert.deepEqual([...h.container.querySelectorAll('.nw-report .nw-tone-tag')].map(n=>n.textContent),['正面','正反','中性']);
+  assert.deepEqual([...h.container.querySelectorAll('.nw-report .nw-tone-tag')].map(n=>n.textContent),['正面','正負並陳','中性']);
   assert.equal(h.container.querySelector('img'),null);
   h.message(topicListing(reports.map((item,i)=>i===0?{...item,tone:null}:item)));
   assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag'),null);
@@ -2100,7 +2100,9 @@ test('text buttons use visible names and external descriptions survive redraws a
     article({category:'politics',analysis:{kind:'politics',issue:'budget'}})];
   const scan=()=>{
     for (const button of h.container.querySelectorAll('button')) {
-      if (button.textContent.trim()) assert.equal(button.hasAttribute('aria-label'),false);
+      if (button.matches('.nw-tone-button')) assert.equal(button.getAttribute('aria-label'),`${button.textContent} 則報導`);
+      else if (button.matches('.nw-shortcut-toggle')) assert.equal(button.getAttribute('aria-label'),'快捷鍵說明');
+      else if (button.textContent.trim()) assert.equal(button.hasAttribute('aria-label'),false);
       const id=button.getAttribute('aria-describedby');
       if (id) {
         const node=h.window.document.getElementById(id);
@@ -2236,7 +2238,8 @@ test('topic progress counts new events with old representatives and coexists wit
   assert.equal(first.container.querySelector('.nw-topic-new'),null);
   const h=setup(t,withSeen(seenAt)); h.message(body);
   const hint=h.container.querySelector('.nw-topic-new');
-  assert.equal(hint.textContent,'上次之後新增 2 個事件');
+  assert.equal(hint.textContent,'+2 新事件');
+  assert.equal(hint.getAttribute('aria-label'),'上次之後新增 2 個事件');
   assert.equal(hint.previousElementSibling.className,'nw-tone');
   h.message({...body,topics:{list:[topicRecord()]}});
   assert.equal(h.container.querySelector('.nw-topic-new').previousElementSibling.className,'nw-hint nw-topic-latest');
@@ -2771,7 +2774,7 @@ test('topic latest is absent for seed title, no dated member or invalid title', 
   }
 });
 
-test('topic latest new marker uses lastSeen strictly and requires a saved baseline', t => {
+test('topic latest has no duplicate new marker regardless of saved baseline', t => {
   const baseline = '2026-09-24T10:00:00Z';
   for (const saved of [false, true]) {
     const h = saved ? setup(t, withSeen(baseline)) : setup(t);
@@ -2779,9 +2782,7 @@ test('topic latest new marker uses lastSeen strictly and requires a saved baseli
     for (const published of ['2026-09-24T09:00:00Z', baseline, '2026-09-24T10:00:01Z']) {
       h.message(topicListing([article({topic:topic.id, title:'新進展', published})]));
       const row = h.container.querySelector('.nw-topic-latest');
-      const marked = saved && Date.parse(published) > Date.parse(baseline);
-      assert.equal(Boolean(row.querySelector('.nw-new')), marked);
-      if (marked) assert.equal(row.firstElementChild.textContent, '新');
+      assert.equal(row.querySelector('.nw-new'), null);
       assert.equal(row.title, '新進展');
     }
   }
@@ -3755,12 +3756,12 @@ const latestReports = () => [
   eventStory('123456abcdef','最新報導',12,{link:'https://e.test/latest',source:'乙'}),
   eventStory('123456abcdef','中間報導',10,{link:'https://e.test/middle',source:'甲'}),
 ];
-test('R7 latest event report is a safe muted link below representative with new badge and native tab order', t => {
+test('R7 latest event report is a safe muted link below representative without duplicate new badge and with native tab order', t => {
   const h=setup(t,withSeen('2026-09-24T09:00:00Z'));
   h.message(listing(latestReports()));
   const row=mainRows(h)[0], link=eventLatest(h);
   assert.equal(row.querySelector('.nw-title').textContent,'最早報導');
-  assert.equal(link.textContent,'新最新：最新報導（乙）');
+  assert.equal(link.textContent,'最新：最新報導（乙）');
   assert.equal(link.title,'最新報導'); assert.equal(link.href,'https://e.test/latest');
   assert.equal(link.target,'_blank'); assert.equal(link.rel,'noopener noreferrer');
   assert.equal(row.querySelector('.nw-title').nextElementSibling,link);
@@ -3843,7 +3844,7 @@ test('R8 finance labels and macro controls explain news impact while report tone
   }
   assert.doesNotMatch(p.querySelector('.nw-market-bar').getAttribute('aria-label'),/正面|負面|正反/);
   assert.match(p.querySelector('.nw-market').title,/與股市無關/);
-  assert.equal(p.querySelector('.nw-macro').textContent,'大盤方向：大盤／總經 4 個事件利多 1利空 1');
+  assert.equal(p.querySelector('.nw-macro').textContent,'大盤方向：大盤／總經 4 個事件利多 1利空 1其餘 2 件無明確方向');
   for(const id of ['macro:all','macro:bull','macro:bear']) {
     const button=countButton(h,id); assert.equal(button.hasAttribute('aria-label'),false);
     button.click(); assert.equal(countButton(h,id).getAttribute('aria-pressed'),'true');
@@ -3977,7 +3978,8 @@ for (const category of ['finance', 'world']) {
     for(const [index,covered] of [[1,1],[3,2],[4,3]]) {
       rows[index]={...countFixture(category)[index]}; send(rows);
       assert.equal(values().reduce((a,b)=>a+b,0),covered);
-      assert.match(h.container.querySelector('.nw-sample-count').textContent,new RegExp(`已分析 ${covered}／3`));
+      if(covered<3) assert.match(h.container.querySelector('.nw-sample-count').textContent,new RegExp(`已分析 ${covered}／3`));
+      else assert.doesNotMatch(h.container.querySelector('.nw-sample-count').textContent,/已分析/);
       assert.equal(h.container.querySelector('.nw-pending').textContent,`待判定 ${3-covered}`);
       for(let i=0;i<4;i++) {
         const count=values()[i]; countButton(h,`signal:${i}`).click();
@@ -4031,7 +4033,7 @@ test('R11 new progress intersects source category theme signal search and watch 
   const h=setup(t,withSeen(seenAt)); h.message(listing(r11Rows()));
   const toggle=h.container.querySelector('.nw-new-only'); toggle.click();
   choose(h,h.categories,'finance');
-  assert.match(panel(h).querySelector('.nw-sample-count').textContent,/已分析 2／2/);
+  assert.doesNotMatch(panel(h).querySelector('.nw-sample-count').textContent,/已分析/);
   countButton(h,'signal:0').click(); assert.equal(mainRows(h).length,1);
   assert.equal(countButton(h,'signal:0').querySelector('.nw-value').textContent,'1');
   countButton(h,'signal:0').click(); themeButton(h,'memory').click(); assert.equal(mainRows(h).length,1);
@@ -4140,8 +4142,8 @@ test('R12 every visible tone count opens exactly its contributing reports, inclu
   const h=setup(t),body=auditFixture(); h.message(body);
   for(const topic of body.topics.list) for(const tone of ['negative','neutral','mixed','positive']) {
     const button=auditButton(h,topic.id,tone), expected=body.items.filter(item=>item.topic===topic.id&&item.tone===tone);
-    assert.equal(button.tagName,'BUTTON'); assert.equal(button.getAttribute('aria-label'),null);
-    assert.match(button.textContent,new RegExp(`${expected.length} 則報導$`));
+    assert.equal(button.tagName,'BUTTON'); assert.equal(button.getAttribute('aria-label'),`${button.textContent} 則報導`);
+    assert.match(button.textContent,new RegExp(` ${expected.length}$`));
     button.focus(); button.click();
     assert.equal(h.container.querySelectorAll('.nw-tone-audit').length,1);
     assert.equal(auditRows(h).length,expected.length);
@@ -4182,7 +4184,7 @@ test('R12 resends refresh evidence counts and preserve focused report; disappear
     topics:{list:body.topics.list.map((topic,i)=>i?topic:{...topic,tone:toneCounts({negative:3,neutral:1,mixed:1,positive:2})})}};
   for(const at of [body.at,'2026-09-26T01:00:00Z']) {
     h.message({...updated,at}); assert.equal(auditRows(h).length,3);
-    assert.match(auditButton(h,id,'negative').textContent,/3 則報導/);
+    assert.match(auditButton(h,id,'negative').getAttribute('aria-label'),/3 則報導/);
     assert.equal(h.window.document.activeElement.href,link.href);
     assert.equal(h.container.querySelector('.nw-tone-pending').textContent,'待判定 1 則');
   }
@@ -4209,7 +4211,7 @@ test('R12 pending reports stay out of counts, malformed aggregate is safe and mi
   assert.equal(h.container.querySelectorAll('.nw-tone-button').length,0);
   assert.deepEqual([...h.container.querySelectorAll('.nw-tone-pending')].map(node=>node.textContent),['待判定 8 則','待判定 6 則']);
   h.message({...body,topics:{list:[{...body.topics.list[0],tone:toneCounts({negative:8})}]}});
-  assert.match(auditButton(h,body.topics.list[0].id,'negative').textContent,/2 則報導/);
+  assert.match(auditButton(h,body.topics.list[0].id,'negative').getAttribute('aria-label'),/2 則報導/);
   auditButton(h,body.topics.list[0].id,'negative').click(); assert.equal(auditRows(h).length,2);
 });
 
@@ -4344,7 +4346,8 @@ test('R13 partial coverage is visible, sample threshold is ten, and resends reco
     h.message({...listing(items),model:{state:'working'}});
     assert.equal(button.textContent,`財經 偏多 ${Math.ceil(count/2)} 件・偏空 ${Math.floor(count/2)} 件${count<10?`（已分析 ${count}／10）（樣本少）`:''}`);
     h.message({...listing(items),at:'2026-09-26T03:00:00Z',model:{state:'paused'}});
-    assert.match(button.title,new RegExp(`已分析 ${count}／10`));
+    if(count<10) assert.match(button.title,new RegExp(`已分析 ${count}／10`));
+    else assert.doesNotMatch(button.title,/已分析/);
   }
   h.message({...listing(rows),classify:{enabled:false},model:{state:'off',reason:'auth'}});
   assert.equal(h.container.querySelector('.nw-overview').hidden,true);
@@ -4703,4 +4706,46 @@ test('R21 mark-read follows new-count visibility while undo remains available at
       search(h,'no matching title');assert.equal(fresh.hidden,true);assert.equal(mark.hidden,true);
     }
   }
+});
+
+test('R23 macro remainder explains all events without adding a fourth filter button',t=>{
+  const h=setup(t);
+  const items=[['bull',.8],['bear',.8],['bull',.59],['neutral',.9]].map(([dir,dir_p],i)=>
+    financeArticle({link:`https://e.test/${i}`,analysis:analysis({theme:'macro',dir,dir_p})}));
+  h.message(listing(items));choose(h,h.categories,'finance');
+  const macro=()=>h.container.querySelector('.nw-macro');
+  assert.equal(macro().querySelectorAll('button').length,3);
+  const rest=macro().querySelector('.nw-macro-rest');
+  assert.equal(rest.textContent,'其餘 2 件無明確方向');assert.equal(rest.tagName,'SPAN');
+  assert.equal(rest.hasAttribute('tabindex'),false);
+  h.message(listing(items.map(i=>({...i,analysis:analysis({theme:'macro',dir:'bull',dir_p:.8})}))));
+  assert.equal(macro().querySelector('.nw-macro-rest'),null);
+  assert.equal(countButton(h,'macro:bull').textContent,'利多 4');
+});
+
+test('R23 reading and shortcut entries share secondary button height and narrow shortcut has a circle',t=>{
+  const h=setup(t),css=h.container.querySelector('style').textContent;
+  h.message(listing([article()]));
+  for(const selector of ['.nw-new-only','.nw-mark-read','.nw-undo-read','.nw-shortcut-toggle']) {
+    const node=h.container.querySelector(selector),style=h.window.getComputedStyle(node);
+    assert.equal(style.minHeight,'30px');assert.equal(style.borderTopWidth,'1px');
+    assert.equal(style.paddingTop,'5px');assert.equal(style.paddingBottom,'5px');
+  }
+  const shortcut=h.container.querySelector('.nw-shortcut-toggle');
+  assert.equal(shortcut.getAttribute('aria-label'),'快捷鍵說明');assert.equal(shortcut.title,'快捷鍵說明');
+  assert.match(css,/\.nw \.nw-shortcut-toggle \{ border-radius: 50%; width: 30px; height: 30px; padding: 0; \}/);
+  assert.ok(css.includes('.nw .nw-mark-read:hover'));
+});
+
+test('R23 mixed tone uses one display name in compact buttons, audit and report tags',t=>{
+  const h=setup(t),body=auditFixture(),id=body.topics.list[0].id;h.message(body);
+  const button=auditButton(h,id,'mixed');
+  const count=body.items.filter(i=>i.topic===id&&i.tone==='mixed').length;
+  assert.equal(button.textContent,`正負並陳 ${count}`);
+  assert.equal(button.getAttribute('aria-label'),`正負並陳 ${count} 則報導`);
+  assert.ok(button.closest('.nw-tone-labels').textContent.startsWith('報導基調（則）：'));
+  button.click();assert.equal(h.container.querySelector('.nw-tone-audit > p').textContent,`正負並陳 ${count} 則報導`);
+  focusTopicButtons(h)[0].click();
+  assert.ok([...h.container.querySelectorAll('.nw-tone-tag')].some(node=>node.textContent==='正負並陳'));
+  assert.doesNotMatch(h.container.textContent,/正反/);
 });

@@ -264,6 +264,8 @@ export default function mount(ctx) {
   toolbar.append(overview);
   const shortcutToggle = make("button", "nw-shortcut-toggle");
   shortcutToggle.type = "button";
+  shortcutToggle.setAttribute("aria-label", "快捷鍵說明");
+  shortcutToggle.title = "快捷鍵說明";
   shortcutToggle.append(make("span", "nw-shortcut-name", "快捷鍵"));
   const shortcutIcon = make("span", "nw-shortcut-icon", "?");
   shortcutIcon.setAttribute("aria-hidden", "true");
@@ -393,7 +395,7 @@ export default function mount(ctx) {
     return node;
   }
   function appendTone(meta, item) {
-    const names = new Map([["positive", "正面"], ["negative", "負面"], ["mixed", "正反"], ["neutral", "中性"]]);
+    const names = new Map([["positive", "正面"], ["negative", "負面"], ["mixed", "正負並陳"], ["neutral", "中性"]]);
     if (selectedTopic && typeof item.tone === "string" && names.has(item.tone))
       meta.append(make("span", `nw-tone-tag nw-tone-tag-${item.tone}`, names.get(item.tone)));
   }
@@ -462,7 +464,7 @@ export default function mount(ctx) {
     if (!expanded.has(id) && reports.contains(document.activeElement)) button.focus({preventScroll: true});
     reports.hidden = !expanded.has(id);
   }
-  const toneLabels = [["negative", "負面"], ["neutral", "中性"], ["mixed", "正反"], ["positive", "正面"]];
+  const toneLabels = [["negative", "負面"], ["neutral", "中性"], ["mixed", "正負並陳"], ["positive", "正面"]];
   const auditKey = item => `tone:${JSON.stringify([text(item.source), text(item.link), text(item.title)])}`;
   function summaryParts(item, key) {
     const paragraph = make("p", "nw-summary", item.summary);
@@ -497,10 +499,11 @@ export default function mount(ctx) {
         segment.style.width = `${counts.get(id) / total * 100}%`;
         bar.append(segment);
       }
-      const labels = make("div", "nw-hint nw-tone-labels", "報導基調：");
+      const labels = make("div", "nw-hint nw-tone-labels", "報導基調（則）：");
       for (const [id, name] of toneLabels.filter(([id]) => counts.get(id) > 0).sort((a, b) => counts.get(b[0]) - counts.get(a[0]))) {
         const button = make("button", `nw-tone-button nw-tone-text-${id}`);
-        button.append(document.createTextNode(`${name} `), make("strong", "", String(counts.get(id))), document.createTextNode(" 則報導"));
+        button.append(document.createTextNode(`${name} `), make("strong", "", String(counts.get(id))));
+        button.setAttribute("aria-label", `${name} ${counts.get(id)} 則報導`);
         button.type = "button";
         button.dataset.toneKey = `${topic.id}:${id}`;
         button.setAttribute("aria-expanded", String(toneAudit === button.dataset.toneKey));
@@ -522,7 +525,7 @@ export default function mount(ctx) {
     const heading = make("h4", "nw-heading", "依標題與摘要判斷的報導基調・按報導計");
     heading.id = `${area.id}-heading`;
     area.setAttribute("aria-labelledby", heading.id);
-    area.append(heading, make("p", "nw-hint", button.textContent));
+    area.append(heading, make("p", "nw-hint", button.getAttribute("aria-label")));
     const reports = make("ul", "nw-tone-reports");
     for (const item of items.filter(item => item?.topic === topic.id && item.tone === tone)) {
       const entry = make("li", "nw-tone-report");
@@ -600,13 +603,17 @@ export default function mount(ctx) {
         if (latest && text(latest.title) && latest.title !== topic.title && !sameEvent) {
           const update = make("div", "nw-hint nw-topic-latest", `最新：${latest.title}`);
           update.title = latest.title;
-          if (isNew(latest)) update.prepend(make("span", "nw-new", "新"));
           copy.append(update);
         }
         const tone = toneSummary(topic);
         if (tone) copy.append(tone);
         const newEvents = groupItems(members).filter(group => group.reports.some(isNew)).length;
-        if (lastSeen !== null && newEvents) copy.append(make("div", "nw-topic-new", `上次之後新增 ${newEvents} 個事件`));
+        if (lastSeen !== null && newEvents) {
+          const progress = make("div", "nw-topic-new", `+${newEvents} 新事件`);
+          progress.setAttribute("role", "note");
+          progress.setAttribute("aria-label", `上次之後新增 ${newEvents} 個事件`);
+          copy.append(progress);
+        }
         row.append(copy, button);
         drawToneAudit(row, topic);
         focusList.append(row);
@@ -775,7 +782,7 @@ export default function mount(ctx) {
       const name = `${world ? "國際" : "財經"}${onlyNew ? "新進展" : ""}`;
       const coverage = analyzed < groups.length ? `（已分析 ${analyzed}／${groups.length}）` : "";
       button.textContent = `${name} ${world ? "升級" : "偏多"} ${up} 件・${world ? "緩和" : "偏空"} ${down} 件${coverage}${analyzed < 10 ? "（樣本少）" : ""}`;
-      button.title = `已分析 ${analyzed}／${groups.length} 個事件；依標題與摘要判斷${world ? "局勢走向" : "對股市影響，非行情"}。點選查看${world ? "國際" : "財經"}面板`;
+      button.title = `${analyzed < groups.length ? `已分析 ${analyzed}／${groups.length} 個事件；` : ""}依標題與摘要判斷${world ? "局勢走向" : "對股市影響，非行情"}。點選查看${world ? "國際" : "財經"}面板`;
     }
   }
   function onOverview(event) {
@@ -892,7 +899,7 @@ export default function mount(ctx) {
     }
     const sourceCount = new Set(scoped.map(item => text(item.source)).filter(Boolean)).size;
     const analyzed = groups.length - pending;
-    sampleCount.textContent = `${onlyNew ? "上次離開後的新進展：" : ""}${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源・已分析 ${analyzed}／${groups.length}`;
+    sampleCount.textContent = `${onlyNew ? "上次離開後的新進展：" : ""}${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源${analyzed < groups.length ? `・已分析 ${analyzed}／${groups.length}` : ""}`;
     pendingCount.textContent = `待判定 ${pending}`;
     pendingCount.hidden = pending === 0 || !analysisEnabled || modelState === "paused";
     merging.hidden = eventsPending === 0;
@@ -920,6 +927,8 @@ export default function mount(ctx) {
       button.setAttribute("aria-pressed", String(selectedCount?.id === id));
       macro.append(button);
     }
+    const remainder = total.count - total.bull - total.bear;
+    if (remainder > 0) macro.append(make("span", "nw-hint nw-macro-rest", `其餘 ${remainder} 件無明確方向`));
     // Stable sorting preserves the fixed table order for equal counts.
     const ranked = [...themes].filter(([id, count]) => id !== "macro" && id !== "other" && count.count)
       // Region/issue "other" stays visible but always ranks last.
@@ -1286,7 +1295,7 @@ export default function mount(ctx) {
       let latestLink = null;
       if (latest !== item && text(latest.title) && text(latest.title) !== text(item.title)) {
         const link = newsTitle({...latest, title: `最新：${text(latest.title)}（${text(latest.source)}）`},
-          "nw-hint nw-event-latest", isNew(latest));
+          "nw-hint nw-event-latest", false);
         if (link.tagName === "A") {
           latestLink = link;
           link.title = text(latest.title);
