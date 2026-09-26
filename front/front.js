@@ -256,8 +256,7 @@ export default function mount(ctx) {
   panelContent.append(searchScope, sample, market, history, macro, rankingSection, note);
   panel.append(panelToggle, panelContent);
   const toolbarActions = make("div", "nw-toolbar-actions");
-  toolbarActions.append(refresh, watchToggle, watchOnly, searchToggle);
-  toolbar.append(toolbarActions, sources, sourceDescription, categories, watchDescription, status, searchBox, watchSettings);
+  toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, searchToggle, toolbarActions, watchDescription, status, searchBox, watchSettings);
   const overview = make("div", "nw-hint nw-overview");
   overview.hidden = true;
   overview.append(make("span", "nw-overview-heading", "新聞風向（非行情）"));
@@ -307,6 +306,14 @@ export default function mount(ctx) {
   ctx.container.append(root);
 
   let narrow = false, panelOpen = false;
+  function arrangeToolbar() {
+    const active = document.activeElement;
+    if (narrow) toolbarActions.append(refresh, watchToggle, watchOnly, searchToggle);
+    const ordered = narrow ? [sources, sourceDescription, categories, toolbarActions]
+      : [refresh, sources, sourceDescription, categories, watchToggle, watchOnly, searchToggle, toolbarActions];
+    for (const node of ordered) toolbar.insertBefore(node, watchDescription);
+    if (toolbar.contains(active) && document.activeElement !== active) active.focus({preventScroll: true});
+  }
   function syncPanelDisclosure() {
     const hiding = narrow && !panelOpen;
     panelToggle.hidden = !narrow;
@@ -846,6 +853,7 @@ export default function mount(ctx) {
     describe(clearTheme, "", themeFilter);
     topicSources.hidden = !selectedTopic;
     topicSources.textContent = "";
+    topicSources.removeAttribute("title");
     if (selectedTopic) {
       const counts = new Map(), outletOrder = new Map();
       for (const [source, index] of sourceOrder) {
@@ -859,7 +867,8 @@ export default function mount(ctx) {
       const ranked = [...counts].sort((a, b) => b[1] - a[1]
         || (outletOrder.get(a[0]) ?? Infinity) - (outletOrder.get(b[0]) ?? Infinity));
       topicSources.textContent = ranked.slice(0, 5).map(([name, count]) => `${name} ${count}`).join("・")
-        + (ranked.length > 5 ? ` 等 ${ranked.length - 5} 家` : "");
+        + (ranked.length > 5 ? `，另 ${ranked.length - 5} 家（共 ${ranked.length} 家）` : "");
+      topicSources.title = ranked.map(([name, count]) => `${name} ${count}`).join("・") + `（共 ${ranked.length} 家）`;
       const title = Array.from(topics.find(topic => topic.id === selectedTopic).title);
       themeFilter.hidden = false;
       themeLabel.textContent = `話題：${title.slice(0, 24).join("")}${title.length > 24 ? "…" : ""}`;
@@ -1666,7 +1675,11 @@ export default function mount(ctx) {
     if (disposed) return;
     const entry = entries.find(entry => entry.target === root);
     if (!entry) return;
-    narrow = entry.contentRect.width <= 480;
+    const nextNarrow = entry.contentRect.width <= 480;
+    if (narrow !== nextNarrow) {
+      narrow = nextNarrow;
+      arrangeToolbar();
+    }
     syncPanelDisclosure();
   }) : null;
   panelObserver?.observe(root);

@@ -195,8 +195,8 @@ export const css = `
   .nw .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @container (max-width: 480px) {
-  .nw .nw-toolbar > select { order: -2; flex: 1 1 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; }
-  .nw .nw-toolbar-actions { order: -1; display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; overflow-x: auto; padding-block: 3px; }
+  .nw .nw-toolbar > select { flex: 1 1 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; }
+  .nw .nw-toolbar-actions { display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; overflow-x: auto; padding-block: 3px; }
   .nw .nw-toolbar-actions > button { flex: none; white-space: nowrap; font-size: 12px; padding-inline: 7px; }
   .nw .nw-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .nw .nw-legend-item { white-space: nowrap; word-break: keep-all; }

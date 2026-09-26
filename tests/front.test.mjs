@@ -2040,11 +2040,11 @@ test('topic source distribution counts reports, orders feed ties, limits five an
   assert.equal(hint.hidden,true);
   focusTopicButtons(h)[0].click();
   assert.equal(hint.hidden,false);
-  assert.equal(hint.textContent,'A 3・B 3・C 1・D 1・E 1 等 2 家');
+  assert.equal(hint.textContent,'A 3・B 3・C 1・D 1・E 1，另 2 家（共 7 家）');
   h.message({...body,items:[...reports,article({source:'G',topic:topic.id}),article({source:'G',topic:topic.id}),article({source:'G',topic:topic.id})]});
-  assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1 等 2 家');
+  assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1，另 2 家（共 7 家）');
   saveWatch(h,'A0'); watchControls(h).only.click();
-  assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1 等 2 家');
+  assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1，另 2 家（共 7 家）');
   focusTopicButtons(h)[0].click();
   assert.equal(hint.hidden,true);
   assert.equal(hint.textContent,'');
@@ -3552,7 +3552,7 @@ test('topic heading and distribution show outlets while the source selector reta
   const extra=Array.from({length:4},(_,i)=>({name:`來源${i}`,outlet:`媒體${i}`,ok:true}));
   h.message({...body,sources:[...sources,...extra],items:[...reports,...extra.map(s=>article({source:s.name,topic:topic.id}))],
     topics:{list:[{...topic,sources:7,count:9}]}});
-  assert.match(h.container.querySelector('.nw-topic-sources').textContent,/等 2 家$/);
+  assert.match(h.container.querySelector('.nw-topic-sources').textContent,/另 2 家（共 7 家）$/);
 });
 
 const search = (h, value) => {
@@ -4789,12 +4789,40 @@ test('R24 summary updates incomplete analysis and resize never strands focus in 
 test('R24 narrow CSS keeps select row, action row and two-column non-breaking signals',t=>{
   const h=setup(t),css=h.container.querySelector('style').textContent;
   assert.match(css,/@container \(max-width: 480px\)/);
-  assert.match(css,/\.nw \.nw-toolbar > select \{[^}]*order: -2;[^}]*50%/);
-  assert.match(css,/\.nw \.nw-toolbar-actions \{[^}]*order: -1;[^}]*flex-wrap: nowrap;[^}]*overflow-x: auto/);
+  assert.match(css,/\.nw \.nw-toolbar > select \{[^}]*50%/);
+  assert.match(css,/\.nw \.nw-toolbar-actions \{[^}]*flex-wrap: nowrap;[^}]*overflow-x: auto/);
   assert.match(css,/\.nw \.nw-legend \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
   assert.match(css,/\.nw \.nw-legend-item \{ white-space: nowrap; word-break: keep-all;/);
   h.message(auditFixture());
   const button=focusTopicButtons(h)[0];
   assert.equal(button.querySelector('.nw-focus-short').textContent,button.querySelector('.nw-focus-long').textContent);
   assert.match(button.querySelector('.nw-focus-short').textContent,/看話題/);
+});
+
+test('R25 toolbar DOM and tab order follow wide and narrow visual rows, preserving nodes and focus',t=>{
+  const h=responsiveSetup(t);h.up();
+  const toolbar=h.container.querySelector('.nw-toolbar');
+  const refresh=h.container.querySelector('.nw-refresh'),watch=h.container.querySelector('.nw-watch-toggle'),search=h.container.querySelector('.nw-search-toggle');
+  const primary=()=>[...toolbar.querySelectorAll('button,select')].filter(n=>[refresh,h.select,h.categories,watch,search].includes(n));
+  const wide=[refresh,h.select,h.categories,watch,search],narrow=[h.select,h.categories,refresh,watch,search];
+  assert.deepEqual(primary(),wide);h.resize(744);assert.deepEqual(primary(),wide);
+  h.categories.focus();h.resize(380);assert.deepEqual(primary(),narrow);
+  assert.equal(h.window.document.activeElement,h.categories);
+  assert.deepEqual([...h.container.querySelector('.nw-toolbar-actions').children].filter(n=>!n.hidden),[refresh,watch,search]);
+  for(const n of primary())assert.equal(n.tabIndex,0);
+  search.focus();h.resize(744);assert.deepEqual(primary(),wide);assert.equal(h.window.document.activeElement,search);
+  h.resize(480);assert.deepEqual(primary(),narrow);h.resize(481);assert.deepEqual(primary(),wide);
+  assert.doesNotMatch(h.container.querySelector('style').textContent,/order:\s*-?[12];/);
+});
+test('R25 truncated source distribution states remaining and total outlet counts and titles every outlet',t=>{
+  const h=setup(t),names=['中央社 政治','中央社 財經',...Array.from({length:9},(_,i)=>`媒體${i}`)];
+  const sources=names.map((name,i)=>({name,ok:true,outlet:i<2?'中央社':name}));
+  const topic=topicRecord({sources:10,count:11});
+  const body={...topicListing(names.map(source=>article({source,topic:topic.id})),[topic]),sources};
+  h.message(body);assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent,'看話題・10 家');
+  focusTopicButtons(h)[0].click();
+  const hint=h.container.querySelector('.nw-topic-sources');
+  assert.equal(hint.textContent,'中央社 2・媒體0 1・媒體1 1・媒體2 1・媒體3 1，另 5 家（共 10 家）');
+  assert.equal(hint.title,'中央社 2・'+Array.from({length:9},(_,i)=>`媒體${i} 1`).join('・')+'（共 10 家）');
+  focusTopicButtons(h)[0].click();assert.equal(hint.hasAttribute('title'),false);
 });
