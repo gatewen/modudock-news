@@ -362,7 +362,8 @@ export default function mount(ctx) {
   function captureReading() {
     if (!received || keyboardReading) return null;
     const scroller = scrollHost();
-    if (!scroller) return null;
+    // Near the top, keep the toolbar and newly inserted reports in view.
+    if (!scroller || scroller.scrollTop <= 4) return null;
     const isPage = scroller === document.scrollingElement;
     const bounds = isPage ? {top:0,bottom:view.innerHeight} : scroller.getBoundingClientRect();
     const candidates = [...list.querySelectorAll('a.nw-title, a.nw-report-title')]

@@ -5020,3 +5020,17 @@ test('R29 full topic totals stay constant through new-progress and numeric/media
   [...h.container.querySelectorAll('.nw-outlet')].find(b=>b.dataset.outlet==='中央社').click();
   assert.equal(total.textContent,'整個話題：4 個事件・5 則・3 家');assert.equal(shown.textContent,`目前顯示：${mainRows(h).length} 個事件・${mainRows(h).length+h.container.querySelectorAll('.nw-report').length} 則`);assert.equal(mainRows(h).length,2);
 });
+
+test('R30 top and 4px tolerance never compensate inserted reports; scrolling beyond it still anchors',t=>{
+  for(const offset of [0,1,4,4.1,5])for(const delivery of ['same','new']) {
+    const h=scrollHarness(t);h.scroller.scrollTop=offset;
+    // Ensure an original report is visible even at the top: the guard, not lack of candidates, must stop correction.
+    for(const [index,link] of [...h.container.querySelectorAll('a.nw-title')].entries())
+      link.getBoundingClientRect=()=>({top:140+60*index,bottom:160+60*index});
+    const added=Array.from({length:8},(_,i)=>article({title:`new${i}`,link:`https://e.test/new${i}`}));
+    h.message({...h.body,at:delivery==='new'?'2026-09-27T00:00:00Z':h.body.at,items:[...added,...h.body.items]});
+    if(offset<=4)assert.equal(h.scroller.scrollTop,offset,`${delivery} ${offset}`);
+    else assert.equal(h.scroller.scrollTop,500,`${delivery} ${offset}`);
+    assert.equal(mainRows(h)[0].querySelector('.nw-title').textContent,'new0');
+  }
+});
