@@ -4288,3 +4288,80 @@ test('R11 absent baseline and zero new events leave no new button text or orphan
   assert.equal(toggle.hidden,false); assert.equal(toggle.getAttribute('aria-pressed'),'false');
   assert.equal(toggle.textContent,'新增 2 個事件');
 });
+
+// §20.13: the overview uses the same category-first event analysis as the panel.
+const overviewButton=(h,category)=>h.container.querySelector(`[data-overview="${category}"]`);
+function overviewFixture() {
+  return ['finance','world'].flatMap((category,c)=>{
+    const rows=countFixture(category).map((item,i)=>({...item,event:(c?'b':'a')+item.event.slice(1),
+      published:`2026-09-24T${item.event==='888888888888'?'08':i===0?'11':'12'}:00:00Z`,
+      link:`https://example.com/overview/${category}/${i}`}));
+    for(const [n,signal] of [[9,'positive'],[0,'negative']]) rows.push(eventStory((c?'b':'a')+String(n).repeat(11),`extra-${category}-${n}`,12,
+      {source:'乙',category,analysis:category==='world'?worldAnalysis({trend:signal==='positive'?'escalation':'deescalation'}):analysis({market:signal})}));
+    return rows;
+  }).concat(financeArticle({category:'tech',title:'不算入財經速覽',published:'2026-09-24T12:00:00Z'}));
+}
+for(const source of ['', '甲', '乙']) for(const newOnly of [false,true]) {
+  test(`R13 overview counts equal destination panel: source=${source||'all'} new=${newOnly}`,t=>{
+    const h=setup(t,withSeen(seenAt)); h.message(listing(overviewFixture()));
+    choose(h,h.select,source); if(newOnly) h.container.querySelector('.nw-new-only').click();
+    for(const category of ['finance','world']) {
+      const button=overviewButton(h,category), world=category==='world';
+      assert.equal(h.container.querySelector('.nw-overview').hidden,false);
+      const match=button.textContent.match(world?/升級 (\d+) 件・緩和 (\d+) 件/:/偏多 (\d+) 件・偏空 (\d+) 件/);
+      assert.ok(match); // Even small samples retain explicit event counts.
+      assert.equal(button.tagName,'BUTTON'); assert.equal(button.getAttribute('aria-label'),null);
+      button.focus(); button.click();
+      assert.equal(h.categories.value,category); assert.equal(h.select.value,source);
+      assert.ok(h.window.document.activeElement===h.categories);
+      assert.equal(h.container.querySelector('.nw-overview').hidden,true);
+      if(match) {
+        assert.equal(countButton(h,'signal:0').querySelector('.nw-value').textContent,match[1]);
+        assert.equal(countButton(h,world?'signal:2':'signal:3').querySelector('.nw-value').textContent,match[2]);
+      } else {
+        const sample=h.container.querySelector('.nw-sample-count').textContent.match(/已分析 (\d+)／/);
+        assert.ok(Number(sample[1])<5);
+      }
+      assert.equal(JSON.parse(h.window.localStorage.getItem(viewKey)).category,category);
+      if(newOnly) assert.match(button.textContent,/新進展/);
+      choose(h,h.categories,'');
+    }
+  });
+}
+
+test('R13 partial coverage is visible, sample threshold is ten, and resends recompute',t=>{
+  const h=setup(t),rows=Array.from({length:10},(_,i)=>financeArticle({title:`coverage-${i}`,link:`https://example.com/cov/${i}`,analysis:null}));
+  h.message(listing(rows)); const button=overviewButton(h,'finance');
+  assert.equal(button.textContent,'財經 偏多 0 件・偏空 0 件（已分析 0／10）（樣本少）');
+  assert.equal(overviewButton(h,'world').textContent,'國際 升級 0 件・緩和 0 件（樣本少）');
+  for(const count of [4,5,9,10]) {
+    const items=rows.map((item,i)=>({...item,analysis:i<count?analysis({market:i%2?'negative':'positive'}):null}));
+    h.message({...listing(items),model:{state:'working'}});
+    assert.equal(button.textContent,`財經 偏多 ${Math.ceil(count/2)} 件・偏空 ${Math.floor(count/2)} 件${count<10?`（已分析 ${count}／10）（樣本少）`:''}`);
+    h.message({...listing(items),at:'2026-09-26T03:00:00Z',model:{state:'paused'}});
+    assert.match(button.title,new RegExp(`已分析 ${count}／10`));
+  }
+  h.message({...listing(rows),classify:{enabled:false},model:{state:'off',reason:'auth'}});
+  assert.equal(h.container.querySelector('.nw-overview').hidden,true);
+});
+
+test('R13 overview visibility follows category topic search and watch, and cleanup removes its listener',t=>{
+  const h=setup(t),overview=h.container.querySelector('.nw-overview');
+  assert.equal(overview.hidden,true); h.message(listing(overviewFixture())); assert.equal(overview.hidden,false);
+  search(h,'不存在'); assert.equal(overview.hidden,true); search(h,''); assert.equal(overview.hidden,false);
+  choose(h,h.categories,'politics'); assert.equal(overview.hidden,true); choose(h,h.categories,'');
+  saveWatch(h,'新聞'); watchControls(h).only.click(); assert.equal(overview.hidden,true);
+  watchControls(h).only.click(); assert.equal(overview.hidden,false);
+  const topic=topicRecord(); h.message(topicListing(overviewFixture().map(item=>({...item,topic:topic.id})),[topic]));
+  focusTopicButtons(h)[0].click(); assert.equal(h.categories.value,''); assert.equal(overview.hidden,true);
+  h.container.querySelector('.nw-filter button').click(); assert.equal(overview.hidden,false);
+  assert.equal(h.window.getComputedStyle(overview).flexWrap,'wrap');
+  assert.equal(h.window.getComputedStyle(overviewButton(h,'finance')).whiteSpace,'normal');
+  assert.equal(overview.querySelector('.nw-overview-heading').textContent,'新聞風向（非行情）');
+  assert.deepEqual([...overview.querySelectorAll('.nw-overview-separator')].map(node=>node.textContent),['｜','｜']);
+  assert.equal(overview.querySelectorAll('button').length,2);
+  assert.equal(h.window.getComputedStyle(overviewButton(h,'finance')).overflowWrap,'anywhere');
+  assert.equal(overview.querySelectorAll('.nw-overview-segment').length,2); // Break before the international segment; no clipping.
+  const button=overviewButton(h,'finance'); h.handle.unmount(); button.click();
+  assert.equal(h.container.childElementCount,0); assert.equal(h.categories.value,'');
+});

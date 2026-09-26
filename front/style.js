@@ -40,6 +40,12 @@ export const css = `
   outline-offset: 2px;
 }
 .nw .nw-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 12px; }
+.nw .nw-overview { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; flex-basis: 100%; min-width: 0; }
+.nw .nw-overview-heading { white-space: nowrap; }
+.nw .nw-overview-segment { display: inline-flex; align-items: baseline; min-width: 0; max-width: 100%; }
+.nw .nw-overview-separator { flex: none; }
+.nw .nw-overview-button { font-size: 12px; color: var(--nw-muted); background: transparent; border: 0; padding: 1px 0; white-space: normal; text-align: left; min-width: 0; overflow-wrap: anywhere; }
+.nw .nw-overview-button:hover { text-decoration: underline; text-underline-offset: 3px; }
 .nw .nw-search-box { display: flex; flex-wrap: wrap; gap: 8px; flex-basis: 100%; min-width: 0; }
 .nw .nw-search-input { flex: 1 1 180px; min-width: 0; max-width: 100%; }
 .nw .nw-search-hint { margin: 0; min-width: 0; overflow-wrap: anywhere; }

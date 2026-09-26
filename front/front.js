@@ -234,6 +234,21 @@ export default function mount(ctx) {
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(searchScope, sample, market, history, macro, rankingSection, note);
   toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, watchDescription, searchToggle, status, searchBox, watchSettings);
+  const overview = make("div", "nw-hint nw-overview");
+  overview.hidden = true;
+  overview.append(make("span", "nw-overview-heading", "新聞風向（非行情）"));
+  const overviewButtons = ["finance", "world"].map(category => {
+    const button = make("button", "nw-overview-button");
+    button.type = "button";
+    button.dataset.overview = category;
+    const segment = make("span", "nw-overview-segment");
+    const separator = make("span", "nw-overview-separator", "｜");
+    separator.setAttribute("aria-hidden", "true");
+    segment.append(separator, button);
+    overview.append(segment);
+    return button;
+  });
+  toolbar.append(overview);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
   root.append(toolbar, focus, panel, themeFilter, watchHint, newHint, list, empty);
@@ -692,18 +707,43 @@ export default function mount(ctx) {
       historyContent.append(row);
     });
   }
-  function contributes(group, id) {
+  function contributes(group, id, category = categories.value) {
     const analysis = group.reports.map(validAnalysis).find(Boolean);
     if (!analysis) return false;
     if (id.startsWith("signal:")) {
-      const signal = categories.value === "world" ? analysis?.trend : analysis?.market;
-      const index = categories.value === "world"
+      const signal = category === "world" ? analysis?.trend : analysis?.market;
+      const index = category === "world"
         ? {escalation: 0, stalemate: 1, deescalation: 2}[signal]
         : {positive: 0, mixed: 1, negative: 3}[signal];
-      return Number(id.slice(7)) === (index ?? (categories.value === "world" ? 3 : 2));
+      return Number(id.slice(7)) === (index ?? (category === "world" ? 3 : 2));
     }
     return analysis?.theme === "macro" && (id === "macro:all"
       || arrow(analysis) === (id === "macro:bull" ? "▲" : "▼"));
+  }
+  function drawOverview() {
+    overview.hidden = !received || Boolean(categories.value || selectedTopic || selectedCount?.topic
+      || searchText(searchInput.value).trim() || onlyWatched) || !analysisEnabled;
+    if (overview.hidden) return;
+    for (const button of overviewButtons) {
+      const category = button.dataset.overview, world = category === "world";
+      let groups = groupItems(items.filter(item => item && text(item.category) === category
+        && (!sources.value || text(item.source) === sources.value)));
+      if (onlyNew) groups = groups.filter(group => group.reports.some(isNew));
+      const analyzed = groups.filter(group => group.reports.some(item => validAnalysis(item))).length;
+      const up = groups.filter(group => contributes(group, "signal:0", category)).length;
+      const down = groups.filter(group => contributes(group, world ? "signal:2" : "signal:3", category)).length;
+      const name = `${world ? "國際" : "財經"}${onlyNew ? "新進展" : ""}`;
+      const coverage = analyzed < groups.length ? `（已分析 ${analyzed}／${groups.length}）` : "";
+      button.textContent = `${name} ${world ? "升級" : "偏多"} ${up} 件・${world ? "緩和" : "偏空"} ${down} 件${coverage}${analyzed < 10 ? "（樣本少）" : ""}`;
+      button.title = `已分析 ${analyzed}／${groups.length} 個事件；依標題與摘要判斷${world ? "局勢走向" : "對股市影響，非行情"}。點選查看${world ? "國際" : "財經"}面板`;
+    }
+  }
+  function onOverview(event) {
+    const button = event.target?.closest?.("button[data-overview]");
+    if (disposed || overview.hidden || !button || !overview.contains(button)) return;
+    categories.value = button.dataset.overview;
+    onSourceOrCategory({currentTarget: categories});
+    categories.focus({preventScroll: true});
   }
   function countLabel(id) {
     if (id.startsWith("signal:")) return (categories.value === "world"
@@ -1049,6 +1089,7 @@ export default function mount(ctx) {
       : financial(categories.value) ? themeNames : new Map();
     if (selectedTheme && !applicable.has(selectedTheme)) selectedTheme = "";
     if (selectedCount && selectedCount.category !== categories.value) selectedCount = null;
+    drawOverview();
     const scopeTopic = selectedTopic || selectedCount?.topic;
     let scoped = items.filter(item => item && typeof item === "object"
       && (!sources.value || text(item.source) === sources.value)
@@ -1450,6 +1491,7 @@ export default function mount(ctx) {
       }
     }
   }
+  overview.addEventListener("click", onOverview);
   newOnly.addEventListener("click", onNewOnly);
   newClear.addEventListener("click", onNewClear);
   searchToggle.addEventListener("click", onSearchToggle);
@@ -1494,6 +1536,7 @@ export default function mount(ctx) {
       up = false;
       finishRefresh();
       refresh.disabled = true;
+      overview.removeEventListener("click", onOverview);
       newOnly.removeEventListener("click", onNewOnly);
       newClear.removeEventListener("click", onNewClear);
       searchToggle.removeEventListener("click", onSearchToggle);
