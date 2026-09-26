@@ -83,6 +83,8 @@ export const css = `
 .nw .nw-calm-text { color: var(--nw-accent); }
 .nw .nw-legend { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 8px 0 18px; }
 .nw .nw-legend-item { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; color: var(--nw-muted); font-size: 12px; }
+.nw .nw-panel button[data-count] { text-align: left; background: transparent; }
+.nw .nw-panel button[data-count][aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 0 -2px var(--nw-accent); }
 .nw .nw-dot { width: 6px; height: 6px; border-radius: 50%; align-self: center; flex: 0 0 auto; }
 .nw .nw-value { font-size: 20px; font-weight: 600; color: var(--nw-fg); }
 .nw .nw-history { margin-bottom: 18px; }

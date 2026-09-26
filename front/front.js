@@ -153,14 +153,15 @@ export default function mount(ctx) {
     const segment = make("span", `nw-segment nw-${id}`);
     segment.setAttribute("aria-hidden", "true");
     marketBar.append(segment);
-    const entry = make("span", "nw-legend-item");
+    const entry = make("button", "nw-legend-item");
+    entry.type = "button";
     const dot = make("span", `nw-dot nw-${id}`);
     dot.setAttribute("aria-hidden", "true");
     const value = make("span", "nw-value");
     const label = make("span", "", name);
-    entry.append(dot, value, label);
+    entry.append(dot, value, document.createTextNode(" "), label);
     legend.append(entry);
-    return {segment, value, name, dot, label};
+    return {segment, value, name, dot, label, entry};
   });
   const signalHeading = make("h3", "nw-heading", "股市訊號");
   market.append(signalHeading, marketBar, legend);
@@ -197,6 +198,7 @@ export default function mount(ctx) {
   let received = false;
   let modelState = "", modelReason = "";
   let selectedTheme = "";
+  let selectedCount = null;
   let selectedTopic = "";
   let savedView = null;
   let topics = [];
@@ -429,8 +431,9 @@ export default function mount(ctx) {
     })).filter(group => group.count >= 3)
       .sort((a, b) => b.count - a.count || b.latest - a.latest || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
       .slice(0, 5);
-    focus.hidden = ranked.length === 0;
+    focus.hidden = false;
     focusList.replaceChildren();
+    if (!ranked.length) focusList.append(make("p", "nw-hint", "目前沒有 3 家以上媒體同時報導的新聞"));
     for (const group of ranked) {
       const row = make("div", "nw-focus-row");
       row.dataset.event = group.id;
@@ -449,7 +452,7 @@ export default function mount(ctx) {
     if (!button || !focusList.contains(button)) return;
     if (button.dataset.topicId) {
       if (selectedTopic === button.dataset.topicId) { returnToView(); return; }
-      if (!selectedTopic) {
+      if (!selectedTopic && !selectedCount?.topic) {
         let scroller = root.parentElement;
         while (scroller) {
           const style = view.getComputedStyle(scroller);
@@ -457,12 +460,13 @@ export default function mount(ctx) {
           scroller = scroller.parentElement;
         }
         scroller ||= document.scrollingElement;
-        savedView = {source:sources.value, category:categories.value, theme:selectedTheme, watched:onlyWatched,
+        savedView = {source:sources.value, category:categories.value, theme:selectedTheme, count:selectedCount, watched:onlyWatched,
           scroller, scrollTop:scroller?.scrollTop || 0, focus:focusIdentity(document.activeElement)};
       }
       sources.value = "";
       categories.value = "";
       selectedTheme = "";
+      selectedCount = null;
       onlyWatched = false;
       selectedTopic = button.dataset.topicId;
       drawItems();
@@ -532,12 +536,40 @@ export default function mount(ctx) {
       historyContent.append(row);
     });
   }
+  function contributes(group, id) {
+    const analysis = group.reports.map(validAnalysis).find(Boolean);
+    if (id.startsWith("signal:")) {
+      const signal = categories.value === "world" ? analysis?.trend : analysis?.market;
+      const index = categories.value === "world"
+        ? {escalation: 0, stalemate: 1, deescalation: 2}[signal]
+        : {positive: 0, mixed: 1, negative: 3}[signal];
+      return Number(id.slice(7)) === (index ?? (categories.value === "world" ? 3 : 2));
+    }
+    return analysis?.theme === "macro" && (id === "macro:all"
+      || arrow(analysis) === (id === "macro:bull" ? "▲" : "▼"));
+  }
+  function countLabel(id) {
+    if (id.startsWith("signal:")) return (categories.value === "world"
+      ? ["升級", "僵持", "緩和", "無關"] : ["正面", "正反", "無關", "負面"])[Number(id.slice(7))];
+    return {"macro:all": "大盤／總經", "macro:bull": "大盤／總經 利多", "macro:bear": "大盤／總經 利空"}[id];
+  }
+  function onCount(event) {
+    const button = event.target?.closest?.("button[data-count]");
+    if (!button || !panel.contains(button)) return;
+    if (selectedCount?.id === button.dataset.count) { onClearTheme(); return; }
+    selectedCount = {id: button.dataset.count, category: categories.value,
+      topic: selectedTopic || selectedCount?.topic || ""};
+    selectedTopic = "";
+    selectedTheme = "";
+    onlyWatched = false;
+    drawItems();
+  }
   function drawPanel(scoped) {
     const world = categories.value === "world";
     const politics = categories.value === "politics";
     panel.hidden = !world && !politics && !financial(categories.value);
     panel.setAttribute("aria-label", politics ? "政治議題分析" : world ? "國際局勢分析" : "財經分析");
-    themeFilter.hidden = panel.hidden || !selectedTheme;
+    themeFilter.hidden = panel.hidden || (!selectedTheme && !selectedCount);
     const selectedLabel = selectedTheme === "region:other" ? "其他地區"
       : selectedTheme === "issue:other" ? "其他議題" : topicNames.get(selectedTheme);
     themeLabel.textContent = selectedTheme ? `已篩選：${selectedLabel}` : "";
@@ -560,6 +592,12 @@ export default function mount(ctx) {
       themeLabel.textContent = `話題：${title.slice(0, 24).join("")}${title.length > 24 ? "…" : ""}`;
       clearTheme.textContent = "返回原檢視";
       describe(clearTheme, "回到進入話題前的篩選與位置", themeFilter);
+    }
+    if (selectedCount) {
+      themeLabel.textContent = `已篩選：${selectedCount.topic ? "話題內・" : ""}${countLabel(selectedCount.id)}`;
+      clearTheme.textContent = "清除篩選";
+      topicSources.hidden = true;
+      if (selectedCount.topic) describe(clearTheme, "清除數字篩選並返回原檢視", themeFilter);
     }
     panel.hidden ||= onlyWatched;
     if (panel.hidden) return;
@@ -604,18 +642,28 @@ export default function mount(ctx) {
     merging.hidden = eventsPending === 0;
     merging.textContent = eventsPending > 0 ? `・待合併 ${eventsPending}` : "";
     warning.hidden = groups.length >= 10;
-    const values = world ? [counts.escalation, counts.stalemate, counts.deescalation, counts.not_conflict + counts.other]
-      : [counts.positive, counts.mixed, counts.not_market + counts.other, counts.negative];
+    const values = marketParts.map((_, i) => groups.filter(group => contributes(group, `signal:${i}`)).length);
     marketBar.dataset.empty = String(groups.length === 0);
     marketBar.setAttribute("aria-label", marketParts.map((part, i) => `${part.name} ${values[i]}`).join("、"));
     market.title = `無關 ${world ? counts.not_conflict : counts.not_market}、未明 ${counts.other}`;
     marketParts.forEach((part, i) => {
       part.segment.style.width = `${groups.length ? values[i] / groups.length * 100 : 0}%`;
       part.value.textContent = String(values[i]);
+      part.entry.dataset.count = `signal:${i}`;
+      part.entry.setAttribute("aria-pressed", String(selectedCount?.id === `signal:${i}`));
     });
-    const total = themes.get("macro") || {count: 0, bull: 0, bear: 0};
-    macro.replaceChildren(make("span", "", `大盤／總經  ${total.count} 個事件`),
-      make("span", "nw-up", `利多 ${total.bull}`), make("span", "nw-down", `利空 ${total.bear}`));
+    const total = {count: groups.filter(group => contributes(group, "macro:all")).length,
+      bull: groups.filter(group => contributes(group, "macro:bull")).length,
+      bear: groups.filter(group => contributes(group, "macro:bear")).length};
+    macro.replaceChildren();
+    for (const [id, label, value, className] of [["macro:all", "大盤／總經", total.count, ""],
+      ["macro:bull", "利多", total.bull, "nw-up"], ["macro:bear", "利空", total.bear, "nw-down"]]) {
+      const button = make("button", className, `${label}${id === "macro:all" ? "  " : " "}${value}${id === "macro:all" ? " 個事件" : ""}`);
+      button.type = "button";
+      button.dataset.count = id;
+      button.setAttribute("aria-pressed", String(selectedCount?.id === id));
+      macro.append(button);
+    }
     // Stable sorting preserves the fixed table order for equal counts.
     const ranked = [...themes].filter(([id, count]) => id !== "macro" && id !== "other" && count.count)
       // Region/issue "other" stays visible but always ranks last.
@@ -656,6 +704,7 @@ export default function mount(ctx) {
   function onTheme(event) {
     const button = event.target?.closest?.("button[data-topic]");
     if (!button || !ranking.contains(button) || !topicNames.has(button.dataset.topic)) return;
+    if (selectedCount) { selectedCount = null; savedView = null; }
     selectedTheme = selectedTheme === button.dataset.topic ? "" : button.dataset.topic;
     drawItems();
   }
@@ -667,12 +716,14 @@ export default function mount(ctx) {
     const saved = savedView;
     savedView = null;
     selectedTopic = "";
+    selectedCount = null;
     if (saved) {
       sources.value = [...sources.options].some(option => option.value === saved.source) ? saved.source : "";
       const category = typeof initialView.category === "string" && items.some(item => categoryNames.has(text(item?.category)))
         ? initialView.category : saved.category;
       categories.value = [...categories.options].some(option => option.value === category) ? category : "";
       selectedTheme = saved.theme;
+      selectedCount = saved.count || null;
       onlyWatched = saved.watched && trackedWords.length > 0;
     }
     drawItems(false);
@@ -687,8 +738,9 @@ export default function mount(ctx) {
     }
   }
   function onClearTheme() {
-    if (selectedTopic) { returnToView(); return; }
+    if (selectedTopic || selectedCount?.topic) { returnToView(); return; }
     selectedTheme = "";
+    selectedCount = null;
     selectedTopic = "";
     drawItems();
   }
@@ -701,6 +753,7 @@ export default function mount(ctx) {
       [field]: event.currentTarget.value});
     savedView = null;
     selectedTopic = "";
+    if (event.currentTarget === categories || selectedCount?.topic) selectedCount = null;
     drawItems();
   }
   function onWatchToggle() {
@@ -745,7 +798,7 @@ export default function mount(ctx) {
     }
     for (const [selector, attribute] of [[".nw-list .nw-summary-toggle", "summary"], [".nw-list .nw-expand", "event"],
       [".nw-focus-count[data-event]", "event"], [".nw-focus-count[data-topic-id]", "topicId"],
-      [".nw-theme[data-topic]", "topic"]]) {
+      [".nw-theme[data-topic]", "topic"], [".nw-panel button[data-count]", "count"]]) {
       if (node.matches(selector)) return {selector, attribute, value: node.dataset[attribute],
         rowHref: node.matches(".nw-expand, .nw-summary-toggle")
           ? node.closest(".nw-row")?.querySelector("a.nw-title")?.href : undefined};
@@ -796,17 +849,19 @@ export default function mount(ctx) {
     const applicable = categories.value === "politics" ? issueTopics : categories.value === "world" ? regionTopics
       : financial(categories.value) ? themeNames : new Map();
     if (selectedTheme && !applicable.has(selectedTheme)) selectedTheme = "";
+    if (selectedCount && selectedCount.category !== categories.value) selectedCount = null;
+    const scopeTopic = selectedTopic || selectedCount?.topic;
     const scoped = items.filter(item => item && typeof item === "object"
       && (!sources.value || text(item.source) === sources.value)
       && (!categories.value || text(item.category) === categories.value)
-      && (!selectedTopic || item.topic === selectedTopic));
+      && (!scopeTopic || item.topic === scopeTopic));
     // Match the panel's event counts, even when watch-only hides the panel.
     if (selectedTheme && !groupItems(scoped).some(group =>
       topicOf(group.reports.map(validAnalysis).find(Boolean)) === selectedTheme)) selectedTheme = "";
     drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
     list.replaceChildren();
     const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
-    const allGroups = groupItems(filtered);
+    const allGroups = groupItems(filtered).filter(group => !selectedCount || contributes(group, selectedCount.id));
     const matches = new Map(allGroups.map(group => [group, trackedWords.find(word => group.reports.some(item =>
       text(item.title).toLowerCase().includes(word.toLowerCase()) || text(item.summary).toLowerCase().includes(word.toLowerCase())))]));
     const watchedCount = allGroups.filter(group => matches.get(group)).length;
@@ -917,6 +972,7 @@ export default function mount(ctx) {
     sources.value = "";
     categories.value = "";
     selectedTheme = "";
+    selectedCount = null;
     selectedTopic = "";
     onlyWatched = false;
     drawItems();
@@ -973,7 +1029,8 @@ export default function mount(ctx) {
       topicIds.add(topic.id);
       return true;
     }).slice(0, 5);
-    const lostTopic = selectedTopic && !topics.some(topic => topic.id === selectedTopic);
+    const scopeTopic = selectedTopic || selectedCount?.topic;
+    const lostTopic = scopeTopic && !topics.some(topic => topic.id === scopeTopic);
     const published = items.map(item => Date.parse(text(item?.published))).filter(Number.isFinite);
     latestPublished = published.length ? Math.max(...published) : null;
     const presentEvents = new Set(items.filter(item => item && typeof item === "object").map(eventId).filter(Boolean));
@@ -1007,7 +1064,7 @@ export default function mount(ctx) {
     if (body.classify?.enabled === false) delete initialView.category;
     else if (items.some(item => categoryNames.has(text(item?.category)))) {
       if (typeof initialView.category === "string" && [...categories.options].some(option => option.value === initialView.category)) {
-        if (selectedTopic || savedView) {
+        if (selectedTopic || selectedCount?.topic || savedView) {
           if (savedView) savedView.category = initialView.category;
         } else categories.value = initialView.category;
       }
@@ -1068,6 +1125,7 @@ export default function mount(ctx) {
   focusList.addEventListener("click", onFocus);
   clearAll.addEventListener("click", onClearAll);
   ranking.addEventListener("click", onTheme);
+  panel.addEventListener("click", onCount);
   clearTheme.addEventListener("click", onClearTheme);
   historyToggle.addEventListener("click", onHistory);
   refresh.addEventListener("click", onRefresh);
@@ -1114,6 +1172,8 @@ export default function mount(ctx) {
       sourceOrder.clear();
       clearAll.removeEventListener("click", onClearAll);
       ranking.removeEventListener("click", onTheme);
+      panel.removeEventListener("click", onCount);
+      selectedCount = null;
       clearTheme.removeEventListener("click", onClearTheme);
       selectedTheme = "";
       selectedTopic = "";

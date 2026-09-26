@@ -1113,7 +1113,7 @@ test('focus requires three distinct named sources, ranks by count latest time an
   assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['ffffffffffff', '000000000001']);
   assert.equal(focusArea(h).querySelector('a').textContent, 'ffffffffffff-0');
   h.message(listing(two));
-  assert.equal(focusArea(h).hidden, true);
+  assert.equal(focusArea(h).hidden, false); // R1-B: explain the empty event focus.
   assert.equal(focusButtons(h).length, 0);
 });
 
@@ -1124,7 +1124,7 @@ test('focus recomputes after source category and topic filters, including same-a
   h.message(body);
   assert.equal(focusButtons(h).length, 2);
   h.select.value = '媒體0'; h.select.dispatchEvent(new h.window.Event('change'));
-  assert.equal(focusArea(h).hidden, true);
+  assert.equal(focusArea(h).hidden, false); // R1-B: explain the empty event focus.
   h.select.value = ''; h.select.dispatchEvent(new h.window.Event('change'));
   h.categories.value = 'finance'; h.categories.dispatchEvent(new h.window.Event('change'));
   assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['111111111111']);
@@ -1133,7 +1133,7 @@ test('focus recomputes after source category and topic filters, including same-a
   assert.equal(focusButtons(h).length, 1);
   h.message({...body, items: reports.map((item,i) => i === 0 ? {...item, analysis:null} : item)});
   assert.equal(h.container.querySelector(`.nw-theme[data-topic="${topic}"]`).getAttribute('aria-pressed'), 'true');
-  assert.equal(focusArea(h).hidden, true); // Only two matching sources remain.
+  assert.equal(focusArea(h).hidden, false); // Only two matching sources remain. // R1-B: explain the empty event focus.
 });
 
 test('focus expands scrolls and focuses existing event, preserves expansion and removes listener on unmount', t => {
@@ -1307,7 +1307,7 @@ test('topic records require valid fields, take five valid unique entries, and fa
   h.message({...listing(reports), topics:{list:{}}});
   assert.equal(focusButtons(h)[0].dataset.event, '111111111111');
   h.message(topicListing([], invalid));
-  assert.equal(focusArea(h).hidden, true);
+  assert.equal(focusArea(h).hidden, false); // R1-B: explain the empty event focus.
 });
 
 test('topic title links require exact title in that topic and retain URL and text defenses', t => {
@@ -1396,7 +1396,7 @@ test('topic disappears or becomes invalid on replacement cancels selection and t
   h.message(topicListing([article({topic:id}), article({title:'外面'})], [topicRecord({sources:2})]));
   assert.equal(mainRows(h).length, 2);
   assert.equal(h.container.querySelector('.nw-filter').hidden, true);
-  assert.equal(focusArea(h).hidden, true);
+  assert.equal(focusArea(h).hidden, false); // R1-B: explain the empty event focus.
 });
 
 test('new topic badge comes from any member and topic listeners are inert after unmount', t => {
@@ -2241,7 +2241,8 @@ test('model status shows working and paused, with focus hint only while topics a
     if(label) assert.ok(status.includes(`更新 · ${label}`));
     else assert.doesNotMatch(status,/整理/);
     const focus=focusArea(h);
-    assert.equal(focus.hidden,state!=='working');
+    assert.equal(focus.hidden,false);
+    if(state!=='working') assert.match(focus.textContent,/目前沒有 3 家以上媒體同時報導的新聞/);
     if(state==='working') assert.match(focus.textContent,/正在整理多家媒體同報的話題/);
   }
   h.message({...topicListing([article({topic:topicRecord().id})]),model:{state:'working'}});
@@ -3277,4 +3278,154 @@ test('other filter labels distinguish regions and issues without changing rankin
     assert.equal(h.container.querySelector('.nw-filter > span').textContent,`已篩選：${label}`);
     button.click(); assert.equal(h.container.querySelector('.nw-filter').hidden,true);
   }
+});
+
+// §20.1: counts and their drill-downs share event-level analysis selection.
+const countButton = (h, id) => h.container.querySelector(`button[data-count="${id}"]`);
+const countFixture = category => {
+  const report = (id, source, hour, market, theme = 'memory', dir = 'bull', dir_p = .8) => {
+    const value = market === null ? null : category === 'world'
+      ? {kind:'world', trend:{positive:'escalation',mixed:'stalemate',negative:'deescalation',not_market:'not_conflict',other:'other'}[market], region:'asia_pacific'}
+      : analysis({market,theme,dir,dir_p});
+    return eventStory(String(id).repeat(12), `report-${id}-${source}-${hour}`, hour,
+      {category, source, analysis:value, link:`https://example.com/${id}/${source}/${hour}`});
+  };
+  return [report(1,'甲',8,null),report(1,'乙',9,'positive'),report(1,'甲',10,'negative'),
+    report(2,'甲',9,'mixed','energy'),report(3,'甲',9,'not_market','macro','neutral'),
+    report(4,'乙',9,'other'),report(5,'甲',9,'negative','macro','bear',.6),
+    report(6,'乙',9,'positive','macro','bull',.59),report(7,'乙',9,null),
+    report(8,'甲',9,'positive','macro','bull',.6)];
+};
+for (const category of ['finance','tech','world']) for (const source of ['', '甲', '乙']) {
+  test(`panel count drill-down matches all event contributions: ${category}/${source || 'all'}`, t => {
+    const h=setup(t), body=listing(countFixture(category)); h.message(body);
+    choose(h,h.categories,category); choose(h,h.select,source);
+    const expected = source === '甲' ? [[8],[2],[3],[1,5]]
+      : source === '乙' ? [[1,6],[],[4,7],[]] : [[1,6,8],[2],[3,4,7],[5]];
+    if(category==='world') [expected[2],expected[3]]=[expected[3],expected[2]];
+    const cases = expected.map((ids,i)=>[`signal:${i}`,ids]);
+    if(category!=='world') cases.push(['macro:all',source==='甲'?[3,5,8]:source==='乙'?[6]:[3,5,6,8]],
+      ['macro:bull',source==='乙'?[]:[8]],['macro:bear',source==='乙'?[]:[5]]);
+    const sample=h.container.querySelector('.nw-sample-count').textContent;
+    for(const [id,ids] of cases) {
+      const button=countButton(h,id);
+      const displayed=Number(button.textContent.match(/\d+/)[0]);
+      assert.equal(displayed,ids.length);
+      assert.equal(button.tagName,'BUTTON'); assert.equal(button.type,'button');
+      assert.equal(button.getAttribute('aria-label'),null); // Visible label includes count.
+      button.focus(); button.click(); // Native button also supports Enter/Space in browsers.
+      assert.deepEqual(mainRows(h).map(row=>row.dataset.event).sort(),ids.map(n=>String(n).repeat(12)).sort());
+      assert.equal(mainRows(h).length,displayed);
+      assert.equal(countButton(h,id).getAttribute('aria-pressed'),'true');
+      assert.equal(h.window.document.activeElement,countButton(h,id));
+      assert.equal(h.container.querySelector('.nw-sample-count').textContent,sample);
+      assert.equal(h.container.querySelector('.nw-filter').hidden,false);
+      // Same-at updates retain selection and keyboard focus.
+      h.message(body);
+      assert.equal(mainRows(h).length,displayed);
+      assert.equal(countButton(h,id).getAttribute('aria-pressed'),'true');
+      assert.equal(h.window.document.activeElement,countButton(h,id));
+      countButton(h,id).click();
+      assert.equal(h.container.querySelector('.nw-filter').hidden,true);
+      assert.equal(countButton(h,id).getAttribute('aria-pressed'),'false');
+    }
+  });
+}
+
+test('count selection replaces theme, preserves whole contributing events, and theme replaces count', t => {
+  const h=setup(t); h.message(listing(countFixture('finance'))); choose(h,h.categories,'finance');
+  themeButton(h,'memory').click();
+  assert.equal(countButton(h,'signal:0').textContent.trim(),'3 正面');
+  countButton(h,'signal:0').click();
+  assert.equal(themeButton(h,'memory').getAttribute('aria-pressed'),'false');
+  assert.equal(mainRows(h).length,3);
+  const mixedReports=mainRows(h).find(row=>row.dataset.event==='111111111111');
+  assert.equal(mixedReports.querySelector('.nw-expand').textContent,'另 2 則報導');
+  assert.match(mixedReports.querySelector('.nw-title').textContent,/report-1-甲-8/);
+  themeButton(h,'energy').click();
+  assert.equal(countButton(h,'signal:0').getAttribute('aria-pressed'),'false');
+  assert.deepEqual(mainRows(h).map(row=>row.dataset.event),['222222222222']);
+  countButton(h,'macro:bear').click();
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(mainRows(h).length,8);
+  countButton(h,'signal:0').click(); choose(h,h.categories,'world');
+  assert.equal(h.container.querySelector('.nw-filter').hidden,true);
+});
+
+for(const exit of ['clear','disappear','same-topic']) test(`count inside topic preserves scope and returns original view: ${exit}`, t => {
+  const h=setup(t), topic=topicRecord();
+  const items=countFixture('finance').map(item=>({...item,topic:topic.id}));
+  const body=topicListing([...items,eventStory('999999999999','outside',12,{analysis:analysis()})]);
+  h.message(body); choose(h,h.categories,'finance');
+  countButton(h,'signal:0').focus(); countButton(h,'signal:0').click();
+  assert.equal(mainRows(h).length,4);
+  focusTopicButtons(h)[0].click();
+  // Render the topic's finance panel without a manual category change, which exits topic mode.
+  h.categories.value='finance'; h.message(body);
+  assert.equal(countButton(h,'signal:0').textContent.trim(),'3 正面');
+  countButton(h,'signal:0').click();
+  assert.equal(mainRows(h).length,3);
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'),'false');
+  assert.equal(h.container.querySelector('.nw-filter > span').textContent,'已篩選：話題內・正面');
+  h.message(body); assert.equal(mainRows(h).length,3);
+  if(exit==='clear') h.container.querySelector('.nw-filter button').click();
+  if(exit==='disappear') h.message({...body,topics:{list:[]}});
+  if(exit==='same-topic') { focusTopicButtons(h)[0].click(); focusTopicButtons(h)[0].click(); }
+  assert.equal(h.categories.value,'finance');
+  assert.equal(countButton(h,'signal:0').getAttribute('aria-pressed'),'true');
+  assert.equal(mainRows(h).length,4); // Restored original count filter.
+});
+
+test('count controls remove listener on unmount and stay safe for malicious input', t => {
+  const h=setup(t); h.message(listing([financeArticle({analysis:{market:'<img>',theme:{}}})]));
+  choose(h,h.categories,'finance'); const button=countButton(h,'signal:2');
+  assert.equal(h.container.querySelector('img'),null);
+  const root=h.container.querySelector('.nw'); h.handle.unmount(); button.click();
+  assert.equal(root.querySelector('.nw-filter').hidden,true);
+});
+
+test('empty focus distinguishes no multi-source event, working, filtered topics and watch-only', t => {
+  const h=setup(t); const hint='目前沒有 3 家以上媒體同時報導的新聞';
+  for(const state of ['done','paused','off']) {
+    h.message({...listing([financeArticle()]),model:{state}});
+    assert.equal(focusArea(h).hidden,false);
+    assert.equal(focusArea(h).querySelector('h3').textContent,'焦點');
+    assert.equal(focusArea(h).querySelector('.nw-focus-list .nw-hint').textContent,hint);
+  }
+  h.message({...listing([]),model:{state:'working'}});
+  assert.equal(focusArea(h).hidden,false); assert.doesNotMatch(focusArea(h).textContent,/目前沒有/);
+  h.message(topicListing([article({category:'world',topic:topicRecord().id})]));
+  choose(h,h.categories,'finance'); assert.equal(focusArea(h).hidden,true);
+  const watched=setup(t,w=>w.localStorage.setItem('modudock.module.news.watch',JSON.stringify(['新聞'])));
+  watched.message(listing([article()])); watched.container.querySelector('.nw-watch-only').click();
+  assert.equal(focusArea(watched).hidden,true);
+});
+
+test('count controls allow native keyboard activation and update membership after replacement', t => {
+  const h=setup(t), body=listing(countFixture('finance')); h.message(body); choose(h,h.categories,'finance');
+  for(const key of ['Enter',' ']) {
+    const button=countButton(h,'signal:0'); button.focus();
+    const event=new h.window.KeyboardEvent('keydown',{key,bubbles:true,cancelable:true});
+    button.dispatchEvent(event);
+    assert.equal(event.defaultPrevented,false); // Do not intercept native button keys.
+    // happy-dom has no browser default key activation: deliver its resulting click.
+    button.dispatchEvent(new h.window.MouseEvent('click',{bubbles:true,detail:0}));
+    assert.equal(mainRows(h).length,3);
+    assert.equal(countButton(h,'signal:0').getAttribute('aria-pressed'),'true');
+    button.dispatchEvent(new h.window.MouseEvent('click',{bubbles:true,detail:0}));
+    assert.equal(mainRows(h).length,8);
+  }
+  countButton(h,'signal:0').click();
+  const next={...body,items:body.items.map(item=>item.event==='888888888888'
+    ? {...item,analysis:analysis({market:'negative'})}:item)};
+  h.message(next);
+  assert.equal(countButton(h,'signal:0').textContent.trim(),'2 正面');
+  assert.equal(mainRows(h).length,2);
+  choose(h,h.select,'乙');
+  assert.equal(mainRows(h).length,2);
+  assert.equal(countButton(h,'signal:0').getAttribute('aria-pressed'),'true');
+  h.container.querySelector('.nw-empty button').click(); // Same clear-all handler, even when hidden.
+  assert.equal(h.categories.value,'');
+  choose(h,h.categories,'finance');
+  assert.equal(countButton(h,'signal:0').getAttribute('aria-pressed'),'false');
 });
