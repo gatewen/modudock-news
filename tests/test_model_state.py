@@ -31,7 +31,7 @@ class ModelStateTests(unittest.TestCase):
                     s.start()
                     initial = sink.packets.get(timeout=2)
                     self.assertEqual(initial['body']['model'], {'state':'working','reason':''})
-                    eventually(lambda: s.last_list is not None and s.last_list['body']['model'] == {'state':'paused','reason':reason}, timeout=3)
+                    eventually(lambda: s.last_list is not None and s.last_list['body']['model'].get('state') == 'paused' and s.last_list['body']['model'].get('reason') == reason, timeout=3)
                     self.assertEqual(s.last_list['body']['model']['reason'], reason)
                     self.assertEqual(s.last_list['body']['at'], initial['body']['at'])
                     eventually(lambda: not (s.topic_in_flight or s.tone_in_flight))
@@ -71,5 +71,44 @@ class ModelStateTests(unittest.TestCase):
         for state, reason in [('working',''),('paused','failed'),('paused','budget'),('paused','waiting'),('off','no_key'),('off','auth')]:
             changed = deepcopy(initial)
             changed['body']['model'] = {'state':state,'reason':reason}
+            if reason == 'failed': changed['body']['model']['failure'] = 'connection'
             self.assertLessEqual(len(packet_bytes(changed)),MAX_PACKET)
             self.assertEqual(fit_packet(changed)['body']['items'],initial['body']['items'])
+
+    def test_failure_details_are_safe_codes_from_transport_and_validation(self):
+        from back.classify import Classifier
+        from back.scheduler import Scheduler, ModelRound
+        for mode, expected in [('429','busy'),('529','busy'),('timeout','connection'),
+                               ('json','response'),('answers','response'),('500','other')]:
+            with self.subTest(mode=mode):
+                def respond(payload, _number, release):
+                    if mode == 'timeout': release.wait(.1)
+                    if mode in ('429','529','500'): return int(mode),b'SECRET-URL-KEY',{}
+                    return 200,(b'not json SECRET-URL-KEY' if mode == 'json' else {'answers':{}}),{}
+                with server(respond) as (url, received):
+                    logs=[]
+                    client=Classifier(endpoint=url,key='SECRET-URL-KEY',timeout=.02 if mode=='timeout' else 1,
+                                      sleep=lambda _:None,log=logs.append)
+                    s=Scheduler([{'name':'A','url':'unused'}],None,None,1,classifier=client,log=logs.append)
+                    work=ModelRound(1);s.model_work=work
+                    s.classify_jobs.put((work,('key','title','')))
+                    def submit(result):
+                        with s.cv: s._accept(result)
+                        return False
+                    s._submit_classification=submit;s._classify_worker()
+                    state=s._model_state({'classify':{'pending':1}})
+                    self.assertEqual(state,{'state':'paused','reason':'failed','failure':expected})
+                    self.assertNotIn('SECRET-URL-KEY',str(state)+'\n'.join(logs))
+                    self.assertNotIn(url,str(state)+'\n'.join(logs))
+                    if mode in ('429','529'): self.assertEqual(len(received),3)
+                    s.stop()
+
+    def test_failure_detail_reserve_at_packet_boundary_with_tiny_items(self):
+        packet={'t':'msg','body':{'items':[{} for _ in range(100)],'model':{'state':'done','reason':''}}}
+        packet['body']['padding']='x'*(MAX_PACKET-len(packet_bytes(packet)))
+        initial=fit_packet(packet)
+        for detail in ('busy','connection','response','other'):
+            changed=deepcopy(initial)
+            changed['body']['model']={'state':'paused','reason':'failed','failure':detail}
+            self.assertLessEqual(len(packet_bytes(changed)),MAX_PACKET)
+            self.assertEqual(len(fit_packet(changed)['body']['items']),len(initial['body']['items']))

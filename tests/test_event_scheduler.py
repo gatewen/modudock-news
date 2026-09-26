@@ -207,7 +207,7 @@ class EventSchedulerTests(unittest.TestCase):
             self.round(sink)
             eventually(lambda: len(received) == 1 and self.idle(scheduler))
             self.assertFalse(scheduler.event_cache)
-            self.assertEqual(sink.packets.get(timeout=2)['body']['model'], {'state':'paused','reason':'failed'})
+            self.assertEqual(sink.packets.get(timeout=2)['body']['model'], {'state':'paused','reason':'failed','failure':'other'})
             scheduler.refresh()
             self.round(sink)
             self.assertEqual(sink.packets.get(timeout=2)['body']['events']['pending'], 0)

@@ -17,13 +17,13 @@ import time
 
 if __package__:
     from .feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
-    from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer
+    from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from .events import candidate_pairs, group_events, _fits as pairs_fit
     from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
     from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
-    from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer
+    from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from events import candidate_pairs, group_events, _fits as pairs_fit
     from topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
@@ -56,6 +56,7 @@ class ModelRound:
     failed: bool = False
     requests: dict = field(default_factory=lambda: dict.fromkeys(('classify', 'analysis', 'events', 'topics', 'tone'), 0))
     failures: int = 0
+    failure_detail: str = ""
     http: int = 0
     retries: int = 0
     started: float | None = None
@@ -483,13 +484,17 @@ class Scheduler:
                     if not work.logged:
                         self.model_rounds[work.round_id] = work
             result = None
+            failure_detail = "other"
             if allowed:
                 token = _http_observer.set(lambda retry: self._record_http(work, retry))
+                failure_token = _failure_detail.set("other")
                 try:
                     result = self._call(lane, batch, kind)
                 except Exception:
                     self.log("classify: worker failed")  # Never expose secret-bearing exceptions.
                 finally:
+                    failure_detail = _failure_detail.get()
+                    _failure_detail.reset(failure_token)
                     _http_observer.reset(token)
             with self.cv:
                 if allowed:
@@ -499,6 +504,8 @@ class Scheduler:
                     work.awaiting += 1
                 if allowed and result is None:
                     work.failures += 1
+                    if not work.failure_detail:
+                        work.failure_detail = failure_detail
                 if result is None and not deferred:
                     work.failed = True
                 # Publish completion under the same cv acquisition: another
@@ -613,7 +620,11 @@ class Scheduler:
         work = self.model_work
         expired = work is not None and work.deadline is not None and self.model_clock() >= work.deadline
         if work is not None and (work.failed or expired):
-            return {'state': 'paused', 'reason': 'failed' if work.failures or not expired else 'budget'}
+            reason = 'failed' if work.failures or not expired else 'budget'
+            state = {'state': 'paused', 'reason': reason}
+            if reason == 'failed':
+                state['failure'] = work.failure_detail if work.failure_detail in ('busy', 'connection', 'response') else 'other'
+            return state
         return {'state': 'paused', 'reason': 'waiting'}
 
     def _enqueue_topics(self, packet):

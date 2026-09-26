@@ -4473,7 +4473,7 @@ test('R15 visible shortcut entry lists only existing keys and Escape returns to 
   assert.equal(toggle.querySelector('.nw-shortcut-icon').getAttribute('aria-hidden'),'true');
   assert.equal(toggle.tagName,'BUTTON');
   assert.equal(toggle.parentElement.className,'nw-status-group');
-  assert.equal(toggle.previousElementSibling.className,'nw-status');
+  assert.equal(toggle.previousElementSibling.className,'nw-undo-read'); // R21 reading controls precede help.
   toggle.focus(); toggle.click();
   assert.deepEqual([...help.querySelectorAll('dt')].map(node=>node.textContent),['j／k','s','e','/','Esc','?（Shift+/）']);
   assert.match(help.textContent,/下一則／上一則新聞/);
@@ -4617,4 +4617,90 @@ test('R20 first all-source failure offers refresh and does not use packet time a
   assert.doesNotMatch(status.textContent,/\d\d:\d\d 更新/);
   assert.equal(h.button.disabled,false);h.button.click();assert.deepEqual(h.sent,[{op:'refresh'}]);
   h.message(listing([],[]));assert.doesNotMatch(status.textContent,/所有來源連線失敗/);
+});
+
+test('R21 mark read morning noon evening, undo once, and expire undo on same-at resend', t=>{
+  const morning=new Date(2026,8,26,8).getTime(), noon=new Date(2026,8,26,12).getTime(), evening=new Date(2026,8,26,18).getTime();
+  t.mock.timers.enable({apis:['Date'],now:morning});
+  const h=setup(t,w=>w.localStorage.setItem(seenKey,JSON.stringify(new Date(morning-3600000).toISOString())));
+  const mark=()=>h.container.querySelector('.nw-mark-read'),undo=()=>h.container.querySelector('.nw-undo-read');
+  const body=time=>({...listing([article({published:new Date(time).toISOString()})]),at:new Date(time).toISOString()});
+  h.message(body(morning));assert.equal(h.container.querySelector('.nw-new-only').textContent,'新增 1 個事件');
+  mark().click();assert.equal(h.container.querySelector('.nw-new-only').hidden,true);
+  assert.equal(Date.parse(JSON.parse(h.window.localStorage.getItem(seenKey))),morning);
+  assert.equal(h.window.document.activeElement,undo());
+  undo().click();assert.equal(h.container.querySelector('.nw-new-only').hidden,false);assert.equal(undo().hidden,true);
+  const restored=h.window.localStorage.getItem(seenKey);undo().click();assert.equal(h.window.localStorage.getItem(seenKey),restored);
+  t.mock.timers.setTime(noon);h.message(body(noon));mark().click();
+  assert.equal(h.container.querySelectorAll('.nw-new,.nw-divider').length,0);
+  h.message(body(noon));assert.equal(undo().hidden,true);assert.ok(!h.window.document.activeElement.closest('[hidden]'));
+  t.mock.timers.setTime(evening);h.message(body(evening));
+  assert.equal(h.container.querySelector('.nw-new-only').textContent,'新增 1 個事件');
+  mark().click();assert.equal(h.container.querySelector('.nw-new-only').hidden,true);
+  const stored=h.window.localStorage.getItem(seenKey), detachedUndo=undo();h.handle.unmount();detachedUndo.click();
+  assert.equal(h.window.localStorage.getItem(seenKey),stored);
+});
+
+test('R21 manual reading writes last-writer wins, restores baseline, tolerates storage errors and clamps future',t=>{
+  const now=new Date(2026,8,26,12).getTime();t.mock.timers.enable({apis:['Date'],now});
+  const baseline=new Date(now-3600000).toISOString();
+  const h=setup(t,w=>w.localStorage.setItem(seenKey,JSON.stringify(baseline))),body={...listing([article({published:new Date(now+600000).toISOString()})]),at:new Date(now).toISOString()};
+  h.message(body);h.window.localStorage.setItem(seenKey,JSON.stringify(new Date(now+3600000).toISOString()));
+  h.container.querySelector('.nw-mark-read').click();
+  assert.equal(Date.parse(JSON.parse(h.window.localStorage.getItem(seenKey))),now);
+  assert.equal(h.container.querySelector('.nw-new-only').textContent,'新增 1 個事件');
+  h.container.querySelector('.nw-undo-read').click();assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)),baseline);
+  assert.equal(h.container.querySelector('.nw-new-only').hidden,false);
+  h.window.localStorage.setItem=()=>{throw new Error('blocked')};
+  assert.doesNotThrow(()=>h.container.querySelector('.nw-mark-read').click());
+  assert.equal(h.container.querySelector('.nw-undo-read').hidden,false);
+});
+
+for(const [reason,failure,phrase] of [['failed','busy','服務忙碌'],['failed','connection','檢查網路'],
+  ['failed','response','回應無法使用'],['failed','other','聯絡模組維護者'],['budget',null,'預算用完'],['waiting',null,'等待下次更新'],
+  ['failed',{secret:'<img src=x>'},'聯絡模組維護者'],['failed','toString','聯絡模組維護者'],
+  ['failed','__proto__','聯絡模組維護者']]) test(`R21 paused advice ${reason}/${JSON.stringify(failure)}`,t=>{
+  const h=setup(t);h.message({...listing([article()]),model:{state:'paused',reason,failure}});
+  const status=h.container.querySelector('[role=status]');
+  assert.match(status.textContent,/整理暫停/);assert.ok(status.title.includes(phrase));
+  const detail=h.window.document.getElementById(status.getAttribute('aria-describedby'));
+  assert.ok(detail.textContent.includes(phrase));assert.equal(h.container.querySelector('img'),null);
+  assert.ok(!detail.textContent.includes('<img'));
+  h.message({...listing([article()]),model:{state:'done',reason:''}});assert.equal(detail.textContent,'');
+  h.handle.unmount();assert.equal(detail.isConnected,false);
+});
+
+test('R21 mark inside new-only can undo or close empty view, and undo expires on a new-at list',t=>{
+  const now=new Date(2026,8,26,12).getTime();t.mock.timers.enable({apis:['Date'],now});
+  const h=setup(t,w=>w.localStorage.setItem(seenKey,JSON.stringify(new Date(now-3600000).toISOString())));
+  const body={...listing([article({published:new Date(now).toISOString()})]),at:new Date(now).toISOString()};
+  h.message(body);h.container.querySelector('.nw-new-only').click();
+  h.container.querySelector('.nw-mark-read').click();assert.equal(mainRows(h).length,0);
+  assert.equal(h.container.querySelector('.nw-new-hint').hidden,false);
+  h.container.querySelector('.nw-undo-read').click();assert.equal(mainRows(h).length,1);
+  h.container.querySelector('.nw-mark-read').click();h.container.querySelector('.nw-new-hint button').click();
+  assert.equal(mainRows(h).length,1);
+  h.message({...body,at:new Date(now+1000).toISOString()});
+  assert.equal(h.container.querySelector('.nw-undo-read').hidden,true);
+});
+
+
+test('R21 mark-read follows new-count visibility while undo remains available at zero',t=>{
+  const now=new Date(2026,8,26,12).getTime();t.mock.timers.enable({apis:['Date'],now});
+  const body={...listing([article({published:new Date(now).toISOString()})]),at:new Date(now).toISOString()};
+  for(const baseline of [null,new Date(now).toISOString(),new Date(now-3600000).toISOString()]) {
+    const h=setup(t,w=>{if(baseline!==null)w.localStorage.setItem(seenKey,JSON.stringify(baseline));});
+    h.message(body);
+    const mark=h.container.querySelector('.nw-mark-read'),undo=h.container.querySelector('.nw-undo-read'),fresh=h.container.querySelector('.nw-new-only');
+    assert.equal(mark.hidden,fresh.hidden);
+    if(mark.hidden) {
+      const stored=h.window.localStorage.getItem(seenKey);mark.click();
+      assert.equal(h.window.localStorage.getItem(seenKey),stored);assert.equal(undo.hidden,true);
+    } else {
+      mark.click();assert.equal(fresh.hidden,true);assert.equal(mark.hidden,true);assert.equal(undo.hidden,false);
+      undo.click();assert.equal(mark.hidden,false);assert.equal(fresh.hidden,false);assert.equal(undo.hidden,true);
+      // The count uses current filters, so filtering all new events away also hides mark-read.
+      search(h,'no matching title');assert.equal(fresh.hidden,true);assert.equal(mark.hidden,true);
+    }
+  }
 });

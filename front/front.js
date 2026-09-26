@@ -45,8 +45,9 @@ export default function mount(ctx) {
   const initialView = storedView && typeof storedView === "object" && !Array.isArray(storedView) ? {...storedView} : {};
   const storedLastSeen = loadState("lastSeen");
   const parsedLastSeen = typeof storedLastSeen === "string" ? Date.parse(storedLastSeen) : NaN;
-  const lastSeen = Number.isFinite(parsedLastSeen) ? parsedLastSeen : null;
+  let lastSeen = Number.isFinite(parsedLastSeen) ? parsedLastSeen : null;
   let latestPublished = null;
+  let undoReading = null;
   function persistLastSeen() {
     const stored = loadState("lastSeen");
     const current = typeof stored === "string" ? Date.parse(stored) : NaN;
@@ -137,6 +138,9 @@ export default function mount(ctx) {
   watchSettings.append(watchLabel, watchInput, watchSave, watchGuide);
   const status = make("span", "nw-status");
   status.setAttribute("role", "status");
+  const modelDescription = make("span", "nw-sr");
+  modelDescription.id = `nw-model-${++descriptionId}`;
+  status.setAttribute("aria-describedby", modelDescription.id);
   status.textContent = "等待模組就緒";
   const statusBefore = document.createTextNode("");
   const statusAfter = document.createTextNode("");
@@ -145,6 +149,14 @@ export default function mount(ctx) {
   newOnly.hidden = true;
   newOnly.disabled = true;
   newOnly.setAttribute("aria-pressed", "false");
+  const markRead = make("button", "nw-mark-read", "標為已看");
+  markRead.type = "button";
+  markRead.hidden = true;
+  markRead.title = "將目前這批新聞標為已看，從此基準看新進展";
+  const undoRead = make("button", "nw-undo-read", "復原");
+  undoRead.type = "button";
+  undoRead.hidden = true;
+  undoRead.title = "復原這次閱讀基準；收到下一份列表時失效";
   const newHint = make("div", "nw-hint nw-new-hint");
   newHint.hidden = true;
   const newHintText = make("span", "");
@@ -275,7 +287,7 @@ export default function mount(ctx) {
   shortcutHelp.append(shortcutList);
   const statusGroup = make("div", "nw-status-group");
   toolbar.insertBefore(statusGroup, status);
-  statusGroup.append(status, shortcutToggle);
+  statusGroup.append(status, modelDescription, markRead, undoRead, shortcutToggle);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
   root.append(toolbar, focus, panel, themeFilter, watchHint, newHint, shortcutHelp, list, empty);
@@ -1156,6 +1168,9 @@ export default function mount(ctx) {
     const matchedGroups = searchedGroups.filter(group => !onlyWatched || matches.get(group));
     const count = matchedGroups.filter(group => group.reports.some(isNew)).length;
     const groups = matchedGroups.filter(group => !onlyNew || group.reports.some(isNew));
+    markRead.hidden = lastSeen === null || count === 0 || undoReading !== null;
+    markRead.disabled = !Number.isFinite(readingBoundary()) || (lastSeen !== null && readingBoundary() <= lastSeen);
+    undoRead.hidden = undoReading === null;
     newOnly.hidden = lastSeen === null || count === 0;
     newOnly.disabled = count === 0;
     newOnly.textContent = newOnly.hidden ? "" : `新增 ${count} 個事件`;
@@ -1320,6 +1335,26 @@ export default function mount(ctx) {
     if (!restoreFocus(focused) && focusWasInside && unavailableFocus())
       list.focus({preventScroll: true});
   }
+  function readingBoundary() {
+    const at = Date.parse(latestAt);
+    return Math.min(Math.max(latestPublished ?? -Infinity, Number.isFinite(at) ? at : -Infinity), Date.now());
+  }
+  function onMarkRead() {
+    if (disposed || markRead.hidden || markRead.disabled) return;
+    undoReading = {baseline:lastSeen};
+    lastSeen = readingBoundary();
+    saveState("lastSeen", new Date(lastSeen).toISOString());
+    drawItems();
+    undoRead.focus({preventScroll:true});
+  }
+  function onUndoRead() {
+    if (disposed || undoReading === null) return;
+    lastSeen = undoReading.baseline;
+    undoReading = null;
+    saveState("lastSeen", lastSeen === null ? null : new Date(lastSeen).toISOString());
+    drawItems();
+    (markRead.hidden || markRead.disabled ? list : markRead).focus({preventScroll:true});
+  }
   function onNewOnly() {
     if (disposed || newOnly.disabled) return;
     onlyNew = !onlyNew;
@@ -1394,6 +1429,8 @@ export default function mount(ctx) {
     drawItems();
   }
   function renderList(body) {
+    const undoHadFocus = document.activeElement === undoRead;
+    undoReading = null;
     if (text(body.at) !== latestAt) refreshNotice = "";
     latestAt = text(body.at);
     if (refreshTimer !== null && latestAt !== refreshAt) finishRefresh();
@@ -1538,8 +1575,19 @@ export default function mount(ctx) {
       : `${failureName(source)}${typeof source.error === "string" ? `：${Array.from(source.error).slice(0,80).join("")}` : ""}`).join("\n");
     all.title = status.title;
     if (Array.isArray(offNotice)) status.title = [status.title, offNotice[1]].filter(Boolean).join("\n");
+    const failureCode = ["busy", "connection", "response", "other"].includes(body.model?.failure) ? body.model.failure : "other";
+    const pauseAdvice = modelState === "paused" ? modelReason === "budget"
+      ? "本輪整理預算用完，下次更新繼續"
+      : modelReason === "waiting" ? "等待下次更新接手未完成項目"
+      : ({busy:"服務忙碌，稍後自動重試", connection:"連線失敗，請檢查網路；下次更新重試",
+          response:"回應無法使用，下次更新重試；若持續發生，請聯絡模組維護者",
+          other:"整理未完成，下次更新重試；若持續發生，請聯絡模組維護者"}[failureCode]
+          || "整理未完成，下次更新重試；若持續發生，請聯絡模組維護者") : "";
+    modelDescription.textContent = pauseAdvice;
+    if (pauseAdvice) status.title = [status.title, pauseAdvice].filter(Boolean).join("\n");
     if (lostTopic) returnToView(true);
     else drawItems();
+    if (undoHadFocus) (markRead.hidden || markRead.disabled ? list : markRead).focus({preventScroll:true});
   }
   function onBrowseKey(event) {
     const target = event.target;
@@ -1578,6 +1626,8 @@ export default function mount(ctx) {
   shortcutToggle.addEventListener("click", toggleShortcuts);
   overview.addEventListener("click", onOverview);
   newOnly.addEventListener("click", onNewOnly);
+  markRead.addEventListener("click", onMarkRead);
+  undoRead.addEventListener("click", onUndoRead);
   newClear.addEventListener("click", onNewClear);
   searchToggle.addEventListener("click", onSearchToggle);
   searchInput.addEventListener("input", onSearch);
@@ -1625,6 +1675,9 @@ export default function mount(ctx) {
       shortcutOrigin = null;
       overview.removeEventListener("click", onOverview);
       newOnly.removeEventListener("click", onNewOnly);
+      markRead.removeEventListener("click", onMarkRead);
+      undoRead.removeEventListener("click", onUndoRead);
+      undoReading = null;
       newClear.removeEventListener("click", onNewClear);
       searchToggle.removeEventListener("click", onSearchToggle);
       searchInput.removeEventListener("input", onSearch);

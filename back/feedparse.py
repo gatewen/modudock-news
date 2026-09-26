@@ -43,7 +43,7 @@ TOPICS_RESERVE = len(json.dumps({'pending': MAX_ITEMS_LIST, 'tone_pending': MAX_
     for _ in range(5)]}, ensure_ascii=True))
 TOPIC_FIELD_RESERVE = len(', "topic": "' + 'f' * 12 + '"')
 TONE_FIELD_RESERVE = len(', "tone": "negative"')
-MODEL_RESERVE = len(json.dumps({'state': 'working', 'reason': 'disabled'}))
+MODEL_RESERVE = len(json.dumps({'state': 'paused', 'reason': 'failed', 'failure': 'connection'}))
 ATOM = "http://www.w3.org/2005/Atom"
 
 

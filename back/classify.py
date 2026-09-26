@@ -36,6 +36,7 @@ MAX_BODY = 1024 * 1024
 THRESHOLD = 0.35
 # Per worker invocation, not shared mutable client state; no payload/key exposure.
 _http_observer = ContextVar("news_http_observer", default=None)
+_failure_detail = ContextVar("news_failure_detail", default="other")
 CRITERIA = {
     "politics": "台灣或各國政府、選舉、政黨、法案、外交",
     "finance": "股匯市、經濟數據、企業財報與併購、房市、產業景氣（科技公司的財報歸這裡）",
@@ -216,20 +217,28 @@ class _ChoiceClient:
                 delay = 0.5 * (2 ** attempt)
                 if attempt == 2 or self.clock() + delay >= deadline:
                     self.log(f"{self._label}: rate limited")
+                    _failure_detail.set("busy")
                     return None
                 self.log(f"{self._label}: rate limited, retry")
                 self.sleep(delay)
                 if self.clock() >= deadline:
                     self.log(f"{self._label}: rate limited")
+                    _failure_detail.set("busy")
                     return None
             document = json.loads(data)
             if not isinstance(document, dict) or not isinstance(document.get("answers"), dict):
                 raise _InvalidResponse()
             return self._decode(batch, document["answers"], context)
         except _ResponseDeadline:
+            _failure_detail.set("connection")
             self.log(f"{self._label}: response deadline")
             return None
-        except (OSError, URLError, ValueError, http.client.HTTPException, RecursionError):
+        except (OSError, URLError, http.client.HTTPException):
+            _failure_detail.set("connection")
+            self.log(f"{self._label}: request or response failed")
+            return None
+        except (ValueError, RecursionError):
+            _failure_detail.set("response")
             # Never log exception text, response content or request headers:
             # any of them could contain the secret (including an echoed key).
             self.log(f"{self._label}: request or response failed")
