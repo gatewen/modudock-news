@@ -172,6 +172,8 @@ export const css = `
 .nw .nw-outlet { font-size: 12px; background: transparent; padding: 2px 4px; }
 .nw .nw-outlet[aria-pressed="true"], .nw .nw-topic-order[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 0 -2px var(--nw-accent); }
 .nw .nw-date-divider { padding: 10px 16px; font-size: 12px; color: var(--nw-muted); }
+.nw .nw-topic-totals { font-size: 12px; word-break: keep-all; }
+.nw .nw-topic-visible { flex-basis: 100%; font-size: 12px; }
 .nw .nw-topic-sources { flex-basis: 100%; overflow-wrap: anywhere; }
 .nw .nw-list { list-style: none; margin: 0; padding: 0; }
 .nw .nw-row { padding: 14px 0; }

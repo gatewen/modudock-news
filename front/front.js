@@ -183,7 +183,11 @@ export default function mount(ctx) {
   themeFilter.append(themeLabel, clearTheme);
   const topicSources = make("span", "nw-hint nw-topic-sources");
   topicSources.hidden = true;
-  themeFilter.append(topicSources);
+  const topicTotals = make("span", "nw-topic-totals");
+  const topicVisible = make("span", "nw-topic-visible");
+  topicTotals.hidden = true;
+  topicVisible.hidden = true;
+  themeFilter.append(topicTotals, topicVisible, topicSources);
   const topicTools = make("div", "nw-topic-tools");
   topicTools.hidden = true;
   const topicOrder = make("button", "nw-topic-order", "時間順讀");
@@ -609,6 +613,7 @@ export default function mount(ctx) {
         bar.append(segment);
       }
       const labels = make("div", "nw-hint nw-tone-labels", "報導基調（則）：");
+      labels.title = "整個話題：按報導計，不隨清單篩選變動";
       for (const [id, name] of toneLabels.filter(([id]) => counts.get(id) > 0).sort((a, b) => counts.get(b[0]) - counts.get(a[0]))) {
         const button = make("button", `nw-tone-button nw-tone-text-${id}`);
         button.append(document.createTextNode(`${name} `), make("strong", "", String(counts.get(id))));
@@ -1277,7 +1282,7 @@ export default function mount(ctx) {
     const count = matchedGroups.filter(group => group.reports.some(isNew)).length;
     const groups = matchedGroups.filter(group => !onlyNew || group.reports.some(isNew));
     if (chronological && scopeTopic) groups.sort((a, b) => reportTime(a.reports[0]) - reportTime(b.reports[0]));
-    drawTopicTools(scopeTopic);
+    drawTopicTools(scopeTopic, groups);
     markRead.hidden = lastSeen === null || count === 0 || undoReading !== null;
     markRead.disabled = !Number.isFinite(readingBoundary()) || (lastSeen !== null && readingBoundary() <= lastSeen);
     undoRead.hidden = undoReading === null;
@@ -1474,14 +1479,25 @@ export default function mount(ctx) {
         && (!onlyWatched || group.reports.some(item => trackedWords.some(word => [item.title, item.summary]
           .some(value => text(value).toLowerCase().includes(word.toLowerCase()))))));
   }
-  function drawTopicTools(topic) {
+  function drawTopicTools(topic, visibleGroups) {
     topicTools.hidden = !topic;
+    topicTotals.hidden = !topic;
+    topicVisible.hidden = true;
+    topicTotals.textContent = "";
+    topicVisible.textContent = "";
     topicSources.hidden = !topic;
     outletLabel.textContent = "";
     topicOrder.setAttribute("aria-pressed", String(chronological));
     topicSources.replaceChildren();
     topicSources.removeAttribute("title");
     if (!topic) return;
+    const members = items.filter(item => item && item.topic === topic);
+    const totalGroups = groupItems(members);
+    const outlets = new Set(members.map(outletOf).filter(Boolean));
+    topicTotals.textContent = `整個話題：${totalGroups.length} 個事件・${members.length} 則・${outlets.size} 家`;
+    const visibleReports = visibleGroups.reduce((count,group)=>count+group.reports.length,0);
+    topicVisible.hidden = visibleReports >= members.length;
+    topicVisible.textContent = topicVisible.hidden ? "" : `目前顯示：${visibleGroups.length} 個事件・${visibleReports} 則`;
     topicOrder.textContent = "時間順讀";
     topicOrder.title = `切換為${chronological ? "最新優先" : "時間順讀"}；依發布時間，非事件發生時間`;
     topicOrder.setAttribute("aria-pressed", String(chronological));

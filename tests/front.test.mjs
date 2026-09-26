@@ -4982,3 +4982,41 @@ test('R28 a visible report merged into a child stays visible at its reading offs
   assert.equal(child.closest('.nw-row').querySelector('.nw-expand').getAttribute('aria-expanded'),'true');
   assert.equal(h.scroller.scrollTop,660);assert.equal(child.getBoundingClientRect().top,140);
 });
+
+test('R29 topic totals use full members while visible events follow combined filters and resends',t=>{
+  const h=setup(t),body=readingTopic();h.message(body);focusTopicButtons(h)[0].click();
+  const total=h.container.querySelector('.nw-topic-totals'),shown=h.container.querySelector('.nw-topic-visible');
+  assert.equal(total.textContent,'整個話題：4 個事件・5 則・3 家');assert.equal(shown.hidden,true);
+  const check=()=>{assert.equal(total.textContent,'整個話題：4 個事件・5 則・3 家');assert.equal(shown.textContent,`目前顯示：${mainRows(h).length} 個事件・${mainRows(h).length+h.container.querySelectorAll('.nw-report').length} 則`);};
+  choose(h,h.categories,'finance');assert.equal(shown.hidden,true); // A filter alone does not imply a smaller scope.
+  [...h.container.querySelectorAll('.nw-outlet')].find(n=>n.dataset.outlet==='中央社').click();check();assert.equal(mainRows(h).length,2);
+  themeButton(h,'memory').click();search(h,'middle');check();assert.equal(mainRows(h).length,1);
+  h.message({...body,at:'2026-09-27T00:00:00Z'});check();
+  search(h,'none');check();assert.equal(mainRows(h).length,0);
+  search(h,'');h.container.querySelector('.nw-topic-outlet-clear').click();assert.equal(shown.hidden,true);
+  h.container.querySelector('.nw-filter > button').click();assert.equal(total.hidden,true);assert.equal(shown.hidden,true);
+});
+test('R29 removing reports without reducing event count still discloses the smaller scope',t=>{
+  const h=setup(t),topic=topicRecord({count:3,sources:3});
+  const body=topicListing(['甲','乙','丙'].map(source=>article({source,topic:topic.id,event:'111111111111',event_size:3})),[topic]);
+  h.message(body);focusTopicButtons(h)[0].click();
+  const shown=h.container.querySelector('.nw-topic-visible');assert.equal(shown.hidden,true);
+  h.container.querySelector('.nw-outlet').click();assert.equal(shown.hidden,false);assert.equal(shown.textContent,'目前顯示：1 個事件・1 則');
+  assert.equal(h.container.querySelector('.nw-topic-totals').textContent,'整個話題：1 個事件・3 則・3 家');
+});
+test('R29 tone scope explicitly remains whole topic before and after topic filtering',t=>{
+  const h=setup(t),body=auditFixture();h.message(body);
+  const label=()=>h.container.querySelector('.nw-tone-labels');
+  assert.equal(label().title,'整個話題：按報導計，不隨清單篩選變動');const text=label().textContent;
+  focusTopicButtons(h)[0].click();search(h,'no result');
+  assert.equal(label().title,'整個話題：按報導計，不隨清單篩選變動');assert.equal(label().textContent,text);
+});
+
+test('R29 full topic totals stay constant through new-progress and numeric/media intersections',t=>{
+  const h=setup(t,w=>w.localStorage.setItem(seenKey,JSON.stringify('2026-09-26T01:00:00Z')));h.message(readingTopic());focusTopicButtons(h)[0].click();
+  h.container.querySelector('.nw-new-only').click();choose(h,h.categories,'finance');countButton(h,'signal:0').click();
+  const total=h.container.querySelector('.nw-topic-totals'),shown=h.container.querySelector('.nw-topic-visible');
+  assert.equal(total.textContent,'整個話題：4 個事件・5 則・3 家');assert.equal(shown.textContent,'目前顯示：3 個事件・4 則');
+  [...h.container.querySelectorAll('.nw-outlet')].find(b=>b.dataset.outlet==='中央社').click();
+  assert.equal(total.textContent,'整個話題：4 個事件・5 則・3 家');assert.equal(shown.textContent,`目前顯示：${mainRows(h).length} 個事件・${mainRows(h).length+h.container.querySelectorAll('.nw-report').length} 則`);assert.equal(mainRows(h).length,2);
+});
