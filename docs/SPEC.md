@@ -1927,3 +1927,12 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 
 - **驗證結果**：全套 unittest 366/366；chaos 六並行×五批 30/30。擴充來源副本只覆蓋 back/*.py、feeds.json 雜湊不變；真實 model round=1 requests=53 http=53 retries=0 failed=0，elapsed=7.3s，model done、classify／analysis／events／topics／tone pending 全0。
 - **人工品質核對**：r36.json 峰會39則／11家，另三話題各3則／3家；R35準則逐則看48則未發現明確誤入或待核對。舊run2峰會43則／10家有1不相關、2待核對；本次ETtoday伊朗解封報導仍在300則內、與中央社川習談中東同event，但已不帶topic，中央社仍納入。新資料有增減、模型亦有隨機性，不能將全部數量下降視為本改動的因果效果；逐則核對表放scratchpad/feedexp/r36-review.json。
+
+### 20.38 第 38 輪：長時間資源平台期（jev 0）
+
+- **測試方法**：同一 Scheduler 長時間存活，三來源、48 則／輪、120 組 link 循環，每五輪回用上一組，定期移除話題種子；使用真實 RSS 解析、分類／分析／配對／話題／語氣 client 的請求組裝與回應驗證，只將 opener 替換為記憶體假回應。禁止 socket.connect，沒有真 API。假回應交替成功、429／529 重試、壞 answers、TimeoutError 及在有效回應完整讀取後注入 model clock 超過 60 秒預算（獨立於逾時，另斷言 paused/budget）；初期以 Event 閘門保證 refresh 發生於模型請求途中，不靠 sleep 撞時序。
+- **短版**：tests/test_model_endurance.py 200 輪；每輪等已完成抓取、非 active／pending_refresh、最後列表非 working、model_rounds／results／所有佇列與 in-flight 歸零。檢查 first_seen 每來源≤1000、分類／分析／語氣≤4000、配對／話題≤20000、佇列既有容量、候選 keys≤300選2、快取列表≤300、seed≤5；確認同一組四 fetch＋三 model＋一 coordinator 執行緒未增生，stop 後全部退出。model_rounds≤3 是本測試至多一次額外 refresh 的工作量界限，不宣稱任意外部更新壓力下通用上限。
+- **長版**：scratchpad/r38/endurance.py 用相同 harness 執行 3000 輪操作，另外包括啟動及重疊 refresh；每250輪記錄上述容器及 tracemalloc 當前／生命週期峰值、active_count。harness 只保留最後封包與固定種類 Counter，不累積封包／完整 log；採樣前 GC，取樣記錄僅十餘筆。高水位為觀測值，不宣稱捕捉每個執行緒瞬間。
+- **解讀**：穩定期記憶體允許小幅波動與 CPython 容器重配置；不以 RSS 絕對值作跨機器測試。此工作量驗證反覆輪轉與收尾，不是滿300則或每個模型快取都達上限的性能保證；既有 FIFO 單元測試仍負責容量邊界。
+- **結果**：短版200輪 4.39s；全套367測試通過。最終長版3000次操作、3009個已完成抓取輪，191.95s；2500～3000輪 tracemalloc current 4.713～4.726 MiB、尾端較起點+3.4 KiB，峰值5.910 MiB。分類／分析各4000、配對1728、話題480、語氣768，末500輪大小不變；三份來源cache各16則、first_seen各1000。候選快取一份48則列表／15 keys、last_topic_seeds最多1。
+- **收尾與故障覆蓋**：每輪閒置時五in-flight、所有佇列、results、model_rounds全0；執行中觀測model_rounds高水位2、results6，模型workers3、總owned threads8（含主執行緒active_count=9）不變，stop全部join退出。假HTTP注入429／529各78次、壞回應402次、逾時452次、預算294次，確實觀察到paused/failed與paused/budget。未發現production洩漏，未修改back程式。完整採樣與可重跑腳本放scratchpad/r38/（final目錄為最終版本，早期資料僅供調試）。
