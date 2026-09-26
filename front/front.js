@@ -207,9 +207,10 @@ export default function mount(ctx) {
   const outletChip = make("div", "nw-outlet-chip");
   outletChip.hidden = true;
   outletChip.append(outletLabel, outletClear);
-  const toneExplanation = "依標題與摘要判斷報導的語氣：正面＝強調成果、進展、合作或利多；負面＝強調分歧、受挫、風險、抗議或批評；中性＝主要陳述事實、行程或背景；正負並陳＝正反並陳；非媒體立場";
-  const outletHeading = make("h3", "nw-heading", "各家基調對照（則）");
-  outletHeading.title = toneExplanation;
+  const toneExplanation = "依標題與摘要判斷報導的語氣：正面＝強調成果、進展、合作或利多；負面＝強調分歧、受挫、風險、抗議或批評；中性＝主要陳述事實、行程或背景；正反並陳；非媒體立場";
+  const outletHeading = make("h3", "nw-heading", "各家報導語氣（則）");
+  outletHeading.title = toneExplanation + "。各家則數只算該家符合目前篩選的報導，清單會保留整個事件，所以加總可能與目前顯示不同";
+  const outletExplanation = make("p", "nw-hint nw-outlet-explanation", "依每則標題與摘要判讀對此事件的語氣（AI 判定），不代表媒體整體立場");
   const outletLegend = make("div", "nw-outlet-legend");
   const outletRows = make("div", "nw-outlet-rows");
   const outletExtra = make("div", "nw-outlet-rows");
@@ -217,7 +218,7 @@ export default function mount(ctx) {
   const outletMore = make("button", "nw-outlet-more");
   outletMore.type = "button";
   outletMore.setAttribute("aria-controls", outletExtra.id);
-  topicSources.append(outletHeading, outletLegend, outletChip, outletRows, outletExtra, outletMore);
+  topicSources.append(outletHeading, outletExplanation, outletLegend, outletChip, outletRows, outletExtra, outletMore);
   orderGroup.append(topicLatest, topicOrder);
   topicTools.append(orderGroup, orderHint);
 
@@ -541,10 +542,10 @@ export default function mount(ctx) {
     if (!(selectedTopic || selectedCount?.topic)) return;
     const counts = toneLabels.map(([id]) => [id, reports.filter(report => report.tone === id).length]).filter(([,count]) => count);
     if (counts.length > 1) {
-      const tag = make("span", "nw-tone-tag nw-tone-composition", counts.map(([id,count]) => `${({negative:"負",neutral:"中",mixed:"正負",positive:"正"})[id]} ${count}`).join("・"));
+      const tag = make("span", "nw-tone-tag nw-tone-composition", counts.map(([id,count]) => `${({negative:"負",neutral:"中",mixed:"兩面",positive:"正"})[id]} ${count}`).join("・"));
       tag.title = toneExplanation;meta.append(tag);return;
     }
-    const names = new Map([["positive", "正面"], ["negative", "負面"], ["mixed", "正負並陳"], ["neutral", "中性"]]);
+    const names = new Map([["positive", "正面"], ["negative", "負面"], ["mixed", "正反並陳"], ["neutral", "中性"]]);
     if (typeof item.tone === "string" && names.has(item.tone))
       meta.append(make("span", `nw-tone-tag nw-tone-tag-${item.tone}`, names.get(item.tone)));
   }
@@ -613,7 +614,7 @@ export default function mount(ctx) {
     if (!expanded.has(id) && reports.contains(document.activeElement)) button.focus({preventScroll: true});
     reports.hidden = !expanded.has(id);
   }
-  const toneLabels = [["negative", "負面"], ["neutral", "中性"], ["mixed", "正負並陳"], ["positive", "正面"]];
+  const toneLabels = [["negative", "負面"], ["neutral", "中性"], ["mixed", "正反並陳"], ["positive", "正面"]];
   const auditKey = item => `tone:${JSON.stringify([text(item.source), text(item.link), text(item.title)])}`;
   function summaryParts(item, key) {
     const paragraph = make("p", "nw-summary", item.summary);
@@ -653,7 +654,7 @@ export default function mount(ctx) {
         segment.style.width = `${counts.get(id) / total * 100}%`;
         bar.append(segment);
       }
-      const labels = make("div", "nw-hint nw-tone-labels", "報導基調（則）：");
+      const labels = make("div", "nw-hint nw-tone-labels", "報導語氣（則）：");
       labels.title = `整個話題：按報導計，不隨清單篩選變動。 ${toneExplanation}`;
       for (const [id, name] of toneLabels.filter(([id]) => counts.get(id) > 0)) {
         const button = make("button", `nw-tone-button nw-tone-text-${id}`);
@@ -677,7 +678,7 @@ export default function mount(ctx) {
     const area = make("section", "nw-tone-audit");
     area.id = `nw-tone-audit-${++descriptionId}`;
     button.setAttribute("aria-controls", area.id);
-    const heading = make("h4", "nw-heading", "依標題與摘要判斷的報導基調・按報導計");
+    const heading = make("h4", "nw-heading", "依標題與摘要判斷的報導語氣・按報導計");
     heading.id = `${area.id}-heading`;
     area.setAttribute("aria-labelledby", heading.id);
     area.append(heading, make("p", "nw-hint", button.getAttribute("aria-label")));
@@ -1580,7 +1581,10 @@ export default function mount(ctx) {
       const counts = new Map(toneLabels.map(([id])=>[id,reports.filter(item=>item.tone===id).length]));
       const known = [...counts.values()].reduce((a,b)=>a+b,0);
       const bar = make("div", "nw-bar nw-outlet-bar");
-      bar.setAttribute("aria-hidden", "true");bar.hidden = known === 0;
+      bar.setAttribute("aria-hidden", "true"); // Keep the grid cell even when every report is pending.
+      bar.classList.toggle("nw-small-sample", known < 5);
+      row.setAttribute("role", "group");
+      row.setAttribute("aria-label", `${name} ${reports.length} 則報導${known < 5 ? "，樣本少" : ""}`);
       const values = make("div", "nw-outlet-values");
       for (const [id,label] of toneLabels) {
         const count = counts.get(id);if (!count) continue;
@@ -1589,8 +1593,13 @@ export default function mount(ctx) {
         const value = make("span", "nw-outlet-tone");
         value.dataset.tone = id;value.dataset.count = String(count);
         value.title = `${label} ${count} 則報導`;
-        value.append(toneSwatch(id), document.createTextNode(`${({negative:"負",neutral:"中",mixed:"正負",positive:"正"})[id]} ${count}`));
+        value.append(toneSwatch(id), document.createTextNode(`${({negative:"負",neutral:"中",mixed:"兩面",positive:"正"})[id]} ${count}`));
         values.append(value);
+      }
+      if (known < 5) {
+        const note = make("span", "nw-hint nw-outlet-small", "樣本少");
+        note.id = `nw-outlet-small-${++descriptionId}`;
+        button.setAttribute("aria-describedby", note.id);values.append(note);
       }
       if (reports.length>known) values.append(make("span", "nw-outlet-pending", `待判定 ${reports.length-known}`));
       row.append(button,bar,values);

@@ -1489,11 +1489,11 @@ test('topic tone needs five judged reports, sorts positive counts and uses a dec
   h.message(toneListing(topicRecord({count:41, tone:toneCounts({negative:4})})));
   assert.equal(focusArea(h).querySelector('.nw-tone'), null);
   h.message(toneListing(topicRecord({count:41, tone:toneCounts({negative:5})})));
-  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調（則）：負面 5');
+  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導語氣（則）：負面 5');
   assert.equal(focusArea(h).querySelectorAll('.nw-tone .nw-segment').length, 1);
   h.message(toneListing(topicRecord({count:41, tone:{positive:4, negative:17, neutral:15, mixed:5}})));
   const tone = focusArea(h).querySelector('.nw-tone');
-  assert.equal(tone.querySelector('.nw-hint').textContent, '報導基調（則）：負面 17中性 15正負並陳 5正面 4');
+  assert.equal(tone.querySelector('.nw-hint').textContent, '報導語氣（則）：負面 17中性 15正反並陳 5正面 4');
   const bar = tone.querySelector('.nw-tone-bar');
   assert.equal(bar.getAttribute('aria-hidden'), 'true');
   assert.equal(h.window.getComputedStyle(bar).height, '4px');
@@ -1519,7 +1519,7 @@ test('bad topic tone is ignored without losing the topic or interpreting hostile
     assert.equal(focusArea(h).querySelector('img'), null);
   }
   h.message(toneListing(topicRecord({count:10, tone:toneCounts({positive:5, neutral:5})})));
-  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調（則）：中性 5正面 5');
+  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導語氣（則）：中性 5正面 5');
   focusTopicButtons(h)[0].focus();
   h.message(toneListing(topicRecord({count:10, tone:toneCounts({negative:5, neutral:5})})));
   assert.equal(h.window.document.activeElement, focusTopicButtons(h)[0]);
@@ -2021,12 +2021,12 @@ test('per-report tone appears only in topic filter and validates ids without inh
   h.message(topicListing(reports));
   assert.equal(h.container.querySelector('.nw-tone-tag'),null);
   focusTopicButtons(h)[0].click();
-  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'負 1・中 1・正負 1・正 1');
+  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'負 1・中 1・兩面 1・正 1');
   h.container.querySelector('.nw-expand').click();
-  assert.deepEqual([...h.container.querySelectorAll('.nw-report .nw-tone-tag')].map(n=>n.textContent),['正面','正負並陳','中性']);
+  assert.deepEqual([...h.container.querySelectorAll('.nw-report .nw-tone-tag')].map(n=>n.textContent),['正面','正反並陳','中性']);
   assert.equal(h.container.querySelector('img'),null);
   h.message(topicListing(reports.map((item,i)=>i===0?{...item,tone:null}:item)));
-  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'中 1・正負 1・正 1');
+  assert.equal(mainRows(h)[0].querySelector('.nw-info > .nw-tone-tag').textContent,'中 1・兩面 1・正 1');
   assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),'true');
   focusTopicButtons(h)[0].click();
   assert.equal(h.container.querySelector('.nw-tone-tag'),null);
@@ -2112,14 +2112,14 @@ test('text buttons use visible names and external descriptions survive redraws a
       if (id) {
         const node=h.window.document.getElementById(id);
         assert.ok(node && h.container.contains(node));
-        assert.equal(node.className,'nw-sr');
+        assert.equal(node.className,button.matches('.nw-outlet')?'nw-hint nw-outlet-small':'nw-sr');
         assert.equal(button.contains(node),false);
         assert.ok(node.textContent);
         assert.doesNotMatch(node.textContent,/[▲▼]/);
         assert.equal(node.hidden,false);
       }
     }
-    const ids=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
+    const ids=[...h.container.querySelectorAll('.nw-sr, .nw-outlet-small')].map(node=>node.id);
     assert.equal(new Set(ids).size,ids.length);
     assert.equal(ids.length,h.container.querySelectorAll('[aria-describedby]').length);
   };
@@ -4153,7 +4153,7 @@ test('R12 every visible tone count opens exactly its contributing reports, inclu
     assert.equal(h.container.querySelectorAll('.nw-tone-audit').length,1);
     assert.equal(auditRows(h).length,expected.length);
     assert.deepEqual(auditRows(h).map(row=>row.querySelector('a').href),expected.map(item=>item.link));
-    assert.equal(h.container.querySelector('.nw-tone-audit h4').textContent,'依標題與摘要判斷的報導基調・按報導計');
+    assert.equal(h.container.querySelector('.nw-tone-audit h4').textContent,'依標題與摘要判斷的報導語氣・按報導計');
     for(const [i,row] of auditRows(h).entries()) {
       assert.equal(row.querySelector('.nw-source').textContent,expected[i].source);
       assert.ok(row.querySelector('.nw-time').textContent); assert.equal(row.querySelector('a').target,'_blank');
@@ -4747,13 +4747,13 @@ test('R23 mixed tone uses one display name in compact buttons, audit and report 
   const h=setup(t),body=auditFixture(),id=body.topics.list[0].id;h.message(body);
   const button=auditButton(h,id,'mixed');
   const count=body.items.filter(i=>i.topic===id&&i.tone==='mixed').length;
-  assert.equal(button.textContent,`正負並陳 ${count}`);
-  assert.equal(button.getAttribute('aria-label'),`正負並陳 ${count} 則報導`);
-  assert.ok(button.closest('.nw-tone-labels').textContent.startsWith('報導基調（則）：'));
-  button.click();assert.equal(h.container.querySelector('.nw-tone-audit > p').textContent,`正負並陳 ${count} 則報導`);
+  assert.equal(button.textContent,`正反並陳 ${count}`);
+  assert.equal(button.getAttribute('aria-label'),`正反並陳 ${count} 則報導`);
+  assert.ok(button.closest('.nw-tone-labels').textContent.startsWith('報導語氣（則）：'));
+  button.click();assert.equal(h.container.querySelector('.nw-tone-audit > p').textContent,`正反並陳 ${count} 則報導`);
   focusTopicButtons(h)[0].click();
-  assert.ok([...h.container.querySelectorAll('.nw-tone-tag')].some(node=>node.textContent==='正負並陳'));
-  assert.doesNotMatch(h.container.textContent,/正反/);
+  assert.ok([...h.container.querySelectorAll('.nw-tone-tag')].some(node=>node.textContent==='正反並陳'));
+  assert.doesNotMatch(h.container.textContent,/正負並陳/);
 });
 
 function responsiveSetup(t) {
@@ -5078,7 +5078,7 @@ function outletToneFixture() {
 test('R32 outlet tone rows conserve judged counts, pending and proportions; every outlet click matches reports',t=>{
   const h=setup(t),body=outletToneFixture();h.message(body);focusTopicButtons(h)[0].click();
   const section=h.container.querySelector('.nw-topic-sources'),more=section.querySelector('.nw-outlet-more');
-  assert.equal(section.querySelector('h3').textContent,'各家基調對照（則）');
+  assert.equal(section.querySelector('h3').textContent,'各家報導語氣（則）');
   assert.equal(more.textContent,'另 2 家（共 7 家）');assert.equal(more.getAttribute('aria-expanded'),'false');
   assert.equal(h.window.document.getElementById(more.getAttribute('aria-controls')).hidden,true);
   more.click();assert.equal(more.getAttribute('aria-expanded'),'true');
@@ -5107,11 +5107,11 @@ test('R32 focus and outlet bars/legends share fixed order and palette even when 
   const ids=['negative','neutral','mixed','positive'];
   assert.deepEqual([...h.container.querySelectorAll('.nw-tone-bar .nw-segment')].map(n=>n.className.split('nw-tone-')[1]),ids);
   assert.deepEqual([...h.container.querySelectorAll('.nw-tone-button')].map(n=>n.dataset.toneKey.split(':')[1]),ids);
-  assert.deepEqual([...h.container.querySelectorAll('.nw-outlet-legend-item')].map(n=>n.textContent),['負面','中性','正負並陳','正面']);
+  assert.deepEqual([...h.container.querySelectorAll('.nw-outlet-legend-item')].map(n=>n.textContent),['負面','中性','正反並陳','正面']);
   for(const swatch of h.container.querySelectorAll('.nw-tone-swatch'))assert.equal(swatch.getAttribute('aria-hidden'),'true');
   const fresh=structuredClone(body);fresh.items=fresh.items.map(i=>({...i,tone:{bad:true}}));fresh.topics.list[0].tone={negative:0,neutral:0,mixed:0,positive:0};h.message(fresh);
   assert.equal(h.container.querySelectorAll('.nw-outlet-tone').length,0);
-  assert.ok([...h.container.querySelectorAll('.nw-outlet-bar')].every(n=>n.hidden));
+  assert.ok([...h.container.querySelectorAll('.nw-outlet-bar')].every(n=>!n.hidden && n.childElementCount===0));
   assert.equal(h.container.querySelector('.nw-outlet-pending').textContent,'待判定 10');
 });
 
@@ -5158,5 +5158,50 @@ test('R33 tone explanations quote criteria and mixed event tags expose report co
   for(const node of [h.container.querySelector('.nw-topic-sources h3'),h.container.querySelector('.nw-tone-labels')])
     assert.match(node.title,/正面＝強調成果、進展、合作或利多；負面＝強調分歧、受挫、風險、抗議或批評/);
   assert.match(h.container.querySelector('.nw-topic-sources h3').title,/非媒體立場/);
-  assert.equal(mainRows(h)[0].querySelector('.nw-tone-composition').textContent,'負 8・中 8・正負 8・正 8');
+  assert.equal(mainRows(h)[0].querySelector('.nw-tone-composition').textContent,'負 8・中 8・兩面 8・正 8');
+});
+
+test('R34 outlet tone wording and small samples use judged reports, preserve proportions and update at five', t => {
+  const h=setup(t),body=outletToneFixture();h.message(body);focusTopicButtons(h)[0].click();
+  const section=h.container.querySelector('.nw-topic-sources');
+  assert.equal(section.querySelector('h3').textContent,'各家報導語氣（則）');
+  assert.equal(section.querySelector('.nw-outlet-explanation').textContent,'依每則標題與摘要判讀對此事件的語氣（AI 判定），不代表媒體整體立場');
+  const row=()=>[...section.querySelectorAll('.nw-outlet-row')].find(n=>n.querySelector('button').dataset.outlet==='公視');
+  assert.equal(row().querySelector('button').textContent,'公視 5');
+  assert.equal(row().querySelector('.nw-outlet-small').textContent,'樣本少');
+  assert.match(row().getAttribute('aria-label'),/樣本少/);
+  assert.equal(h.window.document.getElementById(row().querySelector('button').getAttribute('aria-describedby')).textContent,'樣本少');
+  assert.ok(row().querySelector('.nw-outlet-bar').classList.contains('nw-small-sample'));
+  assert.deepEqual([...row().querySelectorAll('.nw-segment')].map(n=>n.style.width),['25%','25%','25%','25%']);
+  assert.equal(row().querySelector('[data-tone="mixed"]').textContent,'兩面 1');
+  assert.equal(row().querySelector('[data-tone="mixed"]').title,'正反並陳 1 則報導');
+  body.items=body.items.map(i=>i.source==='公視'&&!i.tone?{...i,tone:'positive'}:i);h.message(body);
+  assert.equal(row().querySelector('.nw-outlet-small'),null);
+  assert.equal(row().querySelector('button').hasAttribute('aria-describedby'),false);
+  assert.doesNotMatch(row().getAttribute('aria-label'),/樣本少/);
+  assert.equal(row().querySelector('.nw-outlet-bar').classList.contains('nw-small-sample'),false);
+  assert.deepEqual([...row().querySelectorAll('.nw-segment')].map(n=>n.style.width),['20%','20%','20%','40%']);
+  const css=h.container.querySelector('style').textContent;
+  assert.match(css,/\.nw \.nw-outlet-bar\.nw-small-sample \{ opacity: \.45; \}/);
+});
+
+
+test('R34 all-pending outlets retain an empty bar cell before the pending numbers in both layouts', t => {
+  const h=setup(t),body=outletToneFixture();
+  body.items=body.items.map(item=>({...item,tone:null}));
+  h.message(body);focusTopicButtons(h)[0].click();
+  const root=h.container.querySelector('.nw');
+  for(const narrow of [false,true]) {
+    root.classList.toggle('nw-narrow',narrow);
+    for(const row of h.container.querySelectorAll('.nw-outlet-row')) {
+      const [button,bar,values]=row.children;
+      assert.ok(button.matches('.nw-outlet'));assert.ok(bar.matches('.nw-outlet-bar'));
+      assert.equal(bar.hidden,false);assert.equal(bar.style.display,'');
+      assert.equal(bar.childElementCount,0);assert.equal(bar.getAttribute('aria-hidden'),'true');
+      assert.ok(values.matches('.nw-outlet-values'));
+      assert.equal(values.querySelector('.nw-outlet-pending').parentElement,values);
+      assert.match(values.textContent,/待判定 (5|10)/);
+    }
+  }
+  assert.match(h.container.querySelector('.nw-topic-sources h3').title,/各家則數只算該家符合目前篩選的報導，清單會保留整個事件，所以加總可能與目前顯示不同/);
 });

@@ -175,6 +175,8 @@ export const css = `
 .nw .nw-outlet-rows { display: grid; gap: 6px; }
 .nw .nw-outlet-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(36px, .6fr) minmax(0, 1.5fr); align-items: center; gap: 8px; }
 .nw .nw-outlet-bar { height: 6px; }
+.nw .nw-outlet-bar.nw-small-sample { opacity: .45; }
+.nw .nw-outlet-explanation { margin: 4px 0 8px; }
 .nw .nw-outlet-values, .nw .nw-outlet-legend { display: flex; flex-wrap: wrap; gap: 4px 8px; }
 .nw .nw-outlet-legend { margin-bottom: 8px; }
 .nw .nw-outlet-tone, .nw .nw-outlet-legend-item { white-space: nowrap; }
