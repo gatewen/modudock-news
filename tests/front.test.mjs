@@ -266,8 +266,8 @@ test('analysis panel appears only for finance or tech between toolbar and list',
   assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling, h.container.querySelector('.nw-list'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
-  assert.equal(panel(h).children.length, 6);
-  assert.equal(panel(h).querySelector('small').textContent, '同一事件多家報導只算一次。');
+  assert.equal(panel(h).children.length, 7);
+  assert.equal(panel(h).querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
 });
 
 test('panel counts scope, unknowns, pending and macro direction using validated analysis', t => {
@@ -291,15 +291,15 @@ test('panel counts scope, unknowns, pending and macro direction using validated 
     panel(h).querySelector('.nw-macro').textContent];
   assert.deepEqual(lines(), [
     '8 個事件（8 則報導），2 個來源', '待分析 2',
-    '正面 2、正反 1、無關 4、負面 1', '無關 1、未明 3',
-    '大盤／總經  2 個事件利多 0利空 1',
+    '偏多 2、多空互見 1、與股市無關 4、偏空 1', '與股市無關 1、未明 3',
+    '大盤方向：大盤／總經 2 個事件・利多 0・利空 1',
   ]);
   assert.deepEqual(themeButtons(h).map(rankLabel), ['記憶體 2', '光通訊 1', '能源 1']);
   choose(h, h.select, '甲');
   assert.equal(lines()[0], '7 個事件（7 則報導），1 個來源');
   assert.equal(lines()[1], '待分析 2');
-  assert.equal(lines()[2], '正面 1、正反 1、無關 4、負面 1');
-  assert.equal(lines()[3], '無關 1、未明 3');
+  assert.equal(lines()[2], '偏多 1、多空互見 1、與股市無關 4、偏空 1');
+  assert.equal(lines()[3], '與股市無關 1、未明 3');
   assert.equal(themeButton(h, 'optical'), undefined);
   h.message({...listing(items), classify: {enabled: false}});
   assert.equal(lines()[1], '待分析 0');
@@ -421,8 +421,8 @@ test('invalid analysis is entirely treated as missing and never coerces field ty
   assert.equal(h.container.querySelectorAll('li').length, bad.length);
   assert.ok([...h.container.querySelectorAll('li')].every(li => li.querySelector('.nw-category') === null && !li.querySelector('.nw-tag')));
   assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'),
-    `正面 0、正反 0、無關 ${bad.length}、負面 0`);
-  assert.equal(panel(h).querySelector('.nw-market').title, `無關 0、未明 ${bad.length}`);
+    `偏多 0、多空互見 0、與股市無關 ${bad.length}、偏空 0`);
+  assert.equal(panel(h).querySelector('.nw-market').title, `與股市無關 0、未明 ${bad.length}`);
   assert.equal(themeButtons(h).length, 0);
   for (const dir_p of [0, 1]) {
     h.message(listing([financeArticle({analysis: analysis({dir_p})})]));
@@ -524,7 +524,7 @@ test('market bar has four ordered proportional segments, complete accessible cou
   const bar = panel(h).querySelector('.nw-market-bar');
   assert.equal(bar.getAttribute('role'), 'img');
   assert.equal(bar.dataset.empty, 'true');
-  assert.equal(bar.getAttribute('aria-label'), '正面 0、正反 0、無關 0、負面 0');
+  assert.equal(bar.getAttribute('aria-label'), '偏多 0、多空互見 0、與股市無關 0、偏空 0');
   const parts = [...bar.children];
   assert.equal(parts.length, 4);
   assert.deepEqual(parts.map(part => part.style.width), ['0%', '0%', '0%', '0%']);
@@ -533,7 +533,7 @@ test('market bar has four ordered proportional segments, complete accessible cou
   h.message(listing(['positive', 'positive', 'mixed', 'not_market', 'other', null, 'negative', 'negative']
     .map(market => financeArticle({analysis: market ? analysis({market}) : null}))));
   assert.equal(bar.dataset.empty, 'false');
-  assert.equal(bar.getAttribute('aria-label'), '正面 2、正反 1、無關 3、負面 2');
+  assert.equal(bar.getAttribute('aria-label'), '偏多 2、多空互見 1、與股市無關 3、偏空 2');
   assert.deepEqual(parts.map(part => part.style.width), ['25%', '12.5%', '37.5%', '25%']);
   assert.deepEqual([...panel(h).querySelectorAll('.nw-value')].map(value => value.textContent), ['2', '1', '3', '2']);
   h.message(listing([financeArticle()]));
@@ -789,13 +789,13 @@ test('panel counts events and takes earliest valid analysis while retaining repo
   assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（10 則報導），2 個來源');
   assert.equal(panel(h).querySelector('.nw-pending').textContent, '待分析 1');
   assert.equal(panel(h).querySelector('.nw-warning').hidden, false); // 10 reports but only 3 events.
-  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '正面 0、正反 1、無關 1、負面 1');
-  assert.equal(panel(h).querySelector('.nw-macro').textContent, '大盤／總經  1 個事件利多 1利空 0');
+  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '偏多 0、多空互見 1、與股市無關 1、偏空 1');
+  assert.equal(panel(h).querySelector('.nw-macro').textContent, '大盤方向：大盤／總經 1 個事件・利多 1・利空 0');
   assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
   assert.equal(panel(h).querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
   choose(h, h.select, '甲');
   assert.equal(panel(h).querySelector('.nw-sample-count').textContent, '3 個事件（9 則報導），1 個來源');
-  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '正面 1、正反 1、無關 1、負面 0');
+  assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '偏多 1、多空互見 1、與股市無關 1、偏空 0');
   assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
 });
 
@@ -901,7 +901,7 @@ test('world panel replaces finance panel only for world and restores finance pre
   assert.equal(surface.previousElementSibling.previousElementSibling.className, 'nw-toolbar');
   assert.equal(surface.querySelector('.nw-heading').textContent, '局勢走向');
   assert.equal(surface.querySelector('.nw-macro').hidden, true);
-  assert.equal(surface.querySelector('.nw-ranking-heading').textContent, '地區（點選篩選）');
+  assert.equal(surface.querySelector('.nw-ranking-heading').textContent, '地區升級・緩和・無方向');
   assert.equal(surface.querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
   choose(h, h.categories, 'finance');
   assert.equal(panel(h), surface);
@@ -1702,11 +1702,11 @@ test('history bins are left inclusive, exclude next boundary and include final e
   items.push(timedArticle(0), timedArticle(-24 - 1 / 3600000), timedArticle(1 / 3600000));
   h.message(historyList(items));
   choose(h, h.categories, 'finance');
-  assert.deepEqual(historyResults(h), ['正面 100%', '正面 0%', '正面 100%', '正面 17%']);
+  assert.deepEqual(historyResults(h), ['偏多 100%', '偏多 0%', '偏多 100%', '偏多 17%']);
   const rows = historyRows(h);
   assert.deepEqual(rows.map(row => row.getAttribute('aria-label').match(/樣本 (\d+)/)[1]), ['5', '5', '5', '6']);
   assert.equal(rows[0].getAttribute('role'), 'group');
-  assert.equal(rows[0].getAttribute('aria-label'), `${hhmm(historyEnd - 24 * 3600000)}–${hhmm(historyEnd - 18 * 3600000)}，正面 100%，樣本 5 個事件`);
+  assert.equal(rows[0].getAttribute('aria-label'), `${hhmm(historyEnd - 24 * 3600000)}–${hhmm(historyEnd - 18 * 3600000)}，偏多 100%，樣本 5 個事件`);
   assert.equal(rows[3].querySelector('.nw-history-long').textContent, `${hhmm(historyEnd - 6 * 3600000)}–現在`);
   assert.equal(rows[0].querySelector('.nw-history-short').textContent,
     `${hhmm(historyEnd - 24 * 3600000).slice(0,2)}–${hhmm(historyEnd - 18 * 3600000).slice(0,2)}`);
@@ -1734,7 +1734,7 @@ test('history requires five analyzed events and reports dash for no directional 
     timedArticle(-2, {published:'bad'}), timedArticle(-2, {published:{}}),
   ]));
   choose(h, h.categories, 'finance');
-  assert.deepEqual(historyResults(h), ['樣本不足', '—', '正面 2/4', '樣本不足']);
+  assert.deepEqual(historyResults(h), ['樣本不足', '—', '偏多 2/4', '樣本不足']);
   const rows = historyRows(h);
   assert.equal(rows[0].querySelector('.nw-history-bar').dataset.empty, 'true');
   assert.equal(rows[0].querySelector('.nw-history-bar').childElementCount, 0);
@@ -1757,7 +1757,7 @@ test('history deduplicates using representative time and first valid analysis, r
   h.message(body);
   choose(h, h.categories, 'finance');
   choose(h, h.select, '甲');
-  assert.deepEqual(historyResults(h), ['正面 80%', '樣本不足', '樣本不足', '正面 100%']);
+  assert.deepEqual(historyResults(h), ['偏多 80%', '樣本不足', '樣本不足', '偏多 100%']);
   const before = h.container.querySelector('.nw-history').textContent;
   themeButton(h, 'memory').click();
   assert.equal(h.container.querySelector('.nw-history').textContent, before);
@@ -1788,7 +1788,7 @@ test('history falls back to current time for missing or invalid at and stays fix
   for (const at of [undefined, null, {}, 'bad']) {
     h.message({...listing(items), at});
     choose(h, h.categories, 'finance');
-    assert.equal(historyResults(h)[3], '正面 100%');
+    assert.equal(historyResults(h)[3], '偏多 100%');
   }
   const before = h.container.querySelector('.nw-history').textContent;
   t.mock.timers.tick(7 * 3600000);
@@ -2104,7 +2104,7 @@ test('text buttons use visible names and external descriptions survive redraws a
     }
     const ids=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
     assert.equal(new Set(ids).size,ids.length);
-    assert.equal(ids.length,h.container.querySelectorAll('button[aria-describedby], select[aria-describedby]').length);
+    assert.equal(ids.length,h.container.querySelectorAll('[aria-describedby]').length);
   };
   h.message(listing(reports));
   assert.equal(described(h,focusButtons(h)[0]),'展開同事件的其他報導');
@@ -3336,7 +3336,7 @@ for (const category of ['finance','tech','world']) for (const source of ['', '�
 test('count selection replaces theme, preserves whole contributing events, and theme replaces count', t => {
   const h=setup(t); h.message(listing(countFixture('finance'))); choose(h,h.categories,'finance');
   themeButton(h,'memory').click();
-  assert.equal(countButton(h,'signal:0').textContent.trim(),'3 正面');
+  assert.equal(countButton(h,'signal:0').textContent.trim(),'3 偏多');
   countButton(h,'signal:0').click();
   assert.equal(themeButton(h,'memory').getAttribute('aria-pressed'),'false');
   assert.equal(mainRows(h).length,3);
@@ -3363,11 +3363,11 @@ for(const exit of ['clear','disappear','same-topic']) test(`count inside topic p
   focusTopicButtons(h)[0].click();
   // R6: a real category change now keeps the topic scope and reveals its panel.
   choose(h,h.categories,'finance');
-  assert.equal(countButton(h,'signal:0').textContent.trim(),'3 正面');
+  assert.equal(countButton(h,'signal:0').textContent.trim(),'3 偏多');
   countButton(h,'signal:0').click();
   assert.equal(mainRows(h).length,3);
   assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'),'false');
-  assert.equal(h.container.querySelector('.nw-filter > span').textContent,'已篩選：話題內・正面');
+  assert.equal(h.container.querySelector('.nw-filter > span').textContent,'已篩選：話題內・偏多');
   h.message(body); assert.equal(mainRows(h).length,3);
   if(exit==='clear') h.container.querySelector('.nw-filter button').click();
   if(exit==='disappear') h.message({...body,topics:{list:[]}});
@@ -3420,7 +3420,7 @@ test('count controls allow native keyboard activation and update membership afte
   const next={...body,items:body.items.map(item=>item.event==='888888888888'
     ? {...item,analysis:analysis({market:'negative'})}:item)};
   h.message(next);
-  assert.equal(countButton(h,'signal:0').textContent.trim(),'2 正面');
+  assert.equal(countButton(h,'signal:0').textContent.trim(),'2 偏多');
   assert.equal(mainRows(h).length,2);
   choose(h,h.select,'乙');
   assert.equal(mainRows(h).length,2);
@@ -3676,7 +3676,7 @@ test('R6 topic category count theme path is reachable via UI and returns origina
   focusTopicButtons(h)[0].click(); choose(h,h.categories,'finance');
   assert.equal(panel(h).hidden,false);
   assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'),'true');
-  assert.equal(countButton(h,'signal:0').textContent.trim(),'2 正面');
+  assert.equal(countButton(h,'signal:0').textContent.trim(),'2 偏多');
   countButton(h,'signal:0').click(); assert.equal(mainRows(h).length,2);
   h.container.querySelector('[data-topic="energy"]').click();
   assert.deepEqual(mainTitles(h),['t2']);
@@ -3794,4 +3794,73 @@ test('R7 search hides only a matching latest preview and recomputes it on cached
   search(h,'摘要'); assert.equal(eventLatest(h).hidden,true); // Summary matches the latest too.
   h.message({...listing(reports),at:'2026-09-26T00:00:00Z'}); assert.equal(eventLatest(h).hidden,true);
   search(h,''); assert.equal(eventLatest(h).hidden,false);
+});
+
+for (const [category,name,report] of [['finance','財經',financeArticle()],['tech','科技',financeArticle({category:'tech'})],
+  ['world','國際',worldArticle()],['politics','政治',article({category:'politics',analysis:{kind:'politics',issue:'budget'}})]]) {
+  test(`R8 search scope hint updates without changing panel counts: ${category}`, t => {
+    const h=setup(t); const body=listing([report,{...report,link:'https://e.test/other',title:'another'}]);
+    h.message(body); choose(h,h.categories,category);
+    const p=h.container.querySelector('.nw-panel'), hint=p.querySelector('.nw-search-scope');
+    const before=p.querySelector('.nw-sample-count').textContent;
+    assert.equal(hint.hidden,true);
+    search(h,'nothing'); assert.equal(mainRows(h).length,0);
+    assert.equal(hint.hidden,false); assert.equal(hint.textContent,`統計為全部${name}，未套用搜尋`);
+    assert.equal(hint.nextElementSibling.className,'nw-sample');
+    assert.equal(p.querySelector('.nw-sample-count').textContent,before);
+    h.message(body); assert.equal(hint.hidden,false);
+    h.message({...body,at:'2026-09-26T01:00:00Z'}); assert.equal(hint.hidden,false);
+    search(h,''); assert.equal(hint.hidden,true);
+    p.querySelector('[data-topic]').click(); assert.equal(hint.hidden,true);
+  });
+}
+
+test('R8 finance labels and macro controls explain news impact while report tone stays unchanged', t => {
+  const h=setup(t), topic=topicRecord({count:10,tone:{positive:2,negative:1,mixed:1,neutral:1}});
+  h.message(topicListing(countFixture('finance').map(i=>({...i,topic:topic.id,tone:'positive'})),[topic]));
+  choose(h,h.categories,'finance');
+  const p=panel(h), expected=['偏多','多空互見','與股市無關','偏空'];
+  assert.equal(p.querySelector('.nw-signal-heading small').textContent,'依新聞內容判斷對股市的影響，非行情');
+  for (let i=0;i<4;i++) {
+    const button=countButton(h,`signal:${i}`);
+    assert.ok(button.textContent.endsWith(expected[i])); assert.equal(button.hasAttribute('aria-label'),false);
+    button.click(); assert.equal(h.container.querySelector('.nw-filter > span').textContent,`已篩選：${expected[i]}`);
+  }
+  assert.doesNotMatch(p.querySelector('.nw-market-bar').getAttribute('aria-label'),/正面|負面|正反/);
+  assert.match(p.querySelector('.nw-market').title,/與股市無關/);
+  assert.equal(p.querySelector('.nw-macro').textContent,'大盤方向：大盤／總經 4 個事件・利多 1・利空 1');
+  for(const id of ['macro:all','macro:bull','macro:bear']) {
+    const button=countButton(h,id); assert.equal(button.hasAttribute('aria-label'),false);
+    button.click(); assert.equal(countButton(h,id).getAttribute('aria-pressed'),'true');
+  }
+  assert.match(focusArea(h).querySelector('.nw-tone').textContent,/正面/);
+  assert.match(focusArea(h).querySelector('.nw-tone').textContent,/負面/);
+});
+
+test('R8 row theme keeps visible label and has safe directional or neutral descriptions', t => {
+  const h=setup(t);
+  h.message(listing([financeArticle({analysis:analysis({theme:'macro',dir:'bear'})}),
+    financeArticle({link:'https://e.test/2',analysis:analysis({theme:'foundry'})}),
+    financeArticle({link:'https://e.test/3',analysis:analysis({dir:'neutral'})}),
+    financeArticle({link:'https://e.test/4',analysis:analysis({dir:'bear',dir_p:.59})})]));
+  const tags=mainRows(h).map(row=>row.querySelector('.nw-tag'));
+  assert.deepEqual(tags.map(n=>n.textContent),['大盤 ▼','晶圓代工 ▲','記憶體','記憶體']);
+  const expected=['這則新聞對大盤偏空（依新聞內容判斷，非行情）','這則新聞對晶圓代工偏多（依新聞內容判斷，非行情）',
+    '題材：記憶體','題材：記憶體'];
+  tags.forEach((tag,i)=>{assert.equal(tag.title,expected[i]); assert.equal(described(h,tag),expected[i]);
+    assert.equal(tag.contains(h.window.document.getElementById(tag.getAttribute('aria-describedby'))),false);});
+});
+
+test('R8 theme legends switch semantic labels and color tokens; politics has no direction legend', t => {
+  const h=setup(t); h.message(listing([financeArticle(),worldArticle(),article({category:'politics',analysis:{kind:'politics',issue:'budget'}})]));
+  const p=h.container.querySelector('.nw-panel'), legend=p.querySelector('.nw-ranking-legend');
+  choose(h,h.categories,'finance');
+  assert.equal(legend.textContent,'紅＝偏多・綠＝偏空・灰＝無方向');
+  assert.deepEqual([...legend.querySelectorAll('.nw-dot')].map(n=>n.className),['nw-dot nw-bull','nw-dot nw-bear','nw-dot nw-idle']);
+  choose(h,h.categories,'world');
+  assert.equal(legend.textContent,'升級・緩和・無方向');
+  assert.deepEqual([...legend.querySelectorAll('.nw-dot')].map(n=>n.className),['nw-dot nw-escalation','nw-dot nw-deescalation','nw-dot nw-idle']);
+  assert.equal(p.querySelector('.nw-signal-heading small').hidden,true);
+  choose(h,h.categories,'politics'); assert.equal(legend.hidden,true); assert.equal(legend.textContent,'');
+  choose(h,h.categories,'finance'); assert.equal(legend.hidden,false);
 });

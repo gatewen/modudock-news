@@ -5,6 +5,7 @@ import {
   financial, validAnalysis, topicOf, arrow, eventId, searchText,
 } from "./labels.js";
 
+const financeParts = [["positive", "偏多"], ["mixed", "多空互見"], ["idle", "與股市無關"], ["negative", "偏空"]];
 let focusHeadingId = 0;
 let descriptionId = 0;
 let summaryId = 0;
@@ -162,6 +163,8 @@ export default function mount(ctx) {
   focus.append(focusHeader, focusList);
   panel.setAttribute("aria-label", "財經分析");
   panel.hidden = true;
+  const searchScope = make("p", "nw-hint nw-search-scope");
+  searchScope.hidden = true;
   const sample = make("p", "nw-sample");
   const sampleCount = make("span", "nw-sample-count");
   const pendingCount = make("span", "nw-pending");
@@ -173,7 +176,7 @@ export default function mount(ctx) {
   const marketBar = make("div", "nw-bar nw-market-bar");
   marketBar.setAttribute("role", "img");
   const legend = make("div", "nw-legend");
-  const marketParts = [ ["positive", "正面"], ["mixed", "正反"], ["idle", "無關"], ["negative", "負面"] ].map(([id, name]) => {
+  const marketParts = financeParts.map(([id, name]) => {
     const segment = make("span", `nw-segment nw-${id}`);
     segment.setAttribute("aria-hidden", "true");
     marketBar.append(segment);
@@ -188,7 +191,10 @@ export default function mount(ctx) {
     return {segment, value, name, dot, label, entry};
   });
   const signalHeading = make("h3", "nw-heading", "股市訊號");
-  market.append(signalHeading, marketBar, legend);
+  const signalNote = make("small", "nw-hint", "依新聞內容判斷對股市的影響，非行情");
+  const signalHeader = make("div", "nw-signal-heading");
+  signalHeader.append(signalHeading, signalNote);
+  market.append(signalHeader, marketBar, legend);
   const history = make("section", "nw-history");
   let historyOpen = loadState("history") === true;
   const historyToggle = make("button", "nw-heading nw-history-toggle", "近 24 小時變化");
@@ -201,12 +207,13 @@ export default function mount(ctx) {
   const rankingSection = make("div", "");
   const rankingHeading = make("div", "nw-ranking-heading");
   const rankingTitle = make("span", "", "題材");
-  rankingHeading.append(rankingTitle, make("span", "nw-hint", "（點選篩選）"));
+  const rankingLegend = make("span", "nw-hint nw-ranking-legend");
+  rankingHeading.append(rankingTitle, rankingLegend);
   const ranking = make("div", "nw-ranking");
   ranking.setAttribute("aria-label", "題材排行");
   rankingSection.append(rankingHeading, ranking);
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
-  panel.append(sample, market, history, macro, rankingSection, note);
+  panel.append(searchScope, sample, market, history, macro, rankingSection, note);
   toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, searchToggle, status, searchBox, watchSettings);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
@@ -562,7 +569,7 @@ export default function mount(ctx) {
       const denominator = total - values[world ? 3 : 2];
       const insufficient = bucket.valid < 5;
       // A percentage over a tiny denominator overstates certainty; show the count instead.
-      const name = world ? "升級" : "正面";
+      const name = world ? "升級" : "偏多";
       const result = insufficient ? "樣本不足" : !denominator ? "—"
         : denominator < 5 ? `${name} ${values[0]}/${denominator}`
         : `${name} ${Math.round(values[0] / denominator * 100)}%`;
@@ -598,7 +605,7 @@ export default function mount(ctx) {
   }
   function countLabel(id) {
     if (id.startsWith("signal:")) return (categories.value === "world"
-      ? ["升級", "僵持", "緩和", "無關"] : ["正面", "正反", "無關", "負面"])[Number(id.slice(7))];
+      ? ["升級", "僵持", "緩和", "無關"] : financeParts.map(([, name]) => name))[Number(id.slice(7))];
     return {"macro:all": "大盤／總經", "macro:bull": "大盤／總經 利多", "macro:bear": "大盤／總經 利空"}[id];
   }
   function onCount(event) {
@@ -654,6 +661,21 @@ export default function mount(ctx) {
     panel.hidden ||= onlyWatched;
     if (panel.hidden) return;
     signalHeading.textContent = world ? "局勢走向" : "股市訊號";
+    signalNote.hidden = world || politics;
+    rankingLegend.hidden = politics;
+    rankingLegend.replaceChildren();
+    if (!politics) {
+      const entries = world ? [["escalation", "升級"], ["deescalation", "緩和"], ["idle", "無方向"]]
+        : [["bull", "紅＝偏多"], ["bear", "綠＝偏空"], ["idle", "灰＝無方向"]];
+      entries.forEach(([id, label], index) => {
+        if (index) rankingLegend.append(document.createTextNode("・"));
+        const entry = make("span", "nw-ranking-key");
+        const dot = make("span", `nw-dot nw-${id}`);
+        dot.setAttribute("aria-hidden", "true");
+        entry.append(dot, document.createTextNode(label));
+        rankingLegend.append(entry);
+      });
+    }
     rankingTitle.textContent = politics ? "議題" : world ? "地區" : "題材";
     ranking.setAttribute("aria-label", politics ? "議題排行" : world ? "地區排行" : "題材排行");
     macro.hidden = world || politics;
@@ -661,7 +683,7 @@ export default function mount(ctx) {
     history.hidden = politics;
     const names = politics ? issueTopics : world ? regionTopics : themeNames;
     const parts = world ? [["escalation", "升級"], ["mixed", "僵持"], ["deescalation", "緩和"], ["idle", "無關"]]
-      : [["positive", "正面"], ["mixed", "正反"], ["idle", "無關"], ["negative", "負面"]];
+      : financeParts;
     marketParts.forEach((part, i) => {
       part.name = parts[i][1];
       part.label.textContent = part.name;
@@ -697,7 +719,7 @@ export default function mount(ctx) {
     const values = marketParts.map((_, i) => groups.filter(group => contributes(group, `signal:${i}`)).length);
     marketBar.dataset.empty = String(groups.length === 0);
     marketBar.setAttribute("aria-label", marketParts.map((part, i) => `${part.name} ${values[i]}`).join("、"));
-    market.title = `無關 ${world ? counts.not_conflict : counts.not_market}、未明 ${counts.other}`;
+    market.title = `${world ? "無關" : "與股市無關"} ${world ? counts.not_conflict : counts.not_market}、未明 ${counts.other}`;
     marketParts.forEach((part, i) => {
       part.segment.style.width = `${groups.length ? values[i] / groups.length * 100 : 0}%`;
       part.value.textContent = String(values[i]);
@@ -707,13 +729,14 @@ export default function mount(ctx) {
     const total = {count: groups.filter(group => contributes(group, "macro:all")).length,
       bull: groups.filter(group => contributes(group, "macro:bull")).length,
       bear: groups.filter(group => contributes(group, "macro:bear")).length};
-    macro.replaceChildren();
+    macro.replaceChildren(document.createTextNode("大盤方向："));
     for (const [id, label, value, className] of [["macro:all", "大盤／總經", total.count, ""],
       ["macro:bull", "利多", total.bull, "nw-up"], ["macro:bear", "利空", total.bear, "nw-down"]]) {
-      const button = make("button", className, `${label}${id === "macro:all" ? "  " : " "}${value}${id === "macro:all" ? " 個事件" : ""}`);
+      const button = make("button", className, `${label} ${value}${id === "macro:all" ? " 個事件" : ""}`);
       button.type = "button";
       button.dataset.count = id;
       button.setAttribute("aria-pressed", String(selectedCount?.id === id));
+      if (id !== "macro:all") macro.append(document.createTextNode("・"));
       macro.append(button);
     }
     // Stable sorting preserves the fixed table order for equal counts.
@@ -900,6 +923,9 @@ export default function mount(ctx) {
   }
   function drawItems(keepFocus = true, searchOnly = false) {
     if (!searchOnly) searchRows.clear();
+    const searching = Boolean(searchText(searchInput.value).trim());
+    searchScope.hidden = !searching;
+    searchScope.textContent = searching ? `統計為全部${categoryNames.get(categories.value) || "類別"}，未套用搜尋` : "";
     sourceDescription.textContent = [...sources.options].find(option => option.value === sources.value)?.title || "";
     const focusWasInside = keepFocus && root.contains(document.activeElement);
     const focused = keepFocus ? focusIdentity(document.activeElement) : null;
@@ -995,6 +1021,7 @@ export default function mount(ctx) {
       const category = text(item.category);
       const analysis = validAnalysis(item);
       const row = make("li", "nw-row");
+      const tagDescriptions = document.createDocumentFragment();
       if (group.id) row.dataset.event = group.id;
       const meta = make("div", "nw-meta");
       const info = make("div", "nw-info");
@@ -1014,8 +1041,13 @@ export default function mount(ctx) {
       } else if (analysis && analysis.theme !== "other") {
         const direction = arrow(analysis);
         const name = analysis.theme === "macro" ? "大盤" : themeNames.get(analysis.theme);
-        info.append(make("span", `nw-tag${direction === "▲" ? " nw-up" : direction === "▼" ? " nw-down" : ""}`,
-          name + (direction ? ` ${direction}` : "")));
+        const tag = make("span", `nw-tag${direction === "▲" ? " nw-up" : direction === "▼" ? " nw-down" : ""}`,
+          name + (direction ? ` ${direction}` : ""));
+        const description = direction ? `這則新聞對${name}${direction === "▲" ? "偏多" : "偏空"}（依新聞內容判斷，非行情）`
+          : `題材：${name}`;
+        tag.title = description;
+        describe(tag, description, tagDescriptions);
+        info.append(tag);
       }
       if (!categories.value) info.append(make("span", "nw-category", categoryNames.get(category) || "未分類"));
       info.append(make("span", "nw-source", text(item.source)), groupTime(group.reports));
@@ -1073,6 +1105,7 @@ export default function mount(ctx) {
         meta.after(paragraph);  // Below meta, so the toggle does not move when expanded.
       }
       if (actions.childElementCount) meta.append(actions);
+      row.append(tagDescriptions);
       searchRows.set(cacheKey, {row, markers, latest, latestLink, toggle: row.querySelector(".nw-expand"), reports: row.querySelector(".nw-reports")});
       rendered.append(row);
     }

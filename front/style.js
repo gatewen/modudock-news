@@ -104,6 +104,9 @@ export const css = `
 .nw .nw-macro { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 18px; }
 .nw .nw-up { color: var(--nw-up); }
 .nw .nw-down { color: var(--nw-down); }
+.nw .nw-signal-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.nw .nw-ranking-legend { display: inline-flex; flex-wrap: wrap; align-items: center; }
+.nw .nw-ranking-key { display: inline-flex; align-items: center; gap: 4px; }
 .nw .nw-ranking-heading { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .nw .nw-hint, .nw .nw-note { font-size: 12px; color: var(--nw-muted); }
 .nw .nw-ranking { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px 20px; }
