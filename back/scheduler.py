@@ -170,6 +170,7 @@ class Scheduler:
                                   for i in range(MODEL_WORKERS)] if self._classify_enabled() else [])
         self.results = deque()  # Producers wait at 32; no unbounded late results.
         self.caches = [Cache() for _ in feeds]
+        self.last_success = [None for _ in feeds]
         self.stopping = False
         self.active = False
         self.pending_refresh = False
@@ -210,7 +211,8 @@ class Scheduler:
         self.round_end = self.clock() + self.round_timeout
         self.pending = set(range(len(self.feeds)))
         self.deadlines = {}
-        self.status = [{"name": f["name"], "ok": False, "error": None, "count": 0} for f in self.feeds]
+        self.status = [{"name": f["name"], "ok": False, "error": None, "count": 0,
+                        "last_success": self.last_success[i]} for i, f in enumerate(self.feeds)]
         while True:
             try:
                 self.jobs.get_nowait()
@@ -721,7 +723,10 @@ class Scheduler:
             self.caches[i] = candidate.cache  # All three cache components together.
         elif candidate.clear_validators:
             self.caches[i] = Cache(self.caches[i].items, {}, self.caches[i].first_seen, self.caches[i].available)
-        self.status[i].update(ok=candidate.error is None, error=candidate.error)
+        if candidate.cache is not None and candidate.error is None:
+            self.last_success[i] = self.now().isoformat()
+        self.status[i].update(ok=candidate.error is None, error=candidate.error,
+                              last_success=self.last_success[i])
         self.pending.discard(i)
 
     def _send_list(self, packet, publish=False, fitted=False):

@@ -59,6 +59,7 @@ class EventSchedulerTests(unittest.TestCase):
         scheduler, sink, logs = self.create(lambda *_: Result('not_modified'), **(clients or {}), **options)
         if len({item['source'] for item in items}) > 1:
             scheduler.feeds = json.loads((Path(__file__).parents[1] / 'back/feeds.json').read_text())
+            scheduler.last_success = [None for _ in scheduler.feeds]
             scheduler.caches = [Cache([deepcopy(item) for item in items if item['source'] == feed['name']],
                                       available=True) for feed in scheduler.feeds]
         else:

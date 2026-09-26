@@ -221,12 +221,54 @@ class SchedulerTests(unittest.TestCase):
             self.assertEqual(scheduler.snapshot(), cache)
         self.assertEqual(validators, [{}, {"etag": "new"}, {"etag": "new"}, {"etag": "new"}])
 
+    def test_last_success_tracks_confirmation_not_news_age_and_survives_failures(self):
+        from datetime import datetime, timedelta, timezone
+        start = datetime(2026, 9, 26, 1, tzinfo=timezone.utc)
+        now = [start]
+        data = b'<rss><channel><item><title>old news</title><link>https://example.com/old</link><pubDate>Sat, 01 Jan 2000 00:00:00 GMT</pubDate></item></channel></rss>'
+        replies = iter([Result("ok", data, "https://example.com/feed"),
+                        Result("error", error="HTTP 503"), Result("error", error="HTTP 503"),
+                        Result("not_modified"), Result("error", error="HTTP 503")])
+        def fetch(source, _):
+            return next(replies) if source == "0" else Result("error", error="never succeeded")
+        scheduler, sink, _ = self.create(fetch, count=2, now=lambda:now[0])
+        scheduler.start()
+        expected = [start, start, start, start + timedelta(minutes=30), start + timedelta(minutes=30)]
+        original = None
+        for index, stamp in enumerate(expected):
+            if index:
+                now[0] = start + timedelta(minutes=10 * index)
+                scheduler.refresh()
+            body = self.round(sink)
+            source = body['sources'][0]
+            self.assertEqual(source['last_success'], stamp.isoformat())
+            self.assertEqual(source['ok'], index in (0,3))
+            self.assertIsNone(body['sources'][1]['last_success'])
+            self.assertFalse(body['sources'][1]['ok'])
+            self.assertTrue(body['items'][0]['published'].startswith('2000-01-01'))
+            if original is None: original = body['items']
+            self.assertEqual(body['items'], original)
+        self.assertEqual(scheduler.last_success, [expected[-1].isoformat(), None])
+
+    def test_stale_or_expired_candidates_cannot_advance_confirmation_time(self):
+        from back.scheduler import Candidate
+        tick = [0]
+        scheduler, _, _ = self.create(lambda *_: ok(), clock=lambda:tick[0])
+        with scheduler.cv:
+            scheduler._begin()
+            scheduler._accept(Candidate(scheduler.round_id - 1, 0, Cache(available=True)))
+            self.assertEqual(scheduler.last_success, [None])
+            tick[0] = 100
+            scheduler._accept(Candidate(scheduler.round_id, 0, Cache(available=True)))
+            self.assertEqual(scheduler.last_success, [None])
+
     def test_304_without_cache_clears_validators(self):
         scheduler, sink, _ = self.create(lambda *_: Result("not_modified"))
         scheduler.caches[0] = Cache(validators={"etag": "orphan"})
         scheduler.start()
         body = self.round(sink)
         self.assertEqual(body["sources"][0]["error"], "304 without cache")
+        self.assertIsNone(body["sources"][0]["last_success"])
         self.assertEqual(scheduler.snapshot()[0].validators, {})
 
     def test_fit_error_ends_round_and_next_refresh_survives(self):

@@ -89,6 +89,14 @@ class Scenario:
             records.append((i, title, ('甲', '乙', '丙')[i % 3]))
         if version:
             records.append((50 + version, '跨海和平峰會合作協議進展', '乙'))
+        if version == 3:
+            # A fresh candidate cannot inherit earlier event-match cache entries.
+            # Share a rare topic word, but keep bigram overlap below the event
+            # candidate threshold so the random pair answer cannot swallow it.
+            records.append((90, '跨海' + ''.join(chr(0x9000 + j) for j in range(20)), '甲'))
+            # Keep that feature below 10% even after refresh removes old fillers.
+            records.extend((i, ''.join(chr(0x7000 + i * 20 + j) for j in range(12)),
+                            ('甲', '乙', '丙')[i % 3]) for i in range(60, 80))
         self.rng.shuffle(records)
         return records
 
@@ -220,6 +228,10 @@ class Scenario:
             assert body['model'] == expected, body['model']
             assert all(body[name]['pending'] == 0 for name in ('classify', 'analysis', 'events', 'topics')), body
             assert body['topics']['tone_pending'] == 0, body['topics']
+            if not self.auth:
+                assert self.calls['topics'] > 0, 'clean round never exercised topics'
+                assert any(item['link'].endswith('/90') and item.get('topic')
+                           for item in body['items']), 'fresh topic candidate never joined'
             assert not self.duplicates, self.duplicates
             assert not self.active, self.active
             assert len(body['items']) == len(self.snapshots[3]), 'clean snapshot not emitted'

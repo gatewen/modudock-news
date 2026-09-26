@@ -2103,7 +2103,7 @@ test('text buttons use visible names and external descriptions survive redraws a
     }
     const ids=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
     assert.equal(new Set(ids).size,ids.length);
-    assert.equal(ids.length,h.container.querySelectorAll('button[aria-describedby]').length);
+    assert.equal(ids.length,h.container.querySelectorAll('button[aria-describedby], select[aria-describedby]').length);
   };
   h.message(listing(reports));
   assert.equal(described(h,focusButtons(h)[0]),'展開同事件的其他報導');
@@ -2117,7 +2117,8 @@ test('text buttons use visible names and external descriptions survive redraws a
   themeButton(h,'memory').click();
   assert.equal(h.container.querySelector('.nw-filter button').textContent,'清除篩選');
   scan();
-  const oldIds=[...h.container.querySelectorAll('.nw-sr')].map(node=>node.id);
+  // Button descriptions are rebuilt; the source select keeps one stable description.
+  const oldIds=[...h.container.querySelectorAll('button[aria-describedby]')].map(node=>node.getAttribute('aria-describedby'));
   h.message(body); scan();
   for (const id of oldIds) assert.equal(h.window.document.getElementById(id),null);
   choose(h,h.categories,'world');
@@ -3428,4 +3429,77 @@ test('count controls allow native keyboard activation and update membership afte
   assert.equal(h.categories.value,'');
   choose(h,h.categories,'finance');
   assert.equal(countButton(h,'signal:0').getAttribute('aria-pressed'),'false');
+});
+
+test('source confirmation success failure failure and 304 display freshness independently of article age', t => {
+  t.mock.timers.enable({apis:['Date'],now:new Date(2026,8,26,12)});
+  const h=setup(t), status=()=>h.container.querySelector('[role=status]');
+  const first='2026-09-26T01:00:00Z', confirmed='2026-09-26T01:30:00Z';
+  const hhmm=stamp=>{const d=new Date(stamp);return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;};
+  const old=article({published:'2000-01-01T00:00:00Z'});
+  for(const [index,ok,last_success] of [[0,true,first],[1,false,first],[2,false,first],[3,true,confirmed],[4,false,confirmed]]) {
+    h.message({...listing([old],[{name:'甲',count:1,ok,last_success,error:ok?null:'HTTP 503'},
+      {name:'乙',count:0,ok:false,last_success:null,error:'no data'}]),at:`2026-09-26T01:${String(index*10).padStart(2,'0')}:00Z`});
+    const option=[...h.select.options].find(o=>o.value==='甲');
+    assert.equal(option.textContent,`甲 1${ok?'':`（${hhmm(last_success)} 資料）`}`);
+    assert.equal(h.select.options[2].textContent,'乙 0（失敗）');
+    assert.match(status().textContent,/乙 失敗/);
+    if(ok) assert.doesNotMatch(status().textContent,/沿用舊資料/);
+    else {
+      assert.match(status().textContent,/1 個來源沿用舊資料/);
+      assert.match(status().title,/甲：沿用舊資料；最後成功確認：2026-09-26/);
+      assert.ok(status().title.includes(hhmm(last_success)));
+    }
+    choose(h,h.select,'甲');
+    const details=h.window.document.getElementById(h.select.getAttribute('aria-describedby'));
+    assert.equal(details.textContent,option.title);
+    assert.match(details.textContent,/最後成功確認：2026-09-26/);
+    assert.ok(details.textContent.includes(hhmm(last_success)));
+    assert.equal(mainRows(h).length,1);
+    choose(h,h.select,'乙'); assert.match(details.textContent,/失敗/);
+    choose(h,h.select,'');
+  }
+  h.message(listing([old],[{name:'甲',ok:true,count:1,last_success:confirmed}]));
+  assert.doesNotMatch(status().textContent,/失敗|沿用舊資料/);
+  assert.equal(status().title,'');
+});
+
+test('malformed confirmation times stay failures; stale source names remain text and descriptions are unique', t => {
+  const h=setup(t), other=setup(t), evil='<img src=x onerror=alert(1)>';
+  assert.notEqual(h.select.getAttribute('aria-describedby'),other.select.getAttribute('aria-describedby'));
+  for(const value of [null,{},[],123,'bad-date','']) {
+    h.message(listing([], [{name:'甲',ok:false,last_success:value}]));
+    assert.match(h.container.querySelector('[role=status]').textContent,/甲 失敗/);
+    assert.equal(h.select.options[1].textContent,'甲 0（失敗）');
+  }
+  h.message(listing([], [{name:evil,ok:false,last_success:'2026-09-25T23:59:59Z'},
+    {name:'乙',ok:false,last_success:'2026-09-25T23:58:00Z'}]));
+  assert.match(h.container.querySelector('[role=status]').textContent,/2 個來源沿用舊資料/);
+  assert.equal(h.container.querySelector('img'),null);
+  choose(h,h.select,evil);
+  const description=h.window.document.getElementById(h.select.getAttribute('aria-describedby'));
+  assert.ok(description.textContent.includes(evil));
+  h.handle.unmount(); assert.equal(description.isConnected,false);
+});
+
+
+test('source data note gains local M/D after midnight even on same-at replacement', t => {
+  t.mock.timers.enable({apis:['Date'],now:new Date(2026,8,25,23,50)});
+  const h=setup(t);
+  const stamp=new Date(2026,8,25,23,10).toISOString();
+  const body={...listing([article()],[{name:'甲',count:1,ok:false,last_success:stamp}]),at:stamp};
+  h.message(body);
+  const option=h.select.options[1];
+  assert.equal(option.textContent,'甲 1（23:10 資料）');
+  t.mock.timers.setTime(new Date(2026,8,26,0,1).getTime());
+  h.message(body);
+  assert.equal(h.select.options[1],option);
+  assert.equal(option.textContent,'甲 1（9/25 23:10 資料）');
+  assert.match(option.title,/2026-09-25 23:10:00/);
+  choose(h,h.select,'甲');
+  assert.equal(h.window.document.getElementById(h.select.getAttribute('aria-describedby')).textContent,option.title);
+  // Compare year too: the same month/day in another year is not today.
+  t.mock.timers.setTime(new Date(2027,8,25,23,50).getTime());
+  h.message(body);
+  assert.equal(option.textContent,'甲 1（9/25 23:10 資料）');
 });

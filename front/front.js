@@ -74,6 +74,9 @@ export default function mount(ctx) {
   all.value = "";
   all.textContent = "全部來源 0";
   sources.append(all);
+  const sourceDescription = make("span", "nw-sr");
+  sourceDescription.id = `nw-source-description-${++descriptionId}`;
+  sources.setAttribute("aria-describedby", sourceDescription.id);
   const categories = document.createElement("select");
   categories.setAttribute("aria-label", "新聞類別");
   for (const [id, name] of [["", "全部類別"], ...categoryNames]) {
@@ -183,7 +186,7 @@ export default function mount(ctx) {
   rankingSection.append(rankingHeading, ranking);
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(sample, market, history, macro, rankingSection, note);
-  toolbar.append(refresh, sources, categories, watchToggle, watchOnly, status, watchSettings);
+  toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, status, watchSettings);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
   root.append(toolbar, focus, panel, themeFilter, watchHint, list, empty);
@@ -219,6 +222,19 @@ export default function mount(ctx) {
   };
   const isMidnight = date => date.getHours() === 0 && date.getMinutes() === 0 && date.getSeconds() === 0;
   const isDateOnly = (item, date) => dateOnlySources.has(text(item.source)) && isMidnight(date);
+  function confirmedAt(source) {
+    if (typeof source?.last_success !== "string") return null;
+    const date = new Date(source.last_success);
+    return Number.isFinite(date.getTime()) ? date : null;
+  }
+  function sourceDetail(source) {
+    const date = confirmedAt(source);
+    const pad = n => String(n).padStart(2, "0");
+    const stamp = date ? `${date.getFullYear()}-${pad(date.getMonth()+1)}-${pad(date.getDate())} ${localTime(source.last_success)}:${pad(date.getSeconds())}（本地時間）` : "";
+    const state = source?.ok === false ? (date ? "沿用舊資料；" : "失敗") : "";
+    const error = source?.ok === false && typeof source.error === "string" ? `；${Array.from(source.error).slice(0,80).join("")}` : "";
+    return `${text(source?.name) || "未命名來源"}：${state}${date ? `最後成功確認：${stamp}` : ""}${error}`;
+  }
   function newsTime(item) {
     const value = localTime(item.published);
     const date = new Date(text(item.published));
@@ -837,6 +853,7 @@ export default function mount(ctx) {
     return Boolean(target) && !unavailableFocus();
   }
   function drawItems(keepFocus = true) {
+    sourceDescription.textContent = [...sources.options].find(option => option.value === sources.value)?.title || "";
     const focusWasInside = keepFocus && root.contains(document.activeElement);
     const focused = keepFocus ? focusIdentity(document.activeElement) : null;
     const sourceItems = items.filter(item => item && typeof item === "object"
@@ -1050,7 +1067,14 @@ export default function mount(ctx) {
       const option = options.get(name) || document.createElement("option");
       option.value = name;
       const count = Number.isSafeInteger(source.count) && source.count >= 0 ? source.count : 0;
-      const next = `${name} ${count}${source.ok === false ? "（失敗）" : ""}`;
+      const date = confirmedAt(source);
+      const today = new Date();
+      const sameDay = date && date.getFullYear() === today.getFullYear()
+        && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
+      const calendar = date && !sameDay ? `${date.getMonth()+1}/${date.getDate()} ` : "";
+      const suffix = source.ok === false ? (date ? `（${calendar}${localTime(source.last_success)} 資料）` : "（失敗）") : "";
+      const next = `${name} ${count}${suffix}`;
+      option.title = date || source.ok === false ? sourceDetail(source) : "";
       if (option.textContent !== next) option.textContent = next;
       const position = sources.options[names.size];
       if (position !== option) sources.insertBefore(option, position || null);
@@ -1084,10 +1108,15 @@ export default function mount(ctx) {
     const at = Date.parse(text(body.at));
     historyAt = Number.isFinite(at) ? at : Date.now();
     updatedText = updated ? `${updated} 更新` : "";
-    failedText = failed.length === 1 ? `${failureName(failed[0])} 失敗`
-      : failed.length > 1 ? `${failureName(failed[0])}等 ${failed.length} 個來源失敗` : "";
-    status.title = failed.map(source => `${failureName(source)}${typeof source.error === "string"
-      ? `：${Array.from(source.error).slice(0, 80).join("")}` : ""}`).join("\n");
+    const stale = failed.filter(source => confirmedAt(source));
+    const unavailable = failed.filter(source => !confirmedAt(source));
+    failedText = [stale.length ? `${stale.length} 個來源沿用舊資料` : "",
+      unavailable.length === 1 ? `${failureName(unavailable[0])} 失敗`
+        : unavailable.length > 1 ? `${failureName(unavailable[0])}等 ${unavailable.length} 個來源失敗` : ""]
+      .filter(Boolean).join(" · ");
+    status.title = failed.map(source => confirmedAt(source) ? sourceDetail(source)
+      : `${failureName(source)}${typeof source.error === "string" ? `：${Array.from(source.error).slice(0,80).join("")}` : ""}`).join("\n");
+    all.title = status.title;
     if (Array.isArray(offNotice)) status.title = [status.title, offNotice[1]].filter(Boolean).join("\n");
     if (lostTopic) returnToView(true);
     else drawItems();
