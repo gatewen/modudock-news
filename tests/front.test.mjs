@@ -268,7 +268,7 @@ test('analysis panel appears only for finance or tech between toolbar and list',
   assert.ok(h.container.querySelector('.nw-shortcut-help').nextElementSibling === h.container.querySelector('.nw-list'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
-  assert.equal(panel(h).children.length, 7);
+  assert.equal(panel(h).querySelector('.nw-panel-content').children.length, 7);
   assert.equal(panel(h).querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
 });
 
@@ -1309,7 +1309,7 @@ test('topic records require valid fields, take five valid unique entries, and fa
   assert.deepEqual(focusTopicButtons(h).map(b => b.dataset.topicId), good.slice(0,5).map(t => t.id));
   assert.equal(focusArea(h).querySelector('button[data-event]'), null);
   assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent, '看話題・3 家');
-  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-short').textContent, '3 家');
+  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-short').textContent, '看話題・3 家');
   h.message({...listing(reports), topics:{list:{}}});
   assert.equal(focusButtons(h)[0].dataset.event, '111111111111');
   h.message(topicListing([], invalid));
@@ -1524,7 +1524,7 @@ test('bad topic tone is ignored without losing the topic or interpreting hostile
 const watchKey = 'modudock.module.news.watch';
 const watchControls = h => ({input:h.container.querySelector('.nw-watch-input'),
   only:h.container.querySelector('.nw-watch-only'), settings:h.container.querySelector('.nw-watch-settings'),
-  toggle:h.categories.nextElementSibling,
+  toggle:h.container.querySelector('.nw-watch-toggle'),
   save:h.container.querySelector('.nw-watch-settings button')});
 function saveWatch(h, value, enter = false) {
   const controls = watchControls(h);
@@ -4748,4 +4748,53 @@ test('R23 mixed tone uses one display name in compact buttons, audit and report 
   focusTopicButtons(h)[0].click();
   assert.ok([...h.container.querySelectorAll('.nw-tone-tag')].some(node=>node.textContent==='正負並陳'));
   assert.doesNotMatch(h.container.textContent,/正反/);
+});
+
+function responsiveSetup(t) {
+  let callback, target, disconnected=false;
+  const h=setup(t,w=>{w.ResizeObserver=class {
+    constructor(fn){callback=fn;} observe(node){target=node;} disconnect(){disconnected=true;}
+  };});
+  return {...h, resize(width){callback([{target,contentRect:{width}}]);}, disconnected:()=>disconnected};
+}
+test('R24 panel uses module width, defaults closed and preserves only mounted disclosure across categories and resends',t=>{
+  const h=responsiveSetup(t),body=listing([financeArticle(),worldArticle(),article({category:'politics',analysis:{kind:'politics',issue:'other'}})]);
+  h.message(body);choose(h,h.categories,'finance');
+  const toggle=h.container.querySelector('.nw-panel-toggle'),content=h.container.querySelector('.nw-panel-content');
+  assert.equal(toggle.hidden,true);assert.equal(content.hidden,false);
+  h.window.innerWidth=1400;h.resize(480);
+  assert.equal(toggle.hidden,false);assert.equal(content.hidden,true);assert.equal(toggle.getAttribute('aria-expanded'),'false');
+  assert.match(toggle.textContent,/股市訊號：偏多 1・偏空 0/);
+  assert.equal(mainRows(h).length,1);
+  toggle.click();assert.equal(content.hidden,false);assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  h.message({...body,at:'2026-09-22T00:00:00Z'});assert.equal(content.hidden,false);
+  choose(h,h.categories,'world');assert.equal(content.hidden,false);assert.match(toggle.textContent,/局勢走向：升級/);
+  toggle.click();choose(h,h.categories,'politics');assert.equal(content.hidden,true);assert.match(toggle.textContent,/議題分布：1 個事件/);
+  h.resize(481);assert.equal(content.hidden,false);assert.equal(toggle.hidden,true);assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  h.resize(380);assert.equal(content.hidden,true);
+  const stored=[...Array(h.window.localStorage.length)].map((_,i)=>h.window.localStorage.key(i));
+  assert.ok(stored.every(key=>!key.includes('panel')));
+  h.handle.unmount();assert.equal(h.disconnected(),true);h.resize(600);toggle.click();assert.equal(content.hidden,true);
+  const next=responsiveSetup(t);next.message(body);choose(next,next.categories,'finance');next.resize(380);
+  assert.equal(next.container.querySelector('.nw-panel-content').hidden,true);
+});
+test('R24 summary updates incomplete analysis and resize never strands focus in collapsed content',t=>{
+  const h=responsiveSetup(t);h.message(listing([financeArticle({analysis:null})]));choose(h,h.categories,'finance');
+  const toggle=h.container.querySelector('.nw-panel-toggle');
+  countButton(h,'signal:0').focus();h.resize(380);assert.equal(h.window.document.activeElement,toggle);
+  assert.match(toggle.textContent,/已分析 0／1/);
+  h.message(listing([financeArticle()]));assert.doesNotMatch(toggle.textContent,/已分析/);
+  h.resize(800);assert.equal(h.window.document.activeElement,h.container.querySelector('.nw-list'));
+});
+test('R24 narrow CSS keeps select row, action row and two-column non-breaking signals',t=>{
+  const h=setup(t),css=h.container.querySelector('style').textContent;
+  assert.match(css,/@container \(max-width: 480px\)/);
+  assert.match(css,/\.nw \.nw-toolbar > select \{[^}]*order: -2;[^}]*50%/);
+  assert.match(css,/\.nw \.nw-toolbar-actions \{[^}]*order: -1;[^}]*flex-wrap: nowrap;[^}]*overflow-x: auto/);
+  assert.match(css,/\.nw \.nw-legend \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(css,/\.nw \.nw-legend-item \{ white-space: nowrap; word-break: keep-all;/);
+  h.message(auditFixture());
+  const button=focusTopicButtons(h)[0];
+  assert.equal(button.querySelector('.nw-focus-short').textContent,button.querySelector('.nw-focus-long').textContent);
+  assert.match(button.querySelector('.nw-focus-short').textContent,/看話題/);
 });

@@ -69,6 +69,7 @@ export default function mount(ctx) {
   const toolbar = make("div", "nw-toolbar");
   const refresh = document.createElement("button");
   refresh.type = "button";
+  refresh.className = "nw-refresh";
   refresh.textContent = "↻ 重新整理";
   refresh.disabled = true;
   const sources = document.createElement("select");
@@ -109,7 +110,7 @@ export default function mount(ctx) {
   searchHint.setAttribute("aria-live", "polite");
   searchBox.append(searchHint);
   searchHint.hidden = true;
-  const watchToggle = make("button", "", "追蹤關鍵字");
+  const watchToggle = make("button", "nw-watch-toggle", "追蹤關鍵字");
   watchToggle.type = "button";
   watchToggle.setAttribute("aria-expanded", "false");
   const watchSettings = make("div", "nw-watch-settings");
@@ -245,8 +246,18 @@ export default function mount(ctx) {
   ranking.setAttribute("aria-label", "題材排行");
   rankingSection.append(rankingHeading, ranking);
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
-  panel.append(searchScope, sample, market, history, macro, rankingSection, note);
-  toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, watchDescription, searchToggle, status, searchBox, watchSettings);
+  const panelToggle = make("button", "nw-panel-toggle");
+  panelToggle.type = "button";
+  panelToggle.hidden = true;
+  const panelContent = make("div", "nw-panel-content");
+  panelContent.id = `nw-panel-content-${focusHeadingId}`;
+  panelToggle.setAttribute("aria-controls", panelContent.id);
+  panelToggle.setAttribute("aria-expanded", "true");
+  panelContent.append(searchScope, sample, market, history, macro, rankingSection, note);
+  panel.append(panelToggle, panelContent);
+  const toolbarActions = make("div", "nw-toolbar-actions");
+  toolbarActions.append(refresh, watchToggle, watchOnly, searchToggle);
+  toolbar.append(toolbarActions, sources, sourceDescription, categories, watchDescription, status, searchBox, watchSettings);
   const overview = make("div", "nw-hint nw-overview");
   overview.hidden = true;
   overview.append(make("span", "nw-overview-heading", "新聞風向（非行情）"));
@@ -295,6 +306,20 @@ export default function mount(ctx) {
   root.append(toolbar, focus, panel, themeFilter, watchHint, newHint, shortcutHelp, list, empty);
   ctx.container.append(root);
 
+  let narrow = false, panelOpen = false;
+  function syncPanelDisclosure() {
+    const hiding = narrow && !panelOpen;
+    panelToggle.hidden = !narrow;
+    if (hiding && panelContent.contains(document.activeElement)) panelToggle.focus({preventScroll: true});
+    if (!narrow && document.activeElement === panelToggle) list.focus({preventScroll: true});
+    panelToggle.setAttribute("aria-expanded", String(!hiding));
+    panelContent.hidden = hiding;
+  }
+  function onPanelToggle() {
+    if (disposed || !narrow) return;
+    panelOpen = !panelOpen;
+    syncPanelDisclosure();
+  }
   let up = false;
   let disposed = false;
   let shortcutOrigin = null;
@@ -587,7 +612,7 @@ export default function mount(ctx) {
         button.setAttribute("aria-pressed", String(selectedTopic === topic.id));
         describe(button, `進入話題：${topic.title}，${topic.count} 則報導`, row);
         button.append(make("span", "nw-focus-long", `看話題・${topic.sources} 家`),
-          make("span", "nw-focus-short", `${topic.sources} 家`));
+          make("span", "nw-focus-short", `看話題・${topic.sources} 家`));
         const copy = make("div", "nw-focus-copy");
         copy.append(newsTitle(representative || {title: topic.title}, "nw-title", members.some(isNew)));
         let latest = null, latestTime = -Infinity;
@@ -906,6 +931,11 @@ export default function mount(ctx) {
     merging.textContent = eventsPending > 0 ? `・待合併 ${eventsPending}` : "";
     warning.hidden = groups.length >= 10;
     const values = marketParts.map((_, i) => groups.filter(group => contributes(group, `signal:${i}`)).length);
+    panelToggle.textContent = `${politics ? `議題分布：${groups.length} 個事件` : world
+      ? `局勢走向：升級 ${values[0]}・緩和 ${values[2]}`
+      : `股市訊號：偏多 ${values[0]}・偏空 ${values[3]}`}${analyzed < groups.length ? `・已分析 ${analyzed}／${groups.length}` : ""}`;
+    panelToggle.title = `${panelToggle.textContent}；${onlyNew ? "上次離開後的新進展；" : ""}${searchInput.value.trim() ? "未套用搜尋；" : ""}${sampleCount.textContent}`;
+    syncPanelDisclosure();
     marketBar.dataset.empty = String(analyzed === 0);
     marketBar.setAttribute("aria-label", marketParts.map((part, i) => `${part.name} ${values[i]}`).join("、"));
     market.title = `${world ? "無關" : "與股市無關"} ${world ? counts.not_conflict : counts.not_market}、未明 ${counts.other}`;
@@ -1632,6 +1662,15 @@ export default function mount(ctx) {
       }
     }
   }
+  const panelObserver = typeof view.ResizeObserver === "function" ? new view.ResizeObserver(entries => {
+    if (disposed) return;
+    const entry = entries.find(entry => entry.target === root);
+    if (!entry) return;
+    narrow = entry.contentRect.width <= 480;
+    syncPanelDisclosure();
+  }) : null;
+  panelObserver?.observe(root);
+  panelToggle.addEventListener("click", onPanelToggle);
   shortcutToggle.addEventListener("click", toggleShortcuts);
   overview.addEventListener("click", onOverview);
   newOnly.addEventListener("click", onNewOnly);
@@ -1677,6 +1716,8 @@ export default function mount(ctx) {
       persistLastSeen();
       view.removeEventListener("pagehide", persistLastSeen);
       disposed = true;
+      panelObserver?.disconnect();
+      panelToggle.removeEventListener("click", onPanelToggle);
       up = false;
       finishRefresh();
       refresh.disabled = true;

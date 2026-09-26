@@ -41,6 +41,11 @@ export const css = `
   outline-offset: 2px;
 }
 .nw .nw-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 12px; }
+.nw .nw-toolbar-actions { display: contents; }
+.nw .nw-panel-toggle { width: 100%; text-align: left; background: transparent; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nw .nw-panel-toggle::after { content: " ▸" / ""; }
+.nw .nw-panel-toggle[aria-expanded="true"]::after { content: " ▾" / ""; }
+.nw .nw-panel-toggle[aria-expanded="true"] { margin-bottom: 12px; }
 .nw .nw-overview { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 4px; flex-basis: 100%; min-width: 0; }
 .nw .nw-overview-heading { white-space: nowrap; }
 .nw .nw-overview-segment { display: inline-flex; align-items: baseline; min-width: 0; max-width: 100%; }
@@ -188,6 +193,15 @@ export const css = `
 .nw .nw-toolbar, .nw .nw-filter, .nw .nw-watch-hint, .nw .nw-new-hint, .nw .nw-row { padding-inline: 16px; }
 @container (min-width: 560px) {
   .nw .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@container (max-width: 480px) {
+  .nw .nw-toolbar > select { order: -2; flex: 1 1 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; }
+  .nw .nw-toolbar-actions { order: -1; display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; overflow-x: auto; padding-block: 3px; }
+  .nw .nw-toolbar-actions > button { flex: none; white-space: nowrap; font-size: 12px; padding-inline: 7px; }
+  .nw .nw-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .nw .nw-legend-item { white-space: nowrap; word-break: keep-all; }
+  .nw .nw-focus-long { display: none; }
+  .nw .nw-focus-short { display: inline; }
 }
 @container (max-width: 419.98px) {
   .nw .nw-actions { margin-left: 0; }

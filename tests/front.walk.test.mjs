@@ -159,9 +159,9 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
       countAction(choice===0?'sameAt':'newAt');
     } else if(choice===2) click('.nw-shortcut-toggle','help');
     else if(choice===3) click('.nw-tone-button','tone');
-    else if(choice===24) click('.nw-toolbar > button:first-child','refresh');
+    else if(choice===24) click('.nw-refresh','refresh');
     else if(choice===25) {
-      if(h.q('.nw-watch-settings').hidden) {const toggle=h.qa('.nw-toolbar > button').find(b=>b.textContent==='追蹤關鍵字');toggle.focus();toggle.click();}
+      if(h.q('.nw-watch-settings').hidden) {const toggle=h.q('.nw-watch-toggle');toggle.focus();toggle.click();}
       const input=h.q('.nw-watch-input');input.focus();input.value=pick(['台積電','','進展']);
       note(`watchWords=${input.value}`);h.q('.nw-watch-settings button').click();countAction('watchWords');
     } else if(choice===4) {switchSelect(h.source,pick(['',...SRC]));countAction('source');}
