@@ -946,12 +946,9 @@ export default function mount(ctx) {
       selectedCount = saved.count || null;
       onlyWatched = saved.watched && trackedWords.length > 0;
       onlyNew = Boolean(saved.newOnly);
+      saveState("view", {source: sources.value, category: categories.value});
     }
     drawItems(false);
-    if (selectedTheme && ![...ranking.querySelectorAll("button[data-topic]")].some(button => button.dataset.topic === selectedTheme)) {
-      selectedTheme = "";
-      drawItems(false);
-    }
     if (saved && restorePosition) {
       const restored = restoreFocus(saved.focus) || (automatic && restoreFocus(currentFocus));
       if (!restored && focusWasInside) list.focus({preventScroll: true});
@@ -968,11 +965,14 @@ export default function mount(ctx) {
   function onSourceOrCategory(event) {
     const field = event.currentTarget === sources ? "source" : "category";
     delete initialView[field];
-    const stored = loadState("view");
-    const previous = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
-    saveState("view", {source: text(previous.source), category: text(previous.category),
-      [field]: event.currentTarget.value});
-    if (event.currentTarget === categories && (selectedTopic || selectedCount?.topic)) {
+    const temporaryCategory = event.currentTarget === categories && (selectedTopic || selectedCount?.topic);
+    if (!temporaryCategory) {
+      const stored = loadState("view");
+      const previous = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
+      saveState("view", {source: text(previous.source), category: text(previous.category),
+        [field]: event.currentTarget.value});
+    }
+    if (temporaryCategory) {
       selectedTopic = selectedTopic || selectedCount.topic;
       selectedCount = null;
       selectedTheme = "";
@@ -1095,14 +1095,14 @@ export default function mount(ctx) {
       && (!sources.value || text(item.source) === sources.value)
       && (!categories.value || text(item.category) === categories.value)
       && (!scopeTopic || item.topic === scopeTopic));
+    // A theme filter matches individual reports. Validate before the optional
+    // new-progress restriction so toggling it cannot discard the user's theme.
+    if (selectedTheme && !scoped.some(item => topicOf(validAnalysis(item)) === selectedTheme)) selectedTheme = "";
     // Keep complete eligible events, including their older representative.
     if (onlyNew) {
       const eligible = new Set(groupItems(scoped).filter(group => group.reports.some(isNew)).flatMap(group => group.reports));
       scoped = scoped.filter(item => eligible.has(item));
     }
-    // Match the panel's event counts, even when watch-only hides the panel.
-    if (selectedTheme && !groupItems(scoped).some(group =>
-      topicOf(group.reports.map(validAnalysis).find(Boolean)) === selectedTheme)) selectedTheme = "";
     if (!searchOnly) drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
     const rendered = document.createDocumentFragment();
     const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
@@ -1303,9 +1303,19 @@ export default function mount(ctx) {
     searchBox.hidden = !open;
     searchToggle.setAttribute("aria-expanded", String(open));
     if (open) searchInput.focus();
+    else { clearSearch(); searchToggle.focus({preventScroll: true}); }
   }
   function onSearchToggle() { openSearch(searchBox.hidden); }
-  function clearSearch() { searchInput.value = ""; drawItems(); }
+  function clearSearch() {
+    const reports = document.activeElement?.closest?.(".nw-reports");
+    const row = reports?.closest(".nw-row");
+    // Move off a search-only child before redraw; restoring that hidden link
+    // would otherwise turn a temporary expansion into a manual one.
+    if (row && list.contains(row) && !expanded.has(row.dataset.event))
+      row.querySelector(".nw-expand")?.focus({preventScroll: true});
+    searchInput.value = "";
+    drawItems();
+  }
   function onSearchClear() { clearSearch(); searchInput.focus(); }
   function onSearchKey(event) {
     if (event.key === "Escape" && !event.isComposing) { event.preventDefault(); clearSearch(); }

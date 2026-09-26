@@ -3113,7 +3113,7 @@ test('stored view validates fields independently and does not revive missing opt
   assert.equal(early.categories.value,'world'); assert.equal(early.select.value,'乙');
 });
 
-test('topic entry return disappearance theme and clear filters do not save view', t => {
+test('topic returns persist restored view; entry theme and clear filters do not save view', t => {
   const h=setup(t), topic=topicRecord(), body=topicListing([financeArticle({topic:topic.id})]);
   h.message(body); choose(h,h.categories,'finance'); choose(h,h.select,'甲');
   const saved=h.window.localStorage.getItem(viewKey);
@@ -3130,7 +3130,7 @@ test('topic entry return disappearance theme and clear filters do not save view'
   saveWatch(h,'nothing'); watchControls(h).only.click();
   h.container.querySelector('.nw-empty button').click();
   assert.equal(h.select.value,''); assert.equal(h.categories.value,'');
-  assert.deepEqual(writes,[]); assert.equal(h.window.localStorage.getItem(viewKey),saved);
+  assert.deepEqual(writes,[saved,saved]); assert.equal(h.window.localStorage.getItem(viewKey),saved);
 });
 
 test('view storage failures are silent and manual selection still works', t => {
@@ -3185,7 +3185,7 @@ test('manual view changes merge only that field with stored preferences during t
     if(field==='category') choose(h,h.categories,'tech');
     else choose(h,h.select,'甲');
     assert.deepEqual(JSON.parse(h.window.localStorage.getItem(viewKey)),field==='category'
-      ? {source:'乙',category:'tech'} : {source:'甲',category:'finance'});
+      ? {source:'乙',category:'finance'} : {source:'甲',category:'finance'});
   }
 });
 
@@ -3571,7 +3571,9 @@ test('temporary search folds fullwidth and invisible separators, preserves ZWJ, 
   search(h,'<img'); assert.equal(mainRows(h).length,1); assert.equal(h.container.querySelector('img'),null);
   assert.equal(h.container.querySelector('.nw-search-hint').textContent,'搜尋「<img」：1 個事件');
   toggle.click(); assert.equal(h.container.querySelector('.nw-search-box').hidden,true);
-  assert.equal(mainRows(h).length,1); // Closing the input does not silently clear the query.
+  assert.equal(mainRows(h).length,2); // §20.14: closing search also clears its filter.
+  assert.equal(h.container.querySelector('.nw-search-input').value,'');
+  toggle.click();
   search(h,'none'); assert.equal(mainRows(h).length,0);
   assert.match(h.container.querySelector('.nw-empty').textContent,/沒有符合搜尋/);
   h.container.querySelector('.nw-empty button').click(); assert.equal(mainRows(h).length,2);
@@ -4364,4 +4366,77 @@ test('R13 overview visibility follows category topic search and watch, and clean
   assert.equal(overview.querySelectorAll('.nw-overview-segment').length,2); // Break before the international segment; no clipping.
   const button=overviewButton(h,'finance'); h.handle.unmount(); button.click();
   assert.equal(h.container.childElementCount,0); assert.equal(h.categories.value,'');
+});
+
+// §20.14: regressions reproduced by the independent fdf1381 review.
+for(const exit of ['return','disappear','count']) test(`R14 topic category remains temporary and restored view persists: ${exit}`,t=>{
+  const h=setup(t),topic=topicRecord(),body=topicListing([
+    financeArticle({topic:topic.id}),worldArticle({topic:topic.id,source:'乙',link:'https://e/world'}),financeArticle({link:'https://e/outside'})]);
+  h.message(body); choose(h,h.categories,'finance'); choose(h,h.select,'甲');
+  const before=JSON.parse(h.window.localStorage.getItem(viewKey));
+  focusTopicButtons(h)[0].click(); choose(h,h.categories,'world');
+  assert.deepEqual(JSON.parse(h.window.localStorage.getItem(viewKey)),before);
+  if(exit==='count') countButton(h,'signal:0').click();
+  if(exit==='disappear') h.message({...body,topics:{list:[]}});
+  else h.container.querySelector('.nw-filter button').click();
+  assert.equal(h.categories.value,'finance'); assert.equal(h.select.value,'甲');
+  const saved=JSON.parse(h.window.localStorage.getItem(viewKey));
+  assert.deepEqual(saved,{source:h.select.value,category:h.categories.value});
+  const reload=setup(t,w=>w.localStorage.setItem(viewKey,JSON.stringify(saved))); reload.message(body);
+  assert.equal(reload.categories.value,'finance'); assert.equal(reload.select.value,'甲');
+});
+
+test('R14 hiding search clears its filter and all cues; reopening and resends do not revive it',t=>{
+  const h=setup(t),body=listing([article({title:'台積電'}),article({title:'聯發科',link:'https://e/2'})]);
+  h.message(body); const toggle=h.container.querySelector('.nw-search-toggle'); toggle.click(); search(h,'台積');
+  assert.equal(mainRows(h).length,1); toggle.click();
+  assert.equal(mainRows(h).length,2); assert.equal(h.container.querySelector('.nw-search-input').value,'');
+  assert.equal(toggle.getAttribute('aria-pressed'),'false'); assert.equal(toggle.getAttribute('aria-expanded'),'false');
+  assert.equal(h.container.querySelector('.nw-search-hint').hidden,true);
+  h.message(body); toggle.click(); assert.equal(mainRows(h).length,2);
+  assert.equal(h.container.querySelector('.nw-search-input').value,'');
+});
+
+function r14ThemeRows() {
+  const row=(title,hour,event,theme='memory',source='甲')=>eventStory(event,title,hour,
+    {source,link:`https://e/${title}`,analysis:analysis({theme})});
+  return [row('E-old',10,'aaaaaaaaaaaa','ai_server'),row('E-new',14,'aaaaaaaaaaaa','memory','乙'),
+    row('F-old',9,'bbbbbbbbbbbb'),row('G-new',15,'cccccccccccc','ai_server')];
+}
+test('R14 individual-report theme intersects new progress, keeps count and restores old matching events',t=>{
+  const h=setup(t,withSeen('2026-09-24T12:00:00Z')),body=listing(r14ThemeRows()); h.message(body);
+  choose(h,h.categories,'finance'); themeButton(h,'memory').click();
+  const titles=()=>mainTitles(h).map(value=>value.replace(/^新/,''));
+  assert.deepEqual(titles(),['E-new','F-old']); const button=h.container.querySelector('.nw-new-only');
+  assert.equal(button.textContent,'新增 1 個事件'); button.click();
+  assert.deepEqual(titles(),['E-new']); assert.equal(button.textContent,'新增 1 個事件');
+  assert.match(h.container.querySelector('.nw-filter').textContent,/已篩選：記憶體/);
+  h.message(body); assert.deepEqual(titles(),['E-new']);
+  h.container.querySelector('.nw-new-hint button').click(); assert.deepEqual(titles(),['E-new','F-old']);
+  assert.equal(themeButton(h,'memory').getAttribute('aria-pressed'),'true');
+});
+
+test('R14 new progress reaching zero preserves theme until the unfiltered theme itself disappears',t=>{
+  const h=setup(t,withSeen('2026-09-24T12:00:00Z')),rows=r14ThemeRows(); h.message(listing(rows));
+  choose(h,h.categories,'finance'); themeButton(h,'memory').click(); h.container.querySelector('.nw-new-only').click();
+  h.message(listing(rows.filter(item=>item.title!=='E-new')));
+  assert.equal(mainRows(h).length,0); assert.match(h.container.querySelector('.nw-filter').textContent,/已篩選：記憶體/);
+  h.container.querySelector('.nw-new-hint button').click(); assert.deepEqual(mainTitles(h),['F-old']);
+  h.message(listing(rows.filter(item=>item.analysis.theme!=='memory')));
+  assert.equal(h.container.querySelector('.nw-filter').hidden,true);
+});
+
+for(const manual of [false,true]) test(`R14 Escape clears search expansion without changing manual expansion: ${manual}`,t=>{
+  const h=setup(t),body=listing([article({title:'代表',event:'aaaaaaaaaaaa',event_size:2,link:'https://e/1',published:'2026-09-24T10:00:00Z'}),
+    article({title:'子報導關鍵',event:'aaaaaaaaaaaa',event_size:2,link:'https://e/2',published:'2026-09-24T11:00:00Z'})]);
+  h.message(body); if(manual) h.container.querySelector('.nw-expand').click();
+  h.container.querySelector('.nw-search-toggle').click(); search(h,'關鍵');
+  const child=h.container.querySelector('.nw-reports a'); child.focus();
+  child.dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert.equal(h.container.querySelector('.nw-search-input').value,'');
+  const toggle=h.container.querySelector('.nw-expand'); assert.equal(toggle.getAttribute('aria-expanded'),String(manual));
+  if(!manual) assert.ok(h.window.document.activeElement===toggle);
+  else assert.equal(h.window.document.activeElement.href,child.href);
+  choose(h,h.select,''); h.message(body);
+  assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'),String(manual));
 });
