@@ -53,28 +53,38 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None):
     def source_count(keys):
         return len({outlets.get(records[key]['source'], records[key]['source']) for key in keys})
     seeds = [event for event, keys in events.items() if source_count(keys) >= 3]
+    seed_events = set(seeds)
     seeds.sort(key=lambda event: (-source_count(events[event]), -max(dates[k].timestamp() for k in events[event]), event))
-    seed_candidates = [seed for seed in previous if seed in records]
-    seed_candidates.extend(min(events[event], key=order.get) for event in seeds)
+    seed_candidates = [(event_of[seed], seed) for seed in previous if seed in records]
+    seed_candidates.extend((event, None) for event in seeds)
     claimed, topics, pending = set(), [], []
-    for seed in seed_candidates:
-        event = event_of[seed]
-        if event in claimed:
+    for event, seed in seed_candidates:
+        remaining = events[event] - claimed
+        if seed is None:
+            if source_count(remaining) < 3:
+                continue
+            seed = min(remaining, key=order.get)
+        elif seed in claimed:
             continue
         if len(topics) == MAX_BUILT_TOPICS:
             break
-        members = set(events[event])
+        members = set(remaining)
         latest = max(dates[key] for key in members)
         while True:
             terms = set().union(*(features[key] for key in members))
             member_events = {event_of[key] for key in members}
-            candidates = [key for key in records if key not in members and event_of[key] not in claimed
+            candidates = [key for key in records if key not in members and key not in claimed
                           and abs(dates[key] - latest) <= WINDOW
                           and (event_of[key] in member_events or features[key] & terms)]
             additions = set()
             for key in candidates:
                 if cache.get((seed, key)) is True:
-                    additions.add(key)
+                    # A seed-qualified event is trusted as one whole event;
+                    # smaller events still require an answer for every report.
+                    if event_of[key] in seed_events:
+                        additions.update(events[event_of[key]] - claimed)
+                    else:
+                        additions.add(key)
             if additions - members:
                 members.update(additions)
                 continue
@@ -86,7 +96,7 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None):
         if source_count(members) < 3:
             continue
         pending.extend(unanswered)
-        claimed.update(event_of[key] for key in members)
+        claimed.update(members)
         topics.append({'id': sha1(seed.encode('utf-8')).hexdigest()[:12], 'title': records[seed]['title'],
                        'sources': source_count(members), 'count': len(members),
                        'keys': sorted(members, key=order.get)})

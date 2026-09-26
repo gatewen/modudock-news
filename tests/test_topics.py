@@ -158,7 +158,7 @@ class PlanTests(unittest.TestCase):
         self.assertIn(sha1(seed.encode()).hexdigest()[:12], [t['id'] for t in topics])
         self.assertEqual([t['id'] for t in topics], sorted(t['id'] for t in topics))
         merged, _ = plan(items, groups, {(seed, seeds[3]['link']): True}, ['C','B','A'])
-        self.assertEqual(merged[0]['count'], 4)
+        self.assertEqual(merged[0]['count'], 6)
         self.assertFalse(set(merged[0]['keys']) & set(merged[1]['keys']))
         self.assertNotIn(sha1(seeds[5]['link'].encode()).hexdigest()[:12], [t['id'] for t in merged])
 
@@ -203,10 +203,10 @@ class StickyPlanTests(unittest.TestCase):
             item = story(f'new{i}', 'COMMON BETA', source, 8)
             items.append(item); groups[item['link']] = {'event':'b'}
         sticky, pending = plan(items, groups, cache, ['A','B','C','D','E'], [seed])
-        self.assertEqual(sticky[0]['id'], first[0]['id'])
-        self.assertEqual(sticky[0]['title'], a[0]['title'])
-        self.assertEqual(sticky[0]['count'], 4)
-        self.assertEqual({k for _, k in pending}, {x['link'] for x in items if groups[x['link']]['event']=='b' and x!=b[0]})
+        retained = next(t for t in sticky if t['id'] == first[0]['id'])
+        self.assertEqual(retained['title'], a[0]['title'])
+        self.assertEqual(retained['count'], 8)
+        self.assertEqual(pending, [])
         self.assertEqual(len(plan(items, groups, cache, ['A','B','C','D','E'])[0]), 2)
 
     def test_previous_uses_exact_seed_even_when_not_earliest_and_can_expand_from_two_sources(self):
@@ -290,24 +290,25 @@ class TopicMatcherTests(unittest.TestCase):
 
 class PerReportMembershipTests(unittest.TestCase):
     def test_siblings_require_own_answers_even_without_shared_words(self):
+        # Three feeds, only two outlets: this remains a per-report event.
         extra=[story('one','ALPHA'),story('brother','完全無關詞','D'),story('sister','別的描述','E')]
         items,groups=snapshot(extra)
         for x in extra: groups[x['link']]={'event':'other'}
         seed=items[0]['link'];cache={(seed,extra[0]['link']):True}
-        topics,pending=plan(items,groups,cache,['A','B','C','D','E'])
+        topics,pending=plan(items,groups,cache,['A','B','C','D','E'],outlets={'E':'D'})
         self.assertEqual(topics[0]['count'],4)
         self.assertEqual(topics[0]['sources'],3)
         self.assertEqual(set(pending),{(seed,x['link']) for x in extra[1:]})
         cache[seed,extra[1]['link']]=False
         cache[seed,extra[2]['link']]=True
-        topics,pending=plan(items,groups,cache,['A','B','C','D','E'],[seed])
+        topics,pending=plan(items,groups,cache,['A','B','C','D','E'],[seed],outlets={'E':'D'})
         self.assertEqual(topics[0]['count'],5)
         self.assertEqual(topics[0]['sources'],4)
         self.assertNotIn(extra[1]['link'],topics[0]['keys'])
         self.assertEqual(pending,[])
         # A sticky seed with only two remaining outlets cannot borrow a false sibling.
         items=[x for x in items if x['source'] not in ('C','E')]
-        topics,pending=plan(items,groups,cache,['A','B','C','D','E'],[seed])
+        topics,pending=plan(items,groups,cache,['A','B','C','D','E'],[seed],outlets={'E':'D'})
         self.assertEqual((topics,pending),([],[]))
 
     def test_siblings_precede_general_candidates_within_shared_cap(self):
@@ -324,3 +325,60 @@ class PerReportMembershipTests(unittest.TestCase):
         _,pending=plan(items,groups,cache,['A','B','C'])
         self.assertEqual(len(pending),6)
         self.assertEqual(pending[-1],(seed,ordinary['link']))
+
+
+class ClaimedReportsTests(unittest.TestCase):
+    def scene(self, size=3, headlines=False):
+        seeds = [story(f's{i}', '川普訪美 ALPHA', src, 5) for i, src in enumerate('ABC')]
+        other = [story('x0', 'ALPHA BETA', 'D', 0)]
+        other += [story(f'x{i}', 'BETA', src, 0) for i, src in enumerate('EFGH'[:size-1], 1)]
+        rest = [story(f'o{n}_{j}', f'主題{n}詞 GAMMA{n}', src, 1)
+                for n in range(5) for j, src in enumerate('ABCD')] if headlines else []
+        items, groups = snapshot(other+rest, seeds, size=300)
+        for item in other: groups[item['link']] = {'event': 'e2'}
+        for n in range(5):
+            for j in range(4): groups[f'https://example.com/o{n}_{j}'] = {'event': f'o{n}'}
+        return items, groups, seeds[0]['link'], [x['link'] for x in other]
+
+    def test_repro37_three_outlet_event_is_admitted_whole(self):
+        items, groups, seed, other = self.scene()
+        cache = {(seed, other[0]): True, (seed, other[1]): False}
+        topics, pending = plan(items, groups, cache, list('ABCDEFGH'), [seed])
+        self.assertEqual(len(topics), 1)
+        self.assertEqual((topics[0]['sources'], topics[0]['count']), (6, 6))
+        self.assertTrue(set(other) <= set(topics[0]['keys']))
+        self.assertEqual(pending, [])
+
+    def test_repro37b_five_outlet_headline_is_not_truncated_by_topic_limit(self):
+        items, groups, seed, other = self.scene(5, True)
+        cache = {(seed, other[0]): True}
+        topics, pending = plan(items, groups, cache, list('ABCDEFGHIJ'), [seed])
+        self.assertEqual(len(topics), 5)
+        self.assertEqual(topics[0]['id'], sha1(seed.encode()).hexdigest()[:12])
+        self.assertEqual((topics[0]['sources'], topics[0]['count']), (8, 8))
+        self.assertTrue(set(other) <= set(topics[0]['keys']))
+        covered = set().union(*(set(t['keys']) for t in topics))
+        self.assertEqual(sum(t['count'] for t in topics), len(covered))
+        self.assertEqual((topics, pending), plan(items[::-1], groups, cache, list('ABCDEFGHIJ'), [seed]))
+        for _ in range(10):
+            if not pending: break
+            cache.update({pair: False for pair in pending})
+            again, pending = plan(items, groups, cache, list('ABCDEFGHIJ'), [seed])
+            self.assertEqual(again, topics)
+        self.assertEqual(pending, [])
+
+    def test_false_or_unasked_siblings_can_be_candidates_for_another_topic(self):
+        items,groups,seed,other=self.scene()
+        third=[story(f'z{i}','BETA 專屬新事件',src,2) for i,src in enumerate('GHI')]
+        items.extend(third)
+        for x in third:groups[x['link']]={'event':'third'}
+        second=third[0]['link']
+        cache={(seed,other[0]):True,(seed,other[1]):False,(second,other[1]):True}
+        topics,pending=plan(items,groups,cache,list('ABCDEFGHI'),[seed,second],outlets={'F':'E'})
+        first=next(t for t in topics if t['id']==sha1(seed.encode()).hexdigest()[:12])
+        last=next(t for t in topics if t['id']==sha1(second.encode()).hexdigest()[:12])
+        self.assertIn(other[0],first['keys'])
+        self.assertNotIn(other[1],first['keys'])
+        self.assertIn(other[1],last['keys'])
+        self.assertIn((second,other[2]),pending)
+        self.assertFalse(set(first['keys']) & set(last['keys']))
