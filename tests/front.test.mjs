@@ -263,8 +263,7 @@ test('analysis panel appears only for finance or tech between toolbar and list',
     assert.equal(panel(h).hidden, !['finance', 'tech'].includes(category));
   }
   assert.equal(panel(h).nextElementSibling.className, 'nw-filter');
-  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.className, 'nw-hint nw-search-hint');
-  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.nextElementSibling, h.container.querySelector('.nw-list'));
+  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling, h.container.querySelector('.nw-list'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
   assert.equal(panel(h).children.length, 6);
@@ -1114,7 +1113,7 @@ test('focus requires three distinct named sources, ranks by count latest time an
   assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['ffffffffffff', '000000000001']);
   assert.equal(focusArea(h).querySelector('a').textContent, 'ffffffffffff-0');
   h.message(listing(two));
-  assert.equal(focusArea(h).hidden, false); // R1-B: explain the empty event focus.
+  assert.equal(focusArea(h).hidden, false); // No unfiltered three-outlet event: show the hint.
   assert.equal(focusButtons(h).length, 0);
 });
 
@@ -1125,7 +1124,7 @@ test('focus recomputes after source category and topic filters, including same-a
   h.message(body);
   assert.equal(focusButtons(h).length, 2);
   h.select.value = '媒體0'; h.select.dispatchEvent(new h.window.Event('change'));
-  assert.equal(focusArea(h).hidden, false); // R1-B: explain the empty event focus.
+  assert.equal(focusArea(h).hidden, true); // R6: the filter hid existing event focus.
   h.select.value = ''; h.select.dispatchEvent(new h.window.Event('change'));
   h.categories.value = 'finance'; h.categories.dispatchEvent(new h.window.Event('change'));
   assert.deepEqual(focusButtons(h).map(b => b.dataset.event), ['111111111111']);
@@ -1134,7 +1133,7 @@ test('focus recomputes after source category and topic filters, including same-a
   assert.equal(focusButtons(h).length, 1);
   h.message({...body, items: reports.map((item,i) => i === 0 ? {...item, analysis:null} : item)});
   assert.equal(h.container.querySelector(`.nw-theme[data-topic="${topic}"]`).getAttribute('aria-pressed'), 'true');
-  assert.equal(focusArea(h).hidden, false); // Only two matching sources remain. // R1-B: explain the empty event focus.
+  assert.equal(focusArea(h).hidden, true); // Only two matching outlets remain under this filter.
 });
 
 test('focus expands scrolls and focuses existing event, preserves expansion and removes listener on unmount', t => {
@@ -1308,7 +1307,7 @@ test('topic records require valid fields, take five valid unique entries, and fa
   h.message({...listing(reports), topics:{list:{}}});
   assert.equal(focusButtons(h)[0].dataset.event, '111111111111');
   h.message(topicListing([], invalid));
-  assert.equal(focusArea(h).hidden, false); // R1-B: explain the empty event focus.
+  assert.equal(focusArea(h).hidden, false); // No unfiltered three-outlet event: show the hint.
 });
 
 test('topic title links require exact title in that topic and retain URL and text defenses', t => {
@@ -1397,7 +1396,7 @@ test('topic disappears or becomes invalid on replacement cancels selection and t
   h.message(topicListing([article({topic:id}), article({title:'外面'})], [topicRecord({sources:2})]));
   assert.equal(mainRows(h).length, 2);
   assert.equal(h.container.querySelector('.nw-filter').hidden, true);
-  assert.equal(focusArea(h).hidden, false); // R1-B: explain the empty event focus.
+  assert.equal(focusArea(h).hidden, false); // No unfiltered three-outlet event: show the hint.
 });
 
 test('new topic badge comes from any member and topic listeners are inert after unmount', t => {
@@ -2291,14 +2290,13 @@ for (const exit of ['return','same-topic','disappear']) {
   });
 }
 
-test('manual source category and clear-all discard saved topic view', t => {
-  for(const action of ['source','category','clear']) {
+test('manual source and clear-all discard saved topic view', t => {
+  for(const action of ['source','clear']) {
     const h=setup(t), id=topicRecord().id;
     const body=topicListing([financeArticle({source:'甲',topic:id}),article({topic:id,source:'乙',category:'world'})]);
     h.message(body); choose(h,h.categories,'finance'); choose(h,h.select,'甲');
     focusTopicButtons(h)[0].click();
     if(action==='source') choose(h,h.select,'乙');
-    if(action==='category') choose(h,h.categories,'world');
     if(action==='clear') {
       saveWatch(h,'absent'); watchControls(h).only.click();
       h.container.querySelector('.nw-empty button').click();
@@ -3039,8 +3037,7 @@ test('watch-only hides focus and every analysis panel, restores them and safely 
     assert.equal(h.container.querySelector('.nw-panel').hidden,true); assert.equal(focusArea(h).hidden,true);
     const hint=h.container.querySelector('.nw-watch-hint');
     assert.equal(hint.hidden,false); assert.equal(hint.textContent,'只看追蹤：AI、<img>');
-    assert.equal(hint.nextElementSibling.className,'nw-hint nw-search-hint');
-    assert.equal(hint.nextElementSibling.nextElementSibling.className,'nw-list');
+    assert.equal(hint.nextElementSibling.className,'nw-list');
     assert.equal(hint.querySelector('img'),null);
     assert.equal(mainRows(h).length,1);
     watchControls(h).only.click();
@@ -3363,8 +3360,8 @@ for(const exit of ['clear','disappear','same-topic']) test(`count inside topic p
   countButton(h,'signal:0').focus(); countButton(h,'signal:0').click();
   assert.equal(mainRows(h).length,4);
   focusTopicButtons(h)[0].click();
-  // Render the topic's finance panel without a manual category change, which exits topic mode.
-  h.categories.value='finance'; h.message(body);
+  // R6: a real category change now keeps the topic scope and reveals its panel.
+  choose(h,h.categories,'finance');
   assert.equal(countButton(h,'signal:0').textContent.trim(),'3 正面');
   countButton(h,'signal:0').click();
   assert.equal(mainRows(h).length,3);
@@ -3665,4 +3662,73 @@ test('search row reuse recomputes new badges and keeps invalid duplicate events 
   h.message(listing([duplicate,duplicate])); search(h,'duplicate');
   assert.equal(mainRows(h).length,2);
   assert.equal(h.container.querySelector('.nw-search-hint').textContent,'搜尋「duplicate」：2 個事件');
+});
+
+test('R6 topic category count theme path is reachable via UI and returns original scope', t => {
+  const h=setup(t), topic=topicRecord();
+  const report=(id,source,theme,market='positive',inside=true)=>eventStory(String(id).repeat(12),`t${id}`,9,
+    {source,link:`https://e.test/${id}`,analysis:analysis({theme,market}),...(inside?{topic:topic.id}:{})});
+  const body=topicListing([report(1,'甲','memory'),report(2,'乙','energy'),report(3,'甲','memory','negative'),
+    report(4,'乙','memory','positive',false),report(5,'甲','energy','negative',false)]);
+  h.message(body); choose(h,h.categories,'finance'); choose(h,h.select,'乙');
+  assert.equal(mainRows(h).length,2);
+  focusTopicButtons(h)[0].click(); choose(h,h.categories,'finance');
+  assert.equal(panel(h).hidden,false);
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'),'true');
+  assert.equal(countButton(h,'signal:0').textContent.trim(),'2 正面');
+  countButton(h,'signal:0').click(); assert.equal(mainRows(h).length,2);
+  h.container.querySelector('[data-topic="energy"]').click();
+  assert.deepEqual(mainTitles(h),['t2']);
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'),'true');
+  assert.match(h.container.querySelector('.nw-filter').textContent,/返回/);
+  h.message(body); assert.deepEqual(mainTitles(h),['t2']);
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(h.select.value,'乙'); assert.equal(h.categories.value,'finance');
+  assert.deepEqual(mainTitles(h),['t2','t4']);
+});
+
+test('R6 topic category changes retain return state while source changes exit topic', t => {
+  const h=setup(t), topic=topicRecord();
+  h.message(topicListing([financeArticle({topic:topic.id}),worldArticle({topic:topic.id,source:'乙',link:'https://e.test/world'})]));
+  choose(h,h.select,'甲'); choose(h,h.categories,'finance');
+  focusTopicButtons(h)[0].click(); choose(h,h.categories,'world');
+  assert.equal(mainRows(h).length,1); assert.equal(h.container.querySelector('.nw-panel').hidden,false);
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'),'true');
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(h.select.value,'甲'); assert.equal(h.categories.value,'finance');
+  focusTopicButtons(h)[0].click(); choose(h,h.categories,'finance');
+  countButton(h,'signal:0').click(); choose(h,h.categories,'world');
+  assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'),'true');
+  assert.equal(mainRows(h).length,1);
+  choose(h,h.select,'乙'); assert.equal(focusTopicButtons(h)[0].getAttribute('aria-pressed'),'false');
+});
+
+test('R6 focus empty message is reserved for unfiltered data without a three-outlet event', t => {
+  for(const filter of ['source','category','count','theme','search']) {
+    const h=setup(t), reports=focusReports('111111111111',3);
+    // An energy event exists but only has one outlet.
+    reports.push(eventStory('222222222222','other',8,{source:'媒體0',analysis:analysis({theme:'energy'})}));
+    h.message({...listing(reports,['媒體0','媒體1','媒體2'].map(name=>({name,ok:true}))),model:{state:'done'}});
+    assert.equal(focusArea(h).hidden,false);
+    if(filter==='source') choose(h,h.select,'媒體0');
+    if(filter==='category') choose(h,h.categories,'world');
+    if(filter==='count') { choose(h,h.categories,'finance'); countButton(h,'signal:3').click(); }
+    if(filter==='theme') { choose(h,h.categories,'finance'); h.container.querySelector('[data-topic="energy"]').click(); }
+    if(filter==='search') search(h,'no match');
+    assert.equal(focusArea(h).hidden,true,filter);
+    assert.doesNotMatch(focusArea(h).textContent,/目前沒有 3 家以上/);
+  }
+  const h=setup(t); h.message({...listing([article()]),model:{state:'done'}});
+  assert.equal(focusArea(h).hidden,false); assert.match(focusArea(h).textContent,/目前沒有 3 家以上/);
+});
+
+test('R6 search count is live beside input with only one clear control', t => {
+  const h=setup(t); h.message(listing([article({title:'needle'})]));
+  h.container.querySelector('.nw-search-toggle').click(); search(h,'needle');
+  const box=h.container.querySelector('.nw-search-box'), hint=h.container.querySelector('.nw-search-hint');
+  assert.equal(hint.parentNode,box); assert.equal(hint.getAttribute('aria-live'),'polite');
+  assert.equal(box.querySelector('input').type,'text'); // No native search cancel affordance.
+  assert.equal(box.querySelectorAll('button').length,1);
+  assert.equal(hint.textContent,'搜尋「needle」：1 個事件');
+  box.querySelector('button').click(); assert.equal(hint.hidden,true); assert.equal(box.querySelector('input').value,'');
 });

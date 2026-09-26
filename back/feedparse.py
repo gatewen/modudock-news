@@ -118,10 +118,6 @@ def _xml(data):
     return root
 
 
-class _MalformedHTML(ValueError):
-    pass
-
-
 def _html_text(value):
     """Single forward scan; never retry an unfinished suffix at each '<'.
 
@@ -139,17 +135,18 @@ def _html_text(value):
         if value.startswith("<!--", i):
             end = re.compile(r"--\s*>").search(value, i + 4)
             if end is None:
-                raise _MalformedHTML()
+                parts.append(unescape(value[i:]))
+                break
             i = end.end()
             continue
         if value.startswith("<![", i):
-            # Unknown marked sections used to raise HTMLParser AssertionError.
-            if not value.startswith("<![CDATA[", i):
-                raise _MalformedHTML()
-            end = value.find("]]>", i + 9)
+            # HTML marked sections (including Word conditional declarations).
+            terminator = "]]>" if value.startswith("<![CDATA[", i) else "]>"
+            end = value.find(terminator, i + 3)
             if end < 0:
-                raise _MalformedHTML()
-            i = end + 3
+                parts.append(unescape(value[i:]))
+                break
+            i = end + len(terminator)
             continue
         closing = value.startswith("</", i)
         name_start = i + (2 if closing else 1)
@@ -166,19 +163,44 @@ def _html_text(value):
         while end_name < size and value[end_name] not in " \t\n\r\f/>\x00":
             end_name += 1
         name = value[name_start:end_name].lower()
-        end, quote = end_name, None
+        end, quote, state = end_name, None, "attribute"
+        first_gt = -1
         while end < size:
             char = value[end]
+            if char == ">" and first_gt < 0:
+                first_gt = end
             if quote:
                 if char == quote:
-                    quote = None
-            elif char in "\"'":
-                quote = char
+                    quote, state = None, "attribute"
             elif char == ">":
                 break
+            elif state == "bare":
+                if char.isspace():
+                    state = "attribute"
+            elif state == "value":
+                if char in "\"'":
+                    quote = char
+                elif not char.isspace() and char != "=":
+                    state = "bare"
+            elif char == "=":
+                state = "value"
             end += 1
         if end == size:
-            raise _MalformedHTML()
+            if first_gt >= 0:
+                # Unclosed quoted attribute: preserve only this broken fragment,
+                # then continue parsing the remaining markup like HTMLParser.
+                parts.append(unescape(value[i:first_gt + 1]))
+                i = first_gt + 1
+                continue
+            # An unfinished markup suffix cannot invalidate preceding text.
+            # Keep literal comparisons such as x<y; discard cut attribute tails.
+            if (end_name == size and not closing) or declaration:
+                parts.append(unescape(value[i:]))
+            break
+        if "\x00" in value[i:end]:
+            parts.append(unescape(value[i:end + 1]))
+            i = end + 1
+            continue
         if not declaration and (name in ("p", "div", "li") or (name == "br" and not closing)):
             parts.append(" ")
         self_closing = value[i:end].rstrip().endswith("/")
@@ -194,11 +216,7 @@ def _html_text(value):
 
 def plain(value, limit):
     value = value[:8192]
-    try:
-        text = _html_text(value)
-    except _MalformedHTML:
-        # A malformed field remains literal text; never reject its whole feed.
-        text = unescape(value)
+    text = _html_text(value)
     return " ".join(text.split())[:limit]
 
 

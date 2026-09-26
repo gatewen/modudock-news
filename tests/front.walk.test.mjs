@@ -102,7 +102,8 @@ function check() {
   const pressedTopic = h.qa('.nw-focus-count[aria-pressed=true]');
   if (!topicMode && !h.q('.nw-focus-section').hidden && pressedTopic.length) errs.push('topic pressed but not topic mode');
   if (topicMode && !h.q('.nw-focus-section').hidden && pressedTopic.length !== 1) errs.push('topic mode but pressed topics=' + pressedTopic.length);
-  if (topicMode && (src || cat)) errs.push(`topic mode with filters src=${src} cat=${cat}`);
+  // R6 allows category changes inside a topic; source changes still leave it.
+  if (topicMode && src) errs.push(`topic mode with source=${src}`);
   const topicId = topicMode ? pressedTopic[0]?.dataset.topicId : '';
   // expected groups
   const ns = cat==='world'?'region:':cat==='politics'?'issue:':''; const theme = themeMode ? (pressedTheme[0] || [...topicNames].find(([id,n])=>label==='已篩選：'+(id==='region:other'?'其他地區':id==='issue:other'?'其他議題':n) && (ns? id.startsWith(ns): !id.includes(':')))?.[0]) : '';

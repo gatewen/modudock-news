@@ -45,7 +45,7 @@ def hostile_feed(field, count=None):
 
 class ParseSecurityTests(unittest.TestCase):
     def test_full_feed_cpu_under_two_seconds_for_unfinished_and_dense_markup(self):
-        for pattern in ('<a\t', '<a x="', '<!--', '</a ', '<![', '<a ', '< ', '<i>x</i>', '&#', '&amp;'):
+        for pattern in ('<a\t', '<a x="', '<!--', '</a ', '<![', '<a ', '< ', '<i>x</i>', '&#', '&amp;', '<a x=" >', "<a x=' >", '<![if !IE]>'):
             with self.subTest(pattern=pattern):
                 field = 'x' + pattern * (8192 // len(pattern) + 1)
                 data, n = hostile_feed(field)
@@ -70,7 +70,7 @@ class ParseSecurityTests(unittest.TestCase):
         </channel></rss>'''
         items, _ = fp.parse_feed(data, 'https://e.example/', 'X', {}, NOW)
         self.assertEqual([(i['title'],i['summary']) for i in items],
-                         [('<![<![ broken','good'),('next','before <a x="unfinished')])
+                         [('<![<![ broken','good'),('next','before')])
 
     def test_plain_matches_legacy_on_xml_fixtures_snapshot_and_normal_html(self):
         fields = []

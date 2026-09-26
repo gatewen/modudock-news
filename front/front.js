@@ -95,7 +95,7 @@ export default function mount(ctx) {
   searchBox.hidden = true;
   searchToggle.setAttribute("aria-controls", searchBox.id);
   const searchInput = make("input", "nw-search-input");
-  searchInput.type = "search";
+  searchInput.type = "text";
   searchInput.setAttribute("aria-label", "搜尋標題與摘要");
   searchInput.placeholder = "搜尋標題與摘要（Esc 清除）";
   const searchClear = make("button", "", "清除搜尋");
@@ -103,6 +103,8 @@ export default function mount(ctx) {
   searchBox.append(searchInput, searchClear);
   const searchHint = make("p", "nw-hint nw-search-hint");
   searchHint.setAttribute("role", "status");
+  searchHint.setAttribute("aria-live", "polite");
+  searchBox.append(searchHint);
   searchHint.hidden = true;
   const watchToggle = make("button", "", "追蹤設定");
   watchToggle.type = "button";
@@ -208,7 +210,7 @@ export default function mount(ctx) {
   toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, searchToggle, status, searchBox, watchSettings);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
-  root.append(toolbar, focus, panel, themeFilter, watchHint, searchHint, list, empty);
+  root.append(toolbar, focus, panel, themeFilter, watchHint, list, empty);
   ctx.container.append(root);
 
   let up = false;
@@ -472,7 +474,14 @@ export default function mount(ctx) {
       .slice(0, 5);
     focus.hidden = false;
     focusList.replaceChildren();
-    if (!ranked.length) focusList.append(make("p", "nw-hint", "目前沒有 3 家以上媒體同時報導的新聞"));
+    if (!ranked.length) {
+      const hasEvent = groupItems(items.filter(item => item && typeof item === "object"))
+        .some(group => new Set(group.reports.map(outletOf).filter(Boolean)).size >= 3);
+      const filtered = sources.value || categories.value || selectedTheme || selectedCount || selectedTopic
+        || searchText(searchInput.value).trim();
+      focus.hidden = Boolean(hasEvent || filtered);
+      if (!focus.hidden) focusList.append(make("p", "nw-hint", "目前沒有 3 家以上媒體同時報導的新聞"));
+    }
     for (const group of ranked) {
       const row = make("div", "nw-focus-row");
       row.dataset.event = group.id;
@@ -747,7 +756,11 @@ export default function mount(ctx) {
   function onTheme(event) {
     const button = event.target?.closest?.("button[data-topic]");
     if (!button || !ranking.contains(button) || !topicNames.has(button.dataset.topic)) return;
-    if (selectedCount) { selectedCount = null; savedView = null; }
+    if (selectedCount) {
+      selectedTopic = selectedCount.topic || "";
+      selectedCount = null;
+      if (!selectedTopic) savedView = null;
+    }
     selectedTheme = selectedTheme === button.dataset.topic ? "" : button.dataset.topic;
     drawItems();
   }
@@ -794,9 +807,15 @@ export default function mount(ctx) {
     const previous = stored && typeof stored === "object" && !Array.isArray(stored) ? stored : {};
     saveState("view", {source: text(previous.source), category: text(previous.category),
       [field]: event.currentTarget.value});
-    savedView = null;
-    selectedTopic = "";
-    if (event.currentTarget === categories || selectedCount?.topic) selectedCount = null;
+    if (event.currentTarget === categories && (selectedTopic || selectedCount?.topic)) {
+      selectedTopic = selectedTopic || selectedCount.topic;
+      selectedCount = null;
+      selectedTheme = "";
+    } else {
+      savedView = null;
+      selectedTopic = "";
+      if (event.currentTarget === categories || selectedCount?.topic) selectedCount = null;
+    }
     drawItems();
   }
   function onWatchToggle() {
