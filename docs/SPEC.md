@@ -1408,7 +1408,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **並行與優先序**：啟用時固定三條 `news-classify-1..3` daemon worker，以 lanes 表按「分類 > 配對 > 話題 > 分析 > 基調」選下一批；同 lane 可多批在途，不中斷已開始的低優先請求。cv 下取批，若 results 有未接收的 Classify／Event／Topic 結果，先讓協調者接收再選工作。初始列表尚未獲 Outbox 接收時 work 不准入，拒收則撤回待辦；無 key 不啟動模型 worker。（出處：§18.12、§18.29～§18.32、§18.37、§18.38）
 - **預算與跨輪接手**：一輪模型工作從第一批准入起共用 60 秒准入預算；在途請求可超過此時點完成。任一批失敗即停止該 work 的新准入，其他在途成功仍可採納；晚到模型結果不因舊輪 id 而一律丟棄。新輪若先因舊輪 in-flight 跳過某 key，舊結果回來／失敗後會在目前 work 仍可准入且有 last_list 的條件下重排未完成工作；active 抓取期間不補送列表，下一次 emit 帶快取結果。（出處：§12.6、§18.2、§18.32、§18.37）
 - **HTTP 與驗證**：五種 client 共用設定與 enabled 狀態，每次請求的 context 分開，不把批次狀態留在實例。SSL 驗證保持開啟，沿用 Fetcher 的 CA 做法、不跟隨模型 redirect；單次 socket timeout 15 秒，body 讀取總時限預設 30 秒（送出前起算），回應上限 1 MiB。所需每題都要通過驗證，任一題失敗整批不採納；choice 須在 criteria 中，probabilities 須為非空物件，值須是非 bool 的有限 0～1 數值。現行不要求機率總和為 1，也不要求 choice 等於機率最大者。（出處：§12.5、§18.2、§18.31）
-- **關閉與退避**：只從 TYPESAFE_API_KEY 啟用，無 key 只記一次 disabled。任一 client 收 401／403，整個 process 的模型工作永久關閉；model.reason 為 auth，啟動無 key 為 no_key。關閉後 `_decorate` 將 item.analysis 設為 null，即使分析快取仍存在，清單分析標籤與面板分析結果也不再顯示；已快取分類、依現存資料成立的話題與已取得基調仍顯示。429／529 在同一 read_deadline 內最多重試兩次，分別等 0.5／1 秒；無 Retry-After 可用，耗盡或其他失敗停止本輪新准入。模型錯誤只記固定字串，不把 key、HTTP body 或例外原文寫入 log。（出處：§18.31、§18.44）
+- **關閉與退避**：只從 TYPESAFE_API_KEY 啟用，無 key 只記一次 disabled。任一 client 收 401，整個 process 的模型工作永久關閉；model.reason 為 auth，啟動無 key 為 no_key。關閉後 `_decorate` 將 item.analysis 設為 null，即使分析快取仍存在，清單分析標籤與面板分析結果也不再顯示；已快取分類、依現存資料成立的話題與已取得基調仍顯示。403 為暫時服務不可用：本輪 paused/failed、failure=service，enabled 保持 true、下輪重試；連續三輪 403 後共用熔斷冷卻 30 分鐘，期間不送 HTTP，到期只准一次探測，成功清零並恢復並行（§20.40）。429／529 在同一 read_deadline 內最多重試兩次，分別等 0.5／1 秒；無 Retry-After 可用，耗盡或其他失敗停止本輪新准入。模型錯誤只記固定字串，不把 key、HTTP body 或例外原文寫入 log。（出處：§18.31、§18.44）
 - **停止**：bye 不等待卡住的網路 worker，不 join RSS 或模型執行緒；維持後半一秒內退出的協定政策。這不代表能在 process 存活時強制回收卡住的 DNS／header 請求。（出處：§5、§18.2、§18.32）
 - **列表與補送**：每 item 永遠有 category、analysis（null 或物件）、event、event_size；topic／tone 只在適用時出現。body 有 classify、analysis、events、topics、model 的進度。初始 list 後 publish `news.fetched`；補送不改 at、不另 publish。配對結果只有可見 event／event_size 改變、pending 歸零或模型狀態需更新時補送；一般成功結果只影響可見項目時才需補內容。Outbox 對尚未開始寫出的 list 原位取代，同步更新其後對應 publish 的 count／at；put 拒收不更新 last_list。（出處：§12.6、§16.5、§18.9、§18.20、§18.24、§18.37）
 - **大小守衛**：model 額外預留 failed 的 failure 固定代碼最長形狀（§20.21）。完整 JSON envelope（ensure_ascii、含換行）限 900 KiB，從 items 尾端裁切。未分類預留最長 category；尚未分析且類別為空或可分析者預留三種 analysis 中最長形狀；event_size 預留三位數，另預留 topic、tone、最多五個話題與 model 狀態。裁切後重算來源 count、classify／analysis pending、event_size，協調者再裝飾事件／話題進度。補送理應不減少首次已送 items；若仍裁切，stderr 記一行後照送，不 raise。空 items 的 envelope 仍超限則拒送。（出處：§12.3、§13.4、§16.5、§18.5、§18.14、§18.16、§18.20）
@@ -1421,7 +1421,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 | off | no_key／auth | 共用模型開關關閉，優先於 pending 判斷 | 分類未啟用：未設定 API 金鑰／分類已停用：API 金鑰無效 |
 | done | 空字串 | API 開啟且所有上述 pending 為 0 | 不加整理文字 |
 | working | 空字串 | 尚有 pending，且任一模型佇列或 in-flight 集合非空 | 整理中 |
-| paused | failed | 沒有上述排隊／在途工作，本 work 失敗；有失敗次數時優先於預算原因；failure=busy／connection／response／other，title 與 describedby 提供原因與建議（§20.21） | 整理暫停，下次更新繼續 |
+| paused | failed | 沒有上述排隊／在途工作，本 work 失敗；有失敗次數時優先於預算原因；failure=busy／connection／response／service／other，title 與 describedby 提供原因與建議（§20.21） | 整理暫停，下次更新繼續 |
 | paused | budget | 沒有上述工作，本 work 已過 deadline，且未以 failed 優先判定 | 整理暫停，下次更新繼續 |
 | paused | waiting | 尚有 pending，但沒有工作、失敗或逾時可解釋 | 整理暫停，等待下次更新 |
 
@@ -1947,3 +1947,14 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **驗收**：repro37 三家 E2 整體併入 E1，六家六則、無孤兒；repro37b 五家 E2 全部併入 E1，八家八則、E2 可見 5/5。兩條回歸測試先紅後綠；另驗非種子事件三 feed 但兩 outlet 仍逐篇問、false／未問兄弟篇可參與另一話題、成員互斥、sticky id、輸入順序不變與待問收斂。全套 370 測試通過；chaos 六並行×五批 30/30 通過。
 - **離線真快照核對**：scratchpad/r35/check_r39.py 以 run/run2 全部 items 及 R35 假 cache 重算，並刪除四則人工判不相關報導的答案，確認先排待問、不自動納入，再填 false 後仍排除。run 美股／油價事件四則、run2 三則，均只有 Yahoo／新頭殼兩 outlet；伊朗解封事件兩則、中央社／ETtoday 兩 outlet。因此兩份快照的四則誤入皆未因大事件例外復發。此為固定資料＋合成答案的規則驗證，非真 API 品質驗收；輸出在 scratchpad/r35/r39-hybrid-result.json。
 - **真實驗證**：前次 r39.json 收到 off/auth，HTTP 邊界計數器記錄三次實際嘗試，無已完成輪統計。本次修正新增真 API 用量為零，待 jev 恢復由 cc 補跑；不以認證失敗輸出判定模型品質。
+
+### 20.40 第 40 輪：403 暫停恢復與共用服務熔斷
+
+- **認證／停機分流**：401 保留永久 off/auth。403 不關閉 enabled，也不丟棄已快取分析；本輪停止新准入，已在途仍收件。body.model 為 paused/failed、failure=service。前半短字維持「整理暫停，下次更新繼續」，title／describedby 說明「模型服務暫時無法使用，下次更新自動重試」。不顯示回應內文或猜測金鑰錯誤。此規則取代 §12.4、§18.32、§18.44 及 §20.21 中將 403 當永久認證失敗的舊規定。
+- **共用熔斷**：所有模型 client 共用狀態，scheduler 將原工作 round id 傳入 request-local ContextVar；同輪多次 403 只計一次，去重集合最多三個輪 id，交錯完成亦不重計。三個失敗輪累積到 403 後，冷卻 1800 秒（單調 clock，可注入）；其他失敗不視為成功，任一完整有效成功回應清零。未滿三輪時下次自動更新或手動重新整理照常重試。
+- **冷卻／探測**：冷卻中的輪無 HTTP、正常釋放工作與 in-flight，呈現 paused/service；不自行安排即時重試，不空轉。冷卻到期後下一輪只准一個 HTTP 探測，原子預留下一個 30 分鐘時段；探測不做 429／529 重試。scheduler 其他 worker 等待在途探測完成，成功即清零並在同輪恢復正常三路並行；探測失敗維持冷卻。熔斷前已准入的 HTTP 不取消，故一個初次失敗輪可有最多三個在途請求。
+- **封包／統計**：只增加固定 failure 代碼 service，不傳 URL、key、HTTP body。大小守衛從允許代碼取最大序列化長度，connection 仍最長；http／retries 記實際 HTTP，冷卻跳過批次不記 HTTP。
+- **測試**：假 server 403→403→200 恢復、401 永久關閉、同輪去重與跨 client 共用、三輪熔斷、1800 秒邊界、並行單探測、探測不退避重試、成功清零與同輪繼續、冷卻佇列／in-flight 釋放；前半原因文字及 packet 邊界也覆蓋 service。R36／R39 真實驗證另保存 feedexp/r40.json，副本 feeds.json 保持不變。
+
+- **本輪驗證結果**：Python 全套 374/374、前半 npm test 513/513 通過。真實 HTTP 硬上限 60，實際 requests=50、http=50、retries=0、failed=0（分類15／分析11／配對8／話題13／基調3），模型 elapsed=7.4s；300 則、model done，各 pending 全零。
+- **人工品質核對**：沿用 R35 準則逐則讀標題與摘要，三話題共46則：峰會40則／11家、載板3則／3家、K型經濟3則／3家。45則相關、一則待核對（ETtoday「對中貿易赤字狂降近40%」，摘要未明示與峰會的連結），無明確不相關。R35 四則已知誤入都仍在本次300則中，但均沒有 topic。與 r36 峰會39則相比新增3、移出2；資料時間及模型隨機性不同，不把淨增一則全部歸因於新規則。本次峰會中達三家資格的事件為種子本身（八則／四家），沒有額外非種子大事件供實測整組納入，該分支以 R39 PoC／回歸測試驗證。逐則記錄在 scratchpad/feedexp/r40-review.json。

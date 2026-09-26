@@ -14,6 +14,49 @@ class ModelStateTests(unittest.TestCase):
     tearDown = helpers.ToneSchedulerTests.tearDown
     make = helpers.ToneSchedulerTests.make
 
+    def test_403_pauses_but_refresh_recovers_and_circuit_drains_without_http(self):
+        for failures in (2, 3):
+            with self.subTest(failures=failures):
+                now = [0]
+                def respond(payload, number, _):
+                    if s.round_id <= failures: return 403, b'PRIVATE RBAC', {}
+                    return tone_response(payload) if 'q_0' in payload['questions'] else response(payload)
+                with server(respond) as (url, received):
+                    s, sink = self.make(url, snapshot([story('one', 'ALPHA')])[0])
+                    s.classifier.clock = lambda: now[0]
+                    for client in (s.analyzer, s.matcher, s.topic_matcher, s.tone_client):
+                        client.clock = s.classifier.clock
+                    s.start()
+                    count = 0
+                    for rid in range(1, failures + 1):
+                        eventually(lambda: s.last_list is not None and s.last_list['body']['model'] ==
+                                   {'state':'paused','reason':'failed','failure':'service'})
+                        eventually(lambda: not any((s.in_flight, s.analysis_in_flight, s.event_in_flight,
+                                                    s.topic_in_flight, s.tone_in_flight)))
+                        self.assertTrue(s.classifier.enabled)
+                        self.assertGreater(len(received), count)
+                        self.assertLessEqual(len(received) - count, 3)
+                        count = len(received)
+                        self.assertEqual(s.classifier._state.service_failures, rid)
+                        if rid < failures:
+                            s.refresh()
+                            eventually(lambda: s.completed >= rid + 1)
+                    if failures == 3:
+                        for rid in (4, 5):
+                            s.refresh()
+                            eventually(lambda: s.completed >= rid)
+                            eventually(lambda: s.last_list['body']['model']['state'] == 'paused')
+                            eventually(lambda: not any((s.in_flight, s.analysis_in_flight, s.event_in_flight,
+                                                        s.topic_in_flight, s.tone_in_flight)))
+                            self.assertEqual(len(received), count)
+                            self.assertTrue(all(lane.jobs.empty() for lane in s.lanes))
+                        now[0] = 1800
+                    s.refresh()
+                    eventually(lambda: s.last_list['body']['model']['state'] == 'done', timeout=3)
+                    self.assertEqual(s.classifier._state.service_failures, 0)
+                    self.assertGreater(len(received), failures)
+                    s.stop()
+
     def test_failed_and_budget_rounds_pause_then_refresh_finishes(self):
         for reason in ['failed', 'budget']:
             with self.subTest(reason=reason):
@@ -78,12 +121,12 @@ class ModelStateTests(unittest.TestCase):
     def test_failure_details_are_safe_codes_from_transport_and_validation(self):
         from back.classify import Classifier
         from back.scheduler import Scheduler, ModelRound
-        for mode, expected in [('429','busy'),('529','busy'),('timeout','connection'),
+        for mode, expected in [('403','service'),('429','busy'),('529','busy'),('timeout','connection'),
                                ('json','response'),('answers','response'),('500','other')]:
             with self.subTest(mode=mode):
                 def respond(payload, _number, release):
                     if mode == 'timeout': release.wait(.1)
-                    if mode in ('429','529','500'): return int(mode),b'SECRET-URL-KEY',{}
+                    if mode in ('403','429','529','500'): return int(mode),b'SECRET-URL-KEY',{}
                     return 200,(b'not json SECRET-URL-KEY' if mode == 'json' else {'answers':{}}),{}
                 with server(respond) as (url, received):
                     logs=[]
@@ -107,7 +150,7 @@ class ModelStateTests(unittest.TestCase):
         packet={'t':'msg','body':{'items':[{} for _ in range(100)],'model':{'state':'done','reason':''}}}
         packet['body']['padding']='x'*(MAX_PACKET-len(packet_bytes(packet)))
         initial=fit_packet(packet)
-        for detail in ('busy','connection','response','other'):
+        for detail in ('busy','connection','response','service','other'):
             changed=deepcopy(initial)
             changed['body']['model']={'state':'paused','reason':'failed','failure':detail}
             self.assertLessEqual(len(packet_bytes(changed)),MAX_PACKET)

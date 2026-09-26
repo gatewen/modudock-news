@@ -249,10 +249,10 @@ class ModelWorkerTests(unittest.TestCase):
                   'topics':self.s.topic_in_flight,'tone':self.s.tone_in_flight}[lane]
         self.assertFalse(inflight)
 
-    def test_http_401_and_403_stop_new_admission_across_workers(self):
+    def test_http_401_stop_new_admission_across_workers(self):
         from back.classify import Classifier
         from tests.test_classify import server
-        for status in (401,403):
+        for status in (401,):
             with self.subTest(status=status):
                 gates=[threading.Event() for _ in range(3)]
                 def respond(payload,n,_):

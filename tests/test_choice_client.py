@@ -87,7 +87,7 @@ class RateLimitTests(unittest.TestCase):
                 self.assertEqual(sleeps, [] if budget==.5 else [.5])
 
     def test_auth_failure_never_retries_and_disables_shared_clients(self):
-        for status in (401,403):
+        for status in (401,):
             sleeps=[]
             with server(lambda *_:(status,{},{})) as (url, received):
                 client=Classifier(endpoint=url,key='secret',sleep=sleeps.append,log=lambda _:None)

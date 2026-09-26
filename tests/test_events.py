@@ -238,8 +238,8 @@ class MatcherTests(unittest.TestCase):
             with self.subTest(valid=valid, headers=headers), server(lambda *_: (200, payload, headers)) as (url, _):
                 self.assertEqual(self.client(url).match(disjoint(1)) is not None, valid)
 
-    def test_401_403_permanently_disable_shared_clients(self):
-        for status in [401, 403]:
+    def test_401_permanently_disable_shared_clients(self):
+        for status in [401]:
             with self.subTest(status=status), server(lambda *_: (status, {}, {})) as (url, received):
                 classifier = Classifier(endpoint=url, key='secret', log=lambda _: None)
                 client = EventMatcher(shared=classifier)

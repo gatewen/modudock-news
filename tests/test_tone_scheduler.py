@@ -122,7 +122,7 @@ class ToneSchedulerTests(unittest.TestCase):
                 eventually(lambda:s.completed==1 and len(received)==1 and not s.tone_in_flight)
                 self.assertFalse(s.tone_cache)
                 self.assertTrue(s.tone_jobs.empty())
-                if status in [401,403]:
+                if status == 401:
                     eventually(lambda:s.last_list['body']['topics']['tone_pending']==0)
                     self.assertTrue(all(not c.enabled for c in [s.classifier,s.analyzer,s.matcher,s.topic_matcher,s.tone_client]))
                 s.stop()

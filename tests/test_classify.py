@@ -240,8 +240,81 @@ class ClassifyTests(unittest.TestCase):
     def test_401_permanently_disables(self):
         self.permanent(401)
 
-    def test_403_permanently_disables(self):
-        self.permanent(403)
+    def test_403_recovers_on_next_round_without_disabling(self):
+        from back.classify import _failure_detail
+        with server(lambda p,n,_: (403, {}, {}) if n < 3 else (200, answers(), {})) as (url, received):
+            client = self.client(url)
+            for _ in range(2):
+                self.assertIsNone(client.classify(items()))
+                self.assertTrue(client.enabled)
+                self.assertEqual(_failure_detail.get(), 'service')
+            self.assertEqual(client.classify(items()), dict.fromkeys((x[0] for x in items()), 'tech'))
+            self.assertEqual(len(received), 3)
+            self.assertEqual(client._state.service_failures, 0)
+
+    def test_403_circuit_shared_rounds_cooldown_single_probe_and_success_reset(self):
+        from concurrent.futures import ThreadPoolExecutor
+        from back.classify import _service_round
+        from back.analyze import Analyzer
+        now = [0]
+        with server(lambda p,n,_: (403, {}, {}) if n <= 3 else (200, answers(), {})) as (url, received):
+            client = self.client(url, clock=lambda: now[0])
+            shared = Analyzer(shared=client)
+            for rid in range(3):
+                token = _service_round.set(rid)
+                try:
+                    self.assertIsNone(client.classify(items()))
+                    self.assertIsNone(shared.analyze(items()))
+                    self.assertEqual(len(received), rid + 1)
+                finally: _service_round.reset(token)
+            self.assertTrue(client.enabled)
+            for _ in range(10): self.assertIsNone(client.classify(items()))
+            self.assertEqual(len(received), 3)
+            now[0] = 1799
+            self.assertIsNone(client.classify(items()))
+            # Hold the probe inside HTTP, so all simultaneous attempts must
+            # be rejected before the successful probe closes the circuit.
+            entered, release = threading.Event(), threading.Event()
+            opener = client._opener.open
+            def blocked(*args, **kwargs):
+                entered.set(); self.assertTrue(release.wait(2))
+                return opener(*args, **kwargs)
+            client._opener.open = blocked
+            now[0] = 1800
+            with ThreadPoolExecutor(max_workers=3) as pool:
+                probe = pool.submit(client.classify, items())
+                self.assertTrue(entered.wait(2))
+                try:
+                    self.assertIsNone(pool.submit(shared.analyze, items()).result(1))
+                    self.assertIsNone(pool.submit(client.classify, items()).result(1))
+                finally: release.set()
+                self.assertIsNotNone(probe.result(2))
+            client._opener.open = opener
+            self.assertEqual(len(received), 4)
+            self.assertEqual(client._state.service_failures, 0)
+            self.assertIsNotNone(client.classify(items()))
+            self.assertEqual(len(received), 5)
+
+    def test_interleaved_403_completions_count_each_round_once_and_stay_bounded(self):
+        client = self.client('http://localhost/unused', clock=lambda: 0)
+        for rid in (1, 2, 1, 2): client._service_unavailable(rid)
+        self.assertEqual(client._state.service_failures, 2)
+        for rid in range(3, 1000): client._service_unavailable(rid)
+        self.assertEqual(client._state.service_failures, 3)
+        self.assertEqual(len(client._state.service_rounds), 3)
+        client._service_success()
+        self.assertFalse(client._state.service_rounds)
+
+    def test_circuit_probe_does_not_retry_429_or_529(self):
+        for status in (403, 429, 529):
+            with server(lambda *_: (status, {}, {})) as (url, received):
+                client = self.client(url, clock=lambda: 1800)
+                client._state.service_failures = 3
+                client._state.service_probe_at = 1800
+                self.assertIsNone(client.classify(items()))
+                self.assertIsNone(client.classify(items()))
+                self.assertEqual(len(received), 1)
+
 
     def transient(self, status):
         def respond(payload, count, release):

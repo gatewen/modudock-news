@@ -17,13 +17,13 @@ import time
 
 if __package__:
     from .feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
-    from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail
+    from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from .events import candidate_pairs, group_events, _fits as pairs_fit
     from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
     from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
-    from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail
+    from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from events import candidate_pairs, group_events, _fits as pairs_fit
     from topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
@@ -375,6 +375,11 @@ class Scheduler:
             del self.model_rounds[round_id]
 
     def _next_lane(self):
+        # During a half-open probe, peers wait on cv rather than treating
+        # the probe reservation as another failure of the recovering round.
+        if (getattr(self.classifier, "service_circuit_open", False)
+                and any(work.running for work in self.model_rounds.values())):
+            return None
         for lane in self.lanes:
             # Includes queued and completed-but-unaccepted event work. Lower
             # lanes may proceed while an event HTTP request is still in flight.
@@ -488,6 +493,7 @@ class Scheduler:
             if allowed:
                 token = _http_observer.set(lambda retry: self._record_http(work, retry))
                 failure_token = _failure_detail.set("other")
+                service_token = _service_round.set(work.round_id)
                 try:
                     result = self._call(lane, batch, kind)
                 except Exception:
@@ -495,6 +501,7 @@ class Scheduler:
                 finally:
                     failure_detail = _failure_detail.get()
                     _failure_detail.reset(failure_token)
+                    _service_round.reset(service_token)
                     _http_observer.reset(token)
             with self.cv:
                 if allowed:
@@ -623,7 +630,7 @@ class Scheduler:
             reason = 'failed' if work.failures or not expired else 'budget'
             state = {'state': 'paused', 'reason': reason}
             if reason == 'failed':
-                state['failure'] = work.failure_detail if work.failure_detail in ('busy', 'connection', 'response') else 'other'
+                state['failure'] = work.failure_detail if work.failure_detail in ('busy', 'connection', 'response', 'service') else 'other'
             return state
         return {'state': 'paused', 'reason': 'waiting'}
 

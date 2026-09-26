@@ -108,7 +108,7 @@ class TopicSchedulerTests(unittest.TestCase):
                 eventually(lambda:self.done(s))
                 self.assertEqual(len(received), 1)
                 self.assertFalse(s.topic_in_flight)
-                if status in [200,401,403]:
+                if status in [200,401]:
                     eventually(lambda:s.last_list['body']['topics']['pending'] == 0)
                 if status == 200:
                     self.assertEqual(list(s.topic_cache.values()), [False])
@@ -116,7 +116,7 @@ class TopicSchedulerTests(unittest.TestCase):
                     self.assertEqual(s.last_list['body']['topics']['list'], first['body']['topics']['list'])
                 else:
                     self.assertFalse(s.topic_cache)
-                if status in [401,403]:
+                if status == 401:
                     self.assertTrue(all(not c.enabled for c in [s.classifier,s.analyzer,s.matcher,s.topic_matcher]))
                     self.assertEqual(s.last_list['body']['topics']['pending'], 0)
                 s.stop()

@@ -1875,11 +1875,11 @@ export default function mount(ctx) {
       : `${failureName(source)}${typeof source.error === "string" ? `：${Array.from(source.error).slice(0,80).join("")}` : ""}`).join("\n");
     all.title = status.title;
     if (Array.isArray(offNotice)) status.title = [status.title, offNotice[1]].filter(Boolean).join("\n");
-    const failureCode = ["busy", "connection", "response", "other"].includes(body.model?.failure) ? body.model.failure : "other";
+    const failureCode = ["busy", "connection", "response", "service", "other"].includes(body.model?.failure) ? body.model.failure : "other";
     const pauseAdvice = modelState === "paused" ? modelReason === "budget"
       ? "本輪整理預算用完，下次更新繼續"
       : modelReason === "waiting" ? "等待下次更新接手未完成項目"
-      : ({busy:"服務忙碌，稍後自動重試", connection:"連線失敗，請檢查網路；下次更新重試",
+      : ({service:"模型服務暫時無法使用，下次更新自動重試", busy:"服務忙碌，稍後自動重試", connection:"連線失敗，請檢查網路；下次更新重試",
           response:"回應無法使用，下次更新重試；若持續發生，請聯絡模組維護者",
           other:"整理未完成，下次更新重試；若持續發生，請聯絡模組維護者"}[failureCode]
           || "整理未完成，下次更新重試；若持續發生，請聯絡模組維護者") : "";

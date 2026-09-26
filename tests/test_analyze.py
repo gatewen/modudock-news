@@ -182,8 +182,8 @@ class AnalyzeTests(unittest.TestCase):
                 self.assertEqual(result["dir_p"], expected)
                 self.assertEqual(result["dir"], "neutral" if value < 0.35 else "bull")
 
-    def test_401_and_403_permanently_disable(self):
-        for status in (401, 403):
+    def test_401_permanently_disable(self):
+        for status in (401,):
             with self.subTest(status=status), server(lambda *_: (status, b'analysis-secret', {})) as (url, received):
                 client = self.client(url)
                 self.assertEqual(list(client.analyze_round(items(21))), [])

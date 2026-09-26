@@ -4665,7 +4665,7 @@ test('R21 manual reading writes last-writer wins, restores baseline, tolerates s
   assert.equal(h.container.querySelector('.nw-undo-read').hidden,false);
 });
 
-for(const [reason,failure,phrase] of [['failed','busy','服務忙碌'],['failed','connection','檢查網路'],
+for(const [reason,failure,phrase] of [['failed','service','模型服務暫時無法使用，下次更新自動重試'],['failed','busy','服務忙碌'],['failed','connection','檢查網路'],
   ['failed','response','回應無法使用'],['failed','other','聯絡模組維護者'],['budget',null,'預算用完'],['waiting',null,'等待下次更新'],
   ['failed',{secret:'<img src=x>'},'聯絡模組維護者'],['failed','toString','聯絡模組維護者'],
   ['failed','__proto__','聯絡模組維護者']]) test(`R21 paused advice ${reason}/${JSON.stringify(failure)}`,t=>{

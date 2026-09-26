@@ -968,7 +968,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
     def test_auth_failure_in_either_client_disables_both_permanently(self):
         from tests.test_classify import server
         for stage in ('classification', 'analysis'):
-            for status in (401, 403):
+            for status in (401,):
                 with self.subTest(stage=stage, status=status):
                     def respond(payload, *_):
                         return (status, {}, {}) if model_kind(payload) == stage else (200, model_answers(payload), {})

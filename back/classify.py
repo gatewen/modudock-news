@@ -36,6 +36,7 @@ MAX_BODY = 1024 * 1024
 THRESHOLD = 0.35
 # Per worker invocation, not shared mutable client state; no payload/key exposure.
 _http_observer = ContextVar("news_http_observer", default=None)
+_service_round = ContextVar("news_service_round", default=None)
 _failure_detail = ContextVar("news_failure_detail", default="other")
 CRITERIA = {
     "politics": "台灣或各國政府、選舉、政黨、法案、外交",
@@ -67,6 +68,9 @@ class _ResponseDeadline(Exception):
 class _ClientState:
     enabled: bool
     reason: str = ""
+    service_failures: int = 0
+    service_rounds: set = field(default_factory=set, repr=False)
+    service_probe_at: float = 0
     lock: object = field(default_factory=threading.Lock, repr=False)
 
 
@@ -124,6 +128,41 @@ class _ChoiceClient:
         with self._state.lock:
             return self._state.reason
 
+    @property
+    def service_circuit_open(self):
+        with self._state.lock:
+            return self._state.service_failures >= 3
+
+    def _service_admit(self, round_id):
+        with self._state.lock:
+            state = self._state
+            if round_id in state.service_rounds:
+                return False, False
+            probe = state.service_failures >= 3
+            if probe:
+                if self.clock() < state.service_probe_at:
+                    return False, False
+                # Reserve the single probe across all clients and workers.
+                state.service_probe_at = self.clock() + 1800
+            return True, probe
+
+    def _service_unavailable(self, round_id):
+        with self._state.lock:
+            state = self._state
+            # Keep at most three identities; overlapping old completions
+            # must not count the same round twice. Once open, count saturates.
+            if round_id not in state.service_rounds and state.service_failures < 3:
+                state.service_rounds.add(round_id)
+                state.service_failures += 1
+            if state.service_failures >= 3:
+                state.service_probe_at = self.clock() + 1800
+
+    def _service_success(self):
+        with self._state.lock:
+            self._state.service_failures = 0
+            self._state.service_rounds.clear()
+            self._state.service_probe_at = 0
+
     def _run_round(self, items, request):
         """Yield detached successful candidates; stop at a failed batch (rate-limit retries are request-local)."""
         started = self.clock()
@@ -164,6 +203,13 @@ class _ChoiceClient:
         if urlsplit(self.endpoint).scheme == "https" and not self.has_ca:
             self.log(f"{self._label}: no CA certificates")
             return None
+        round_id = _service_round.get()
+        if round_id is None:
+            round_id = object()  # Standalone calls each constitute a round.
+        admitted, probe = self._service_admit(round_id)
+        if not admitted:
+            _failure_detail.set("service")
+            return None
         payload = {
             "model": MODEL,
             "state": {f"news_{i}": {"title": title, "summary": summary}
@@ -187,9 +233,14 @@ class _ChoiceClient:
                 except HTTPError as exc:
                     response = exc
                 with response:
-                    if response.code in (401, 403):
+                    if response.code == 401:
                         self.enabled = False
                         self.log(f"{self._label}: disabled (HTTP {response.code})")
+                        return None
+                    if response.code == 403:
+                        self._service_unavailable(round_id)
+                        _failure_detail.set("service")
+                        self.log(f"{self._label}: service unavailable (HTTP 403)")
                         return None
                     if response.code in (429, 529):
                         limited = True
@@ -215,7 +266,7 @@ class _ChoiceClient:
                 if not limited:
                     break
                 delay = 0.5 * (2 ** attempt)
-                if attempt == 2 or self.clock() + delay >= deadline:
+                if probe or attempt == 2 or self.clock() + delay >= deadline:
                     self.log(f"{self._label}: rate limited")
                     _failure_detail.set("busy")
                     return None
@@ -228,7 +279,9 @@ class _ChoiceClient:
             document = json.loads(data)
             if not isinstance(document, dict) or not isinstance(document.get("answers"), dict):
                 raise _InvalidResponse()
-            return self._decode(batch, document["answers"], context)
+            result = self._decode(batch, document["answers"], context)
+            self._service_success()
+            return result
         except _ResponseDeadline:
             _failure_detail.set("connection")
             self.log(f"{self._label}: response deadline")
