@@ -28,7 +28,7 @@ class ModelStatsTests(unittest.TestCase):
             s.log = lambda line: logs.append(line) if line.startswith('model ') else None
             s.start()
             eventually(lambda: len(logs) == 1 and s.last_list['body']['topics']['tone_pending'] == 0, timeout=5)
-            self.assertRegex(logs[0], r'^model round=1 requests=3 failed=0 elapsed=\d+\.\ds classify=0 analysis=0 events=0 topics=2 tone=1 http=3 retries=0 total_http=3 total_retries=0$')
+            self.assertRegex(logs[0], r'^model round=1 requests=3 failed=0 elapsed=\d+\.\ds classify=0 analysis=0 events=0 topics=2 tone=1 http=3 retries=0 total_http=3 total_retries=0 requeued=0$')
             self.assertEqual(s.last_list['body']['topics']['tone_pending'], 0)
             s.refresh()
             eventually(lambda: s.completed == 2)
@@ -72,7 +72,7 @@ class ModelStatsTests(unittest.TestCase):
                 stats = [line for line in logs if line.startswith('model ')]
                 count = 4 if failure or budget == 80 else 5
                 self.assertEqual(stats, [f'model round=7 requests={count} failed={int(bool(failure))} elapsed={count*20:.1f}s '
-                    f'classify=1 analysis=1 events=1 topics=1 tone={int(not failure and budget==100)} http=0 retries=0 total_http=0 total_retries=0'])
+                    f'classify=1 analysis=1 events=1 topics=1 tone={int(not failure and budget==100)} http=0 retries=0 total_http=0 total_retries=0 requeued=0'])
                 self.assertFalse(s.model_rounds)
                 self.assertFalse(any(secret in '\n'.join(logs) for secret in ['SECRET','private.invalid','NEWS-CONTENT']))
 
@@ -152,9 +152,9 @@ class ModelStatsTests(unittest.TestCase):
             return False
         s._submit_classification = submit
         s._classify_worker()
-        self.assertEqual((work.http,work.retries,work.failures),(1,0,1))
-        self.assertIn('requests=1 ',logs[0])
-        self.assertIn('http=1 retries=0 total_http=1',logs[0])
+        self.assertEqual((work.http,work.retries,work.failures),(2,0,1))
+        self.assertIn('requests=2 ',logs[0])
+        self.assertIn('http=2 retries=0 total_http=2',logs[0])
         self.assertNotIn('secret-bearing','\n'.join(logs))
         # An admitted batch may fail TLS preflight without calling HTTP at all.
         client.has_ca = False
@@ -162,7 +162,7 @@ class ModelStatsTests(unittest.TestCase):
         s.classify_jobs.put((second, ('key2','title','')))
         s._classify_worker()
         self.assertEqual((second.http,second.retries),(0,0))
-        self.assertIn('http=0 retries=0 total_http=1',logs[-1])
+        self.assertIn('http=0 retries=0 total_http=2',logs[-1])
 
     def test_deferred_topic_then_real_tone_closes_round_with_http_stats(self):
         from back.classify import Classifier

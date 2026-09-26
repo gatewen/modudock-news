@@ -38,6 +38,7 @@ THRESHOLD = 0.35
 _http_observer = ContextVar("news_http_observer", default=None)
 _service_round = ContextVar("news_service_round", default=None)
 _failure_detail = ContextVar("news_failure_detail", default="other")
+_retryable_failure = ContextVar("news_retryable_failure", default=False)
 CRITERIA = {
     "politics": "台灣或各國政府、選舉、政黨、法案、外交",
     "finance": "股匯市、經濟數據、企業財報與併購、房市、產業景氣（科技公司的財報歸這裡）",
@@ -204,6 +205,7 @@ class _ChoiceClient:
 
     def _request(self, batch, context=None):
         """One bounded HTTP batch. None means disabled or whole-batch failure."""
+        _retryable_failure.set(False)
         if not self.enabled:
             return None
         batch = list(batch)
@@ -257,6 +259,7 @@ class _ChoiceClient:
                     if response.code in (429, 529):
                         limited = True
                     elif response.code != 200:
+                        _retryable_failure.set(not probe and 500 <= response.code < 600)
                         self.log(f"{self._label}: HTTP {response.code}")
                         return None
                     else:
@@ -295,14 +298,17 @@ class _ChoiceClient:
             self._service_success(round_id)
             return result
         except _ResponseDeadline:
+            _retryable_failure.set(not probe)
             _failure_detail.set("connection")
             self.log(f"{self._label}: response deadline")
             return None
         except (OSError, URLError, http.client.HTTPException):
+            _retryable_failure.set(not probe)
             _failure_detail.set("connection")
             self.log(f"{self._label}: request or response failed")
             return None
         except (ValueError, RecursionError):
+            _retryable_failure.set(not probe)
             _failure_detail.set("response")
             # Never log exception text, response content or request headers:
             # any of them could contain the secret (including an echoed key).

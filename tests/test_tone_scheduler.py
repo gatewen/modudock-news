@@ -119,7 +119,7 @@ class ToneSchedulerTests(unittest.TestCase):
             with self.subTest(status=status), server(lambda *_:(status,b'',{})) as (url, received):
                 s, _ = self.make(url, items)
                 s.start()
-                eventually(lambda:s.completed==1 and len(received)==1 and not s.tone_in_flight)
+                eventually(lambda:s.completed==1 and len(received)==(2 if status==500 else 1) and not s.tone_in_flight)
                 self.assertFalse(s.tone_cache)
                 self.assertTrue(s.tone_jobs.empty())
                 if status == 401:

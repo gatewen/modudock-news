@@ -137,7 +137,7 @@ class Endurance:
                 'event_cache': len(s.event_cache), 'topic_cache': len(s.topic_cache),
                 'tone_cache': len(s.tone_cache), 'classify_cache': len(s.classify_cache),
                 'analysis_cache': len(s.analysis_cache), 'model_rounds': len(s.model_rounds),
-                'results': len(s.results), 'fetch_jobs': s.jobs.qsize(),
+                'model_requeues': len(s.model_requeues), 'results': len(s.results), 'fetch_jobs': s.jobs.qsize(),
                 'last_topic_seeds': len(s.last_topic_seeds),
                 'candidate_keys': len(s._event_candidate_keys),
                 'candidate_items': len((s._event_candidates_list or {}).get('body', {}).get('items', [])),
@@ -160,14 +160,14 @@ class Endurance:
                 'topic_cache':20000,'tone_cache':4000,'classify_cache':4000,
                 'analysis_cache':4000,'last_topic_seeds':5,'candidate_items':300,
                 'candidate_keys':44850,'last_items':300,'results':32,'fetch_jobs':32,
-                'model_rounds':3, 'classify_in_flight':360, 'analysis_in_flight':360,
+                'model_requeues':300, 'model_rounds':3, 'classify_in_flight':360, 'analysis_in_flight':360,
                 'tone_in_flight':360, 'events_in_flight':720, 'topics_in_flight':357}
         for name,value in m.items():
             if name in caps:
                 assert value <= caps[name], (name,value,caps[name])
             if name.endswith('_jobs'):
                 assert value <= (600 if name=='events_jobs' else 32 if name=='fetch_jobs' else 300),(name,value)
-            if idle and (name.endswith('_jobs') or name.endswith('_in_flight') or name in ('results','model_rounds')):
+            if idle and (name.endswith('_jobs') or name.endswith('_in_flight') or name in ('results','model_rounds','model_requeues')):
                 assert value == 0,(name,value)
             self.peak[name] = max(self.peak[name],value)
         assert m['owned_threads']==8 and m['model_workers']==3,m

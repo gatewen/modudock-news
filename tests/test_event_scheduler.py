@@ -201,17 +201,17 @@ class EventSchedulerTests(unittest.TestCase):
         self.assertFalse(any(pair.key == processing.key for _, pair in scheduler.event_jobs.queue))
 
     def test_failure_releases_inflight_and_retries_next_round(self):
-        with server(lambda p, n, _: (500, {}, {}) if n == 1 else response(p)) as (url, received):
+        with server(lambda p, n, _: (500, {}, {}) if n <= 2 else response(p)) as (url, received):
             scheduler, sink, _ = self.make(self.pair_items(), self.clients(url))
             scheduler.start()
             self.round(sink)
-            eventually(lambda: len(received) == 1 and self.idle(scheduler))
+            eventually(lambda: len(received) == 2 and self.idle(scheduler))
             self.assertFalse(scheduler.event_cache)
             self.assertEqual(sink.packets.get(timeout=2)['body']['model'], {'state':'paused','reason':'failed','failure':'other'})
             scheduler.refresh()
             self.round(sink)
             self.assertEqual(sink.packets.get(timeout=2)['body']['events']['pending'], 0)
-            self.assertEqual(len(received), 2)
+            self.assertEqual(len(received), 3)
 
     def test_auth_failure_in_any_stage_disables_all_three_and_releases_jobs(self):
         for stage in ['classify', 'events', 'analysis']:

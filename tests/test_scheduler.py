@@ -660,17 +660,17 @@ class ClassificationSchedulerTests(unittest.TestCase):
 
     def test_failure_releases_inflight_and_next_round_retries(self):
         from tests.test_classify import server, answers
-        with server(lambda p, n, _: (500, {}, {}) if n == 1 else (200, answers(len(p["state"])), {})) as (url, received):
+        with server(lambda p, n, _: (500, {}, {}) if n <= 2 else (200, answers(len(p["state"])), {})) as (url, received):
             scheduler, sink, _ = self.create(lambda *_: ok(), classifier=self.classifier(url))
             scheduler.start()
             self.round(sink)
-            eventually(lambda: len(received) == 1 and not scheduler.in_flight)
+            eventually(lambda: len(received) == 2 and not scheduler.in_flight)
             self.assertEqual(self.cache(scheduler), {})
             self.assertEqual(sink.packets.get(timeout=2)['body']['model'], {'state':'paused','reason':'failed','failure':'other'})
             scheduler.refresh()
             self.round(sink)
             self.assertEqual(sink.packets.get(timeout=2)["body"]["items"][0]["category"], "tech")
-            self.assertEqual(len(received), 2)
+            self.assertEqual(len(received), 3)
 
     def test_401_resends_disabled_state_and_never_retries(self):
         from tests.test_classify import server
@@ -938,7 +938,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             self.assertNotIn('key-0', self.cache(scheduler))
 
     @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
-    def test_analysis_failure_releases_all_keys_and_stops_round_then_retries(self):
+    def test_analysis_transient_failure_recovers_same_round_and_refresh_uses_cache(self):
         from tests.test_classify import server
         attempts = []
         def respond(payload, *_):
@@ -953,14 +953,14 @@ class AnalysisSchedulerTests(unittest.TestCase):
             self.round(sink)
             self.next_analysis(sink)
             self.next_analysis(sink)
-            eventually(lambda: len(attempts) == 1 and self.idle(scheduler))
-            self.assertEqual(self.cache(scheduler), {})
-            self.assertEqual(len(received), 3)
-            self.assertEqual(sink.packets.get(timeout=2)['body']['model'], {'state':'paused','reason':'failed','failure':'other'})
+            eventually(lambda: len(attempts) == 3 and self.idle(scheduler))
+            self.assertEqual(len(self.cache(scheduler)), 21)
+            self.assertEqual(len(received), 5)
+            self.assertFalse(scheduler.model_work.failed)
+            self.assertEqual(scheduler.model_work.requeued, 1)
+            while not sink.packets.empty(): sink.packets.get_nowait()
             scheduler.refresh()
             self.round(sink)
-            self.next_analysis(sink)
-            self.next_analysis(sink)
             eventually(lambda: self.idle(scheduler))
             self.assertEqual(len(attempts), 3)
             self.assertEqual(len(self.cache(scheduler)), 21)
@@ -1111,7 +1111,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             self.assertEqual(len(received), 2)
 
     @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
-    def test_classification_failure_also_stops_cached_analysis_same_round(self):
+    def test_transient_classification_failure_allows_cached_analysis_before_requeue(self):
         from tests.test_classify import server
         with server(lambda p, n, _: (500, {}, {}) if n == 1 else (200, model_answers(p), {})) as (url, received):
             scheduler, sink, _ = self.create(lambda *_: analysis_feed(['finance-a', 'tech-new']), **self.clients(url))
@@ -1119,13 +1119,11 @@ class AnalysisSchedulerTests(unittest.TestCase):
                 scheduler.classify_cache['https://example.com/finance-a'] = 'finance'
             scheduler.start()
             self.round(sink)
-            eventually(lambda: len(received) == 1 and self.idle(scheduler))
-            self.assertEqual(self.cache(scheduler), {})
-            self.assertEqual(sink.packets.get(timeout=2)['body']['model'], {'state':'paused','reason':'failed','failure':'other'})
-            scheduler.refresh()
-            self.round(sink)
-            eventually(lambda: len(self.cache(scheduler)) == 2)
-            self.assertGreaterEqual(len(received), 3)
+            eventually(lambda: len(self.cache(scheduler)) == 2 and self.idle(scheduler))
+            self.assertEqual(len(received), 4)
+            self.assertEqual([model_kind(p) for _,_,p in received], ['classification','analysis','classification','analysis'])
+            self.assertFalse(scheduler.model_work.failed)
+            self.assertEqual(scheduler.model_work.requeued, 1)
 
     @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_analysis_queue_bounded_and_deduplicates_queued_processing_keys(self):

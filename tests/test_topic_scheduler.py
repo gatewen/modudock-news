@@ -106,7 +106,7 @@ class TopicSchedulerTests(unittest.TestCase):
                 first = sink.packets.get(timeout=2)
                 sink.packets.get(timeout=2)
                 eventually(lambda:self.done(s))
-                self.assertEqual(len(received), 1)
+                self.assertEqual(len(received), 2 if status == 500 else 1)
                 self.assertFalse(s.topic_in_flight)
                 if status in [200,401]:
                     eventually(lambda:s.last_list['body']['topics']['pending'] == 0)
@@ -213,12 +213,13 @@ class TopicSchedulerTests(unittest.TestCase):
             s, _ = self.make(url, items)
             s.start()
             eventually(lambda:self.done(s), timeout=5)
-            self.assertEqual(len(received), 1)
+            self.assertEqual(len(received), 4)  # Three originals, one retry; other retries are released.
+            self.assertFalse(s.model_requeues)
             self.assertTrue(s.topic_jobs.empty())
             self.assertFalse(s.topic_in_flight)
             self.assertFalse(s.topic_cache)
             s.refresh()
-            eventually(lambda:s.completed==2 and not s.topic_in_flight and len(received)==2, timeout=5)
+            eventually(lambda:s.completed==2 and not s.topic_in_flight and len(received)==8, timeout=5)
             self.assertFalse(s.topic_cache)
 
     def test_seed_state_tracks_only_successfully_sent_lists_and_survives_round_stop(self):

@@ -11,10 +11,10 @@ import unittest
 class RealRunTests(unittest.TestCase):
     def test_completed_round_usage_summary_includes_retries_without_summing_totals(self):
         for stats, expected in [([
-            'model round=1 requests=1 http=3 retries=2 total_http=3',
-            'model round=2 requests=1 http=2 retries=1 total_http=5'],
-            'requests=2 http=5 retries=3'),
-            (['model round=1 requests=2'], 'requests=2 http=unknown retries=unknown')]:
+            'model round=1 requests=1 http=3 retries=2 total_http=3 requeued=1',
+            'model round=2 requests=1 http=2 retries=1 total_http=5 requeued=2'],
+            'requests=2 http=5 retries=3 requeued=3'),
+            (['model round=1 requests=2'], 'requests=2 http=unknown retries=unknown requeued=unknown')]:
             with self.subTest(stats=stats), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 (root/'back').mkdir()

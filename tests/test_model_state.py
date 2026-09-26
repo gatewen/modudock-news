@@ -63,9 +63,9 @@ class ModelStateTests(unittest.TestCase):
                 now, first = [0], [True]
                 def respond(payload, *_):
                     if first[0]:
-                        first[0] = False
                         if reason == 'failed':
                             return 500, b'PRIVATE FAILURE CONTENT', {}
+                        first[0] = False
                         now[0] = 61
                     return tone_response(payload) if 'q_0' in payload['questions'] else response(payload)
                 with server(respond) as (url, _):
@@ -79,6 +79,7 @@ class ModelStateTests(unittest.TestCase):
                     self.assertEqual(s.last_list['body']['at'], initial['body']['at'])
                     eventually(lambda: not (s.topic_in_flight or s.tone_in_flight))
                     while not sink.packets.empty(): sink.packets.get_nowait()
+                    first[0] = False
                     s.refresh()
                     # An acknowledged old result may still be serializing a
                     # resend. The new round's publish fences its initial list.
