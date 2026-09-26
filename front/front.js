@@ -345,6 +345,68 @@ export default function mount(ctx) {
   let disposed = false;
   let shortcutOrigin = null;
   let refreshTimer = null;
+  let keyboardReading = false, initialStage = true, initialWorkAt = null, initialTimer = null;
+  function scrollHost() {
+    let node = root.parentElement;
+    while (node) {
+      const style = view.getComputedStyle(node);
+      if (/(auto|scroll|overlay)/.test(style.overflowY || style.overflow) && node.scrollHeight > node.clientHeight) return node;
+      node = node.parentElement;
+    }
+    return document.scrollingElement;
+  }
+  function captureReading() {
+    if (!received || keyboardReading) return null;
+    const scroller = scrollHost();
+    if (!scroller) return null;
+    const isPage = scroller === document.scrollingElement;
+    const bounds = isPage ? {top:0,bottom:view.innerHeight} : scroller.getBoundingClientRect();
+    const candidates = [...list.querySelectorAll('a.nw-title, a.nw-report-title')]
+      .filter(node => !node.closest('[hidden]'))
+      .map(node => ({href:node.href, top:node.getBoundingClientRect().top, bottom:node.getBoundingClientRect().bottom}))
+      .filter(row => row.bottom > bounds.top && row.top < bounds.bottom);
+    return candidates.length ? {scroller, candidates} : null;
+  }
+  function restoreReading(snapshot) {
+    if (!snapshot || !snapshot.scroller.isConnected) return;
+    const links = [...list.querySelectorAll('a.nw-title, a.nw-report-title')];
+    for (const candidate of snapshot.candidates) {
+      let node = links.find(node => node.href === candidate.href);
+      if (!node) continue;
+      const reports = node.closest('.nw-reports');
+      if (reports?.hidden) {
+        const row = node.closest('.nw-row');
+        expanded.add(row.dataset.event);
+        reports.hidden = false;
+        row.querySelector('.nw-expand')?.setAttribute('aria-expanded', 'true');
+      }
+      if (!node) continue;
+      snapshot.scroller.scrollTop += node.getBoundingClientRect().top - candidate.top;
+      break;
+    }
+  }
+  function readingKeyboard() { keyboardReading = true; }
+  function readingPointer() { keyboardReading = false; }
+  function modelLabel() {
+    if (modelState !== "working") return modelState === "paused" ? (modelReason === "waiting" ? "整理暫停，等待下次更新" : "整理暫停，下次更新繼續") : "";
+    if (!initialStage) return "整理中";
+    return "新聞已可閱讀・整理分類與話題中" + (initialWorkAt !== null && Date.now()-initialWorkAt >= 30000 ? "・可按重新整理" : "");
+  }
+  function updateInitialStage() {
+    if (!initialStage) return;
+    if (modelState !== "working") {
+      initialStage = false;
+      if (initialTimer !== null) view.clearTimeout(initialTimer);
+      initialTimer = null;
+    } else if (initialWorkAt === null) {
+      initialWorkAt = Date.now();
+      initialTimer = view.setTimeout(() => {
+        initialTimer = null;
+        if (disposed || !initialStage || modelState !== "working") return;
+        const position = captureReading(); drawItems(); restoreReading(position);
+      }, 30000);
+    }
+  }
   let latestAt = "", refreshAt = "", refreshNotice = "";
   let items = [];
   let searchIndex = new WeakMap();
@@ -717,13 +779,7 @@ export default function mount(ctx) {
     if (button.dataset.topicId) {
       if (selectedTopic === button.dataset.topicId) { returnToView(); return; }
       if (!selectedTopic && !selectedCount?.topic) {
-        let scroller = root.parentElement;
-        while (scroller) {
-          const style = view.getComputedStyle(scroller);
-          if (/(auto|scroll|overlay)/.test(style.overflowY || style.overflow) && scroller.scrollHeight > scroller.clientHeight) break;
-          scroller = scroller.parentElement;
-        }
-        scroller ||= document.scrollingElement;
+        const scroller = scrollHost();
         savedView = {source:sources.value, category:categories.value, theme:selectedTheme, count:selectedCount, watched:onlyWatched, newOnly:onlyNew,
           scroller, scrollTop:scroller?.scrollTop || 0, focus:focusIdentity(document.activeElement)};
       }
@@ -1242,7 +1298,7 @@ export default function mount(ctx) {
     const prefix = lastSeen === null ? 0 : firstOld < 0 ? groups.length : firstOld;
     const dividerIndex = !chronological && prefix > 0 && prefix < groups.length ? prefix : -1;
     if (received) {
-      const modelText = modelState === "working" ? "整理中" : modelState === "paused" ? (modelReason === "waiting" ? "整理暫停，等待下次更新" : "整理暫停，下次更新繼續") : "";
+      const modelText = modelLabel();
       const before = [updatedText, refreshNotice, modelText].filter(Boolean).join(" · ");
       const after = [failedText, classificationText].filter(Boolean).join(" · ");
       if (newOnly.parentNode !== status) status.replaceChildren(statusBefore, newOnly, statusAfter);
@@ -1553,6 +1609,7 @@ export default function mount(ctx) {
     drawItems();
   }
   function renderList(body) {
+    const readingPosition = captureReading();
     const undoHadFocus = document.activeElement === undoRead;
     undoReading = null;
     if (text(body.at) !== latestAt) refreshNotice = "";
@@ -1561,6 +1618,7 @@ export default function mount(ctx) {
     modelReason = typeof body.model?.reason === "string" ? body.model.reason : "";
     modelState = body.model && typeof body.model === "object" && ["working", "paused", "done", "off"].includes(body.model.state)
       ? body.model.state : "";
+    updateInitialStage();
     received = true;
     const previousEvents = new Map();
     for (const item of items) {
@@ -1710,7 +1768,7 @@ export default function mount(ctx) {
     modelDescription.textContent = pauseAdvice;
     if (pauseAdvice) status.title = [status.title, pauseAdvice].filter(Boolean).join("\n");
     if (lostTopic) returnToView(true);
-    else drawItems();
+    else { drawItems(); restoreReading(readingPosition); }
     if (undoHadFocus) (markRead.hidden || markRead.disabled ? list : markRead).focus({preventScroll:true});
   }
   function onBrowseKey(event) {
@@ -1778,6 +1836,9 @@ export default function mount(ctx) {
   searchInput.addEventListener("input", onSearch);
   searchInput.addEventListener("keydown", onSearchKey);
   searchClear.addEventListener("click", onSearchClear);
+  root.addEventListener("keydown", readingKeyboard);
+  view.addEventListener("pointerdown", readingPointer);
+  view.addEventListener("wheel", readingPointer, {passive:true});
   root.addEventListener("keydown", onBrowseKey);
   list.addEventListener("click", onExpand);
   list.addEventListener("click", onSummary);
@@ -1821,6 +1882,11 @@ export default function mount(ctx) {
       panelToggle.removeEventListener("click", onPanelToggle);
       up = false;
       finishRefresh();
+      if (initialTimer !== null) view.clearTimeout(initialTimer);
+      initialTimer = null;
+      root.removeEventListener("keydown", readingKeyboard);
+      view.removeEventListener("pointerdown", readingPointer);
+      view.removeEventListener("wheel", readingPointer);
       refresh.disabled = true;
       shortcutToggle.removeEventListener("click", toggleShortcuts);
       shortcutOrigin = null;

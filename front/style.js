@@ -1,6 +1,7 @@
 export const css = `
 .nw {
   position: relative;
+  overflow-anchor: none;
   --nw-bg: var(--md-bg, #ffffff);
   --nw-fg: var(--md-fg, #242424);
   --nw-muted: var(--md-fg-muted, #616161);

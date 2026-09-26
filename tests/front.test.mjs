@@ -2253,7 +2253,7 @@ test('topic progress counts new events with old representatives and coexists wit
 
 test('model status shows working and paused, with focus hint only while topics are absent', t => {
   const h=setup(t);
-  for (const [state,label] of [['working','整理中'],['paused','整理暫停，下次更新繼續'],['done',''],['off','']]) {
+  for (const [state,label] of [['working','新聞已可閱讀・整理分類與話題中'],['paused','整理暫停，下次更新繼續'],['done',''],['off','']]) {
     h.message({...listing([]),model:{state,reason:'ignored'}});
     const status=h.container.querySelector('[role=status]').textContent;
     if(label) assert.ok(status.includes(`更新 · ${label}`));
@@ -2442,7 +2442,7 @@ test('working suppresses pending classification count while paused and done reta
   for (const state of ['working','paused','done']) {
     h.message({...listing([article()]),classify:{enabled:true,pending:7},model:{state}});
     if (state==='working') {
-      assert.match(status(),/整理中/);
+      assert.match(status(),/新聞已可閱讀・整理分類與話題中/);
       assert.doesNotMatch(status(),/未分類/);
     } else assert.match(status(),/未分類：7/);
     h.message({...listing([]),classify:{enabled:true,pending:0},model:{state}});
@@ -4922,4 +4922,63 @@ test('R27 search-only redraw updates collapsed panel title scope immediately on 
   search(h,'無命中');assert.match(toggle.title,/未套用搜尋/);
   h.container.querySelector('.nw-search-input').dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
   assert.doesNotMatch(toggle.title,/未套用搜尋/);
+});
+
+function scrollHarness(t) {
+  const h=setup(t),scroller=h.container;
+  scroller.style.overflowY='auto';
+  Object.defineProperty(scroller,'scrollHeight',{value:3000});Object.defineProperty(scroller,'clientHeight',{value:200});
+  scroller.getBoundingClientRect=()=>({top:100,bottom:300});scroller.scrollTop=500;
+  const body=listing(['a','b','c'].map(title=>article({title,link:`https://e.test/${title}`})));
+  h.message(body);
+  let positions={a:640,b:700,c:760};
+  const rect=function(){const key=this.href?.split('/').pop();const top=(positions[key]??0)-scroller.scrollTop;return {top,bottom:top+20};};
+  h.window.HTMLAnchorElement.prototype.getBoundingClientRect=rect;
+  function freezeOld(){for(const link of scroller.querySelectorAll('a.nw-title')) {
+    const base=positions[link.href.split('/').pop()];link.getBoundingClientRect=()=>({top:base-scroller.scrollTop,bottom:base-scroller.scrollTop+20});
+  }}
+  return {...h,body,scroller, shift(next){freezeOld();positions=next;}};
+}
+test('R28 list deliveries retain visible report offset, fall forward when removed and accept new at',t=>{
+  for(const kind of ['same','new','removed']) {
+    const h=scrollHarness(t);h.shift({a:800,b:860,c:920});
+    const next={...h.body,at:kind==='new'?'2026-09-22T00:00:00Z':h.body.at};
+    if(kind==='removed')next.items=next.items.slice(1);
+    h.message(next);assert.equal(h.scroller.scrollTop,660,kind);
+    const title=h.container.querySelector('a.nw-title');assert.equal(title.getBoundingClientRect().top,kind==='removed'?200:140);
+  }
+});
+test('R28 user edits and keyboard reading skip anchoring; wheel restores mouse reading',t=>{
+  const h=scrollHarness(t);h.shift({a:800,b:860,c:920});
+  search(h,'b');assert.equal(h.scroller.scrollTop,500);
+  search(h,'');h.container.querySelector('.nw-list').dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'j',bubbles:true}));
+  h.shift({a:960,b:1020,c:1080});h.message(h.body);assert.equal(h.scroller.scrollTop,500);
+  // Put a visible row back into the viewport before exercising the wheel path.
+  h.scroller.scrollTop=820;h.window.dispatchEvent(new h.window.WheelEvent('wheel'));
+  h.shift({a:1120,b:1180,c:1240});h.message(h.body);assert.equal(h.scroller.scrollTop,980);
+  assert.match(h.container.querySelector('style').textContent,/overflow-anchor: none/);
+});
+test('R28 first loading stage gains a 30 second hint without a delivery, clears on completion and cleans timer',t=>{
+  const start=Date.parse('2026-09-26T04:00:00Z');t.mock.timers.enable({apis:['Date'],now:start});
+  let callback,cleared=false;
+  const h=setup(t,w=>{w.setTimeout=(fn,ms)=>{if(ms===30000)callback=fn;return 19;};w.clearTimeout=()=>{cleared=true;};});
+  h.up();const status=()=>h.container.querySelector('.nw-status').textContent;
+  assert.equal(status(),'等待新聞更新');
+  const body={...listing([article()]),model:{state:'working'}};h.message(body);
+  assert.match(status(),/新聞已可閱讀・整理分類與話題中/);assert.doesNotMatch(status(),/可按重新整理/);
+  t.mock.timers.setTime(start+30000);callback();assert.match(status(),/可按重新整理/);
+  h.message({...body,model:{state:'done'}});assert.doesNotMatch(status(),/新聞已可閱讀|可按重新整理/);
+  h.message(body);assert.match(status(),/整理中/);assert.doesNotMatch(status(),/新聞已可閱讀/);
+  h.handle.unmount();callback();assert.equal(h.container.children.length,0);
+  const next=setup(t,w=>{w.setTimeout=()=>19;w.clearTimeout=()=>{cleared=true;};});next.message(body);next.handle.unmount();assert.equal(cleared,true);
+});
+
+test('R28 a visible report merged into a child stays visible at its reading offset',t=>{
+  const h=scrollHarness(t);h.shift({a:800,b:740,c:920});
+  h.message({...h.body,items:h.body.items.map((item,i)=>i<2?{...item,event:'111111111111',event_size:2,
+    published:i===1?'2026-09-20T00:00:00Z':item.published}:item)});
+  const child=[...h.container.querySelectorAll('.nw-report-title')].find(a=>a.href==='https://e.test/a');
+  assert.equal(child.closest('.nw-reports').hidden,false);
+  assert.equal(child.closest('.nw-row').querySelector('.nw-expand').getAttribute('aria-expanded'),'true');
+  assert.equal(h.scroller.scrollTop,660);assert.equal(child.getBoundingClientRect().top,140);
 });
