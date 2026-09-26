@@ -67,17 +67,20 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None):
         latest = max(dates[key] for key in members)
         while True:
             terms = set().union(*(features[key] for key in members))
+            member_events = {event_of[key] for key in members}
             candidates = [key for key in records if key not in members and event_of[key] not in claimed
-                          and abs(dates[key] - latest) <= WINDOW and features[key] & terms]
+                          and abs(dates[key] - latest) <= WINDOW
+                          and (event_of[key] in member_events or features[key] & terms)]
             additions = set()
             for key in candidates:
                 if cache.get((seed, key)) is True:
-                    additions.update(events[event_of[key]])
+                    additions.add(key)
             if additions - members:
                 members.update(additions)
                 continue
             candidates = [key for key in candidates if (seed, key) not in cache]
-            candidates.sort(key=lambda key: (-len(features[key] & terms), -dates[key].timestamp(), key))
+            candidates.sort(key=lambda key: (event_of[key] not in member_events,
+                                             -len(features[key] & terms), -dates[key].timestamp(), key))
             unanswered = [(seed, key) for key in candidates[:MAX_PENDING]]
             break
         if source_count(members) < 3:
