@@ -51,13 +51,15 @@ export const css = `
 .nw .nw-panel { background: var(--nw-surface); border-radius: 8px; padding: 14px 16px; }
 .nw .nw-focus-section { background: var(--nw-surface); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
 .nw .nw-focus-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
+.nw .nw-event-latest { display: block; min-width: 0; text-decoration: none; }
+.nw a.nw-event-latest:hover { text-decoration: underline; }
 .nw .nw-focus-list { display: grid; gap: 10px; }
 .nw .nw-focus-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .nw .nw-focus-count { font-size: 12px; white-space: nowrap; }
 .nw .nw-focus-count[data-topic-id][aria-pressed="true"], .nw .nw-watch-only[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 3px 0 0 var(--nw-accent); }
 .nw .nw-focus-short { display: none; }
 .nw .nw-focus-copy { min-width: 0; }
-.nw .nw-topic-latest { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nw .nw-topic-latest, .nw .nw-event-latest { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .nw .nw-tone { margin-top: 6px; }
 .nw .nw-bar.nw-tone-bar { height: 4px; margin-bottom: 4px; }
 .nw .nw-tone-negative { background: var(--nw-tone-neg); }

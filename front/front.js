@@ -851,7 +851,7 @@ export default function mount(ctx) {
   function focusIdentity(node) {
     if (!node || !root.contains(node)) return null;
     if (node.matches(".nw-list a")) return {
-      selector: ".nw-list a", href: node.href, event: node.closest(".nw-row")?.dataset.event || "",
+      selector: node.classList.contains("nw-event-latest") ? ".nw-list a.nw-event-latest" : ".nw-list a:not(.nw-event-latest)", href: node.href, event: node.closest(".nw-row")?.dataset.event || "",
     };
     if (node.matches(".nw-focus-row a")) {
       const row = node.closest(".nw-focus-row");
@@ -880,11 +880,11 @@ export default function mount(ctx) {
         && (identity.topic === undefined || (row?.dataset.topicId || "") === identity.topic);
     });
     if (!target && identity.href !== undefined) {
-      const matches = [...list.querySelectorAll("a")].filter(node => node.href === identity.href);
+      const matches = [...list.querySelectorAll("a:not(.nw-event-latest)")].filter(node => node.href === identity.href);
       if (matches.length === 1) target = matches[0];
     }
     if (!target && identity.rowHref) {
-      const matches = [...list.querySelectorAll("a")].filter(node => node.href === identity.rowHref);
+      const matches = [...list.querySelectorAll("a:not(.nw-event-latest)")].filter(node => node.href === identity.rowHref);
       if (matches.length === 1)
         target = matches[0].closest(".nw-row").querySelector(identity.attribute === "event" ? ".nw-expand" : ".nw-summary-toggle");
     }
@@ -976,6 +976,7 @@ export default function mount(ctx) {
           cached.toggle.setAttribute("aria-expanded", String(open));
           cached.reports.hidden = !open;
         }
+        if (cached.latestLink) cached.latestLink.hidden = Boolean(query && hits(cached.latest));
         const title = cached.row.querySelector(".nw-title");
         const badge = title.querySelector(".nw-new");
         const marked = newGroups[index] && index >= prefix;
@@ -1020,6 +1021,22 @@ export default function mount(ctx) {
       info.append(make("span", "nw-source", text(item.source)), groupTime(group.reports));
       appendTone(info, item);
       row.append(newsTitle(item, "nw-title", newGroups[index] && index >= prefix), meta);
+      let latest = item, latestTime = Date.parse(text(item.published));
+      for (const report of group.reports) {
+        const time = Date.parse(text(report.published));
+        if (Number.isFinite(latestTime) && time > latestTime) { latest = report; latestTime = time; }
+      }
+      let latestLink = null;
+      if (latest !== item && text(latest.title) && text(latest.title) !== text(item.title)) {
+        const link = newsTitle({...latest, title: `最新：${text(latest.title)}（${text(latest.source)}）`},
+          "nw-hint nw-event-latest", isNew(latest));
+        if (link.tagName === "A") {
+          latestLink = link;
+          link.title = text(latest.title);
+          link.hidden = Boolean(query && hits(latest));
+          meta.before(link);
+        }
+      }
       if (group.reports.length > 1) {
         const toggle = make("button", "nw-expand", `另 ${group.reports.length - 1} 則報導`);
         toggle.type = "button";
@@ -1052,11 +1069,11 @@ export default function mount(ctx) {
         button.dataset.summary = key;
         button.setAttribute("aria-expanded", String(summaries.has(key)));
         button.setAttribute("aria-controls", paragraph.id);
-        actions.append(button);
+        actions.prepend(button);
         meta.after(paragraph);  // Below meta, so the toggle does not move when expanded.
       }
       if (actions.childElementCount) meta.append(actions);
-      searchRows.set(cacheKey, {row, markers, toggle: row.querySelector(".nw-expand"), reports: row.querySelector(".nw-reports")});
+      searchRows.set(cacheKey, {row, markers, latest, latestLink, toggle: row.querySelector(".nw-expand"), reports: row.querySelector(".nw-reports")});
       rendered.append(row);
     }
     list.replaceChildren(rendered);

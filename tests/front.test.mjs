@@ -696,7 +696,7 @@ test('events collapse to earliest report and toggle accessible other reports wit
   const row = mainRows(h)[0];
   const button = row.querySelector('.nw-expand');
   assert.equal(button.parentElement.className, 'nw-actions');
-  assert.equal(button.parentElement.lastElementChild.className, 'nw-summary-toggle');
+  assert.equal(button.parentElement.firstElementChild.className, 'nw-summary-toggle');
   assert.equal(button.textContent, '另 2 則報導');
   assert.equal(button.getAttribute('aria-expanded'), 'false');
   const reports = row.querySelector('.nw-reports');
@@ -1823,7 +1823,7 @@ test('merged focused report follows unique href and opens its new group with syn
   h.container.querySelector('a[href="https://example.com/b"]').focus();
   const merged = listing([a, {...b,event:a.event}]);
   h.message(merged);
-  const target = h.container.querySelector('a[href="https://example.com/b"]');
+  const target = h.container.querySelector('a.nw-report-title[href="https://example.com/b"]');
   assert.equal(h.window.document.activeElement, target);
   assert.equal(target.closest('.nw-reports').hidden, false);
   assert.equal(h.container.querySelector('.nw-expand').getAttribute('aria-expanded'), 'true');
@@ -1883,7 +1883,7 @@ test('seen divider is absent without baseline, or with only new or only old grou
     for (const hours of baseline ? [[11,12], [8,10], []] : [[11,8]]) {
       h.message(listing(hours.map((hour,i) => eventStory(String(i).padStart(12,'0'), '報導', hour))));
       assert.equal(divider(h), null);
-      assert.equal(h.container.querySelector('.nw-list .nw-new'), null);
+      assert.equal(h.container.querySelector('.nw-list .nw-title .nw-new, .nw-list .nw-report-title .nw-new'), null);
     }
   }
 });
@@ -1900,8 +1900,9 @@ test('seen divider precedes first old group, omits child markers and retains foc
   assert.equal(line.getAttribute('aria-label'), '以下是上次離開前的新聞');
   assert.equal(line.querySelector('a,button,[tabindex]'), null);
   assert.equal(line.hasAttribute('tabindex'), false);
-  assert.equal(h.container.querySelector('.nw-list .nw-new'), null);
+  assert.equal(h.container.querySelector('.nw-list .nw-title .nw-new, .nw-list .nw-report-title .nw-new'), null);
   assert.equal(focusArea(h).querySelectorAll('.nw-new').length, 1);
+  assert.equal(mainRows(h)[0].querySelector('.nw-event-latest .nw-new').textContent, '新');
   assert.equal(mainRows(h).length, 2);
   assert.match(h.container.querySelector('[role=status]').textContent, /新增 1 個事件/);
   const css = h.container.querySelector('style').textContent;
@@ -2152,7 +2153,7 @@ test('summary toggles safe full source text with aria, survives resend and prese
   h.message(body);
   let button=h.container.querySelector('.nw-summary-toggle');
   const paragraph=()=>h.window.document.getElementById(button.getAttribute('aria-controls'));
-  assert.equal(button.parentElement.lastElementChild,button);
+  assert.equal(button.parentElement.firstElementChild,button);
   assert.equal(button.textContent,'摘要');
   assert.equal(button.hasAttribute('aria-label'),false);
   assert.equal(paragraph().previousElementSibling.className,'nw-meta');
@@ -2355,9 +2356,9 @@ test('row separates ordered information from right-aligned actions with narrow l
   assert.deepEqual([...info.children].map(node=>node.className.split(' ')[0]),
     ['nw-watch','nw-tag','nw-category','nw-source','nw-time','nw-tone-tag']);
   assert.equal(info.querySelector('button'),null);
-  assert.deepEqual([...actions.children].map(node=>node.className),['nw-expand','nw-summary-toggle']);
-  assert.equal(actions.children[0].textContent,'另 1 則報導');
-  assert.equal(actions.children[1].textContent,'摘要');
+  assert.deepEqual([...actions.children].map(node=>node.className),['nw-summary-toggle','nw-expand']);
+  assert.equal(actions.children[1].textContent,'另 1 則報導');
+  assert.equal(actions.children[0].textContent,'摘要');
   actions.children[0].click(); actions.children[1].click();
   assert.equal(row.querySelector('.nw-reports').hidden,false);
   assert.equal(row.querySelector('.nw-summary').hidden,false);
@@ -3731,4 +3732,66 @@ test('R6 search count is live beside input with only one clear control', t => {
   assert.equal(box.querySelectorAll('button').length,1);
   assert.equal(hint.textContent,'搜尋「needle」：1 個事件');
   box.querySelector('button').click(); assert.equal(hint.hidden,true); assert.equal(box.querySelector('input').value,'');
+});
+
+const eventLatest = h => h.container.querySelector('.nw-event-latest');
+const latestReports = () => [
+  eventStory('123456abcdef','最早報導',8,{link:'https://e.test/first',source:'甲'}),
+  eventStory('123456abcdef','最新報導',12,{link:'https://e.test/latest',source:'乙'}),
+  eventStory('123456abcdef','中間報導',10,{link:'https://e.test/middle',source:'甲'}),
+];
+test('R7 latest event report is a safe muted link below representative with new badge and native tab order', t => {
+  const h=setup(t,withSeen('2026-09-24T09:00:00Z'));
+  h.message(listing(latestReports()));
+  const row=mainRows(h)[0], link=eventLatest(h);
+  assert.equal(row.querySelector('.nw-title').textContent,'最早報導');
+  assert.equal(link.textContent,'新最新：最新報導（乙）');
+  assert.equal(link.title,'最新報導'); assert.equal(link.href,'https://e.test/latest');
+  assert.equal(link.target,'_blank'); assert.equal(link.rel,'noopener noreferrer');
+  assert.equal(row.querySelector('.nw-title').nextElementSibling,link);
+  const controls=[...row.querySelectorAll('a,button')].filter(node=>!node.closest('[hidden]'));
+  assert.deepEqual(controls.map(node=>node.className),['nw-title','nw-hint nw-event-latest','nw-summary-toggle','nw-expand']);
+  assert.ok(controls.every(node=>node.getAttribute('tabindex')===null));
+  for(const node of controls) { node.focus(); assert.equal(h.window.document.activeElement,node); }
+  const css=h.window.getComputedStyle(link);
+  assert.equal(css.whiteSpace,'nowrap'); assert.equal(css.overflow,'hidden'); assert.equal(css.textOverflow,'ellipsis');
+  row.querySelector('.nw-expand').click();
+  assert.deepEqual([...row.querySelectorAll('.nw-report-title')].map(node=>node.textContent),['中間報導','最新報導']);
+});
+
+test('R7 latest requires a different title and strictly later valid time, in the filtered group', t => {
+  const h=setup(t), [first,latest]=latestReports();
+  for(const reports of [[first], [first,{...latest,title:first.title}],
+    [first,{...latest,published:first.published}], [first,{...latest,published:'bad'}],
+    [first,{...latest,link:'javascript:alert(1)'}]]) {
+    h.message(listing(reports)); assert.equal(eventLatest(h),null);
+  }
+  h.message(listing([latest,first])); assert.equal(eventLatest(h).title,latest.title);
+  assert.equal(eventLatest(h).querySelector('.nw-new'),null); // No saved lastSeen.
+  choose(h,h.select,'乙'); assert.equal(eventLatest(h),null); assert.deepEqual(mainTitles(h),[latest.title]);
+});
+
+test('R7 resend updates latest and keeps focused latest distinct from its child copy', t => {
+  const h=setup(t), reports=latestReports(); h.message(listing(reports));
+  eventLatest(h).focus(); h.message(listing(reports));
+  assert.equal(h.window.document.activeElement,eventLatest(h));
+  h.container.querySelector('.nw-expand').click();
+  const child=[...h.container.querySelectorAll('.nw-report-title')].find(n=>n.href==='https://e.test/latest');
+  child.focus(); h.message(listing(reports));
+  assert.ok(h.window.document.activeElement.classList.contains('nw-report-title'));
+  const newest={...reports[1],title:'<img src=x>後續',published:'2026-09-24T14:00:00Z',link:'https://e.test/new'};
+  h.message(listing([...reports,newest]));
+  assert.equal(eventLatest(h).textContent,'最新：<img src=x>後續（乙）');
+  assert.equal(eventLatest(h).title,newest.title); assert.equal(h.container.querySelector('img'),null);
+});
+
+test('R7 search hides only a matching latest preview and recomputes it on cached input and resends', t => {
+  const h=setup(t), reports=latestReports(); h.message(listing(reports));
+  search(h,'最新報導'); assert.equal(eventLatest(h).hidden,true);
+  assert.equal(h.container.querySelector('.nw-reports').hidden,false);
+  assert.equal(h.container.querySelectorAll('.nw-report .nw-search-match').length,1);
+  search(h,'最早報導'); assert.equal(eventLatest(h).hidden,false);
+  search(h,'摘要'); assert.equal(eventLatest(h).hidden,true); // Summary matches the latest too.
+  h.message({...listing(reports),at:'2026-09-26T00:00:00Z'}); assert.equal(eventLatest(h).hidden,true);
+  search(h,''); assert.equal(eventLatest(h).hidden,false);
 });
