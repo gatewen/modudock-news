@@ -1229,7 +1229,8 @@ test('new markers use frozen mount baseline, include focus and grouped reports, 
   assert.match(h.container.querySelector('[role=status]').textContent, /新增 1 個事件/);
   choose(h, h.select, '媒體0');
   assert.equal(h.container.querySelector('.nw-new'), null);
-  assert.equal(h.container.querySelector('.nw-new-only').textContent, '新增 0 個事件');
+  assert.equal(h.container.querySelector('.nw-new-only').textContent, '');
+  assert.equal(h.container.querySelector('.nw-new-only').hidden, true);
   assert.equal(h.container.querySelector('.nw-new-only').disabled, true);
   h.handle.unmount();
   assert.equal(JSON.parse(h.window.localStorage.getItem(seenKey)), '2099-01-01T00:00:00.000Z'); // Persistence respects the newer stored value; display still uses frozen L.
@@ -1475,16 +1476,20 @@ test('expanded report link keeps focus by href and containing event after replac
 
 const toneCounts = (overrides = {}) => ({positive:0, negative:0, neutral:0, mixed:0, ...overrides});
 
+const toneListing = topic => topicListing(Object.entries(topic.tone).flatMap(([tone,count]) =>
+  Array.from({length:count},(_,i)=>article({topic:topic.id,tone,title:`${tone}-${i}`,
+    link:`https://example.com/${tone}/${i}`}))),[topic]);
+
 test('topic tone needs five judged reports, sorts positive counts and uses a decorative four-pixel bar', t => {
   const h = setup(t);
-  h.message(topicListing([], [topicRecord({count:41, tone:toneCounts({negative:4})})]));
+  h.message(toneListing(topicRecord({count:41, tone:toneCounts({negative:4})})));
   assert.equal(focusArea(h).querySelector('.nw-tone'), null);
-  h.message(topicListing([], [topicRecord({count:41, tone:toneCounts({negative:5})})]));
-  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調：負面 5');
+  h.message(toneListing(topicRecord({count:41, tone:toneCounts({negative:5})})));
+  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調：負面 5 則報導');
   assert.equal(focusArea(h).querySelectorAll('.nw-tone .nw-segment').length, 1);
-  h.message(topicListing([], [topicRecord({count:41, tone:{positive:4, negative:17, neutral:15, mixed:5}})]));
+  h.message(toneListing(topicRecord({count:41, tone:{positive:4, negative:17, neutral:15, mixed:5}})));
   const tone = focusArea(h).querySelector('.nw-tone');
-  assert.equal(tone.querySelector('.nw-hint').textContent, '報導基調：負面 17・中性 15・正反 5・正面 4');
+  assert.equal(tone.querySelector('.nw-hint').textContent, '報導基調：負面 17 則報導中性 15 則報導正反 5 則報導正面 4 則報導');
   const bar = tone.querySelector('.nw-tone-bar');
   assert.equal(bar.getAttribute('aria-hidden'), 'true');
   assert.equal(h.window.getComputedStyle(bar).height, '4px');
@@ -1509,10 +1514,10 @@ test('bad topic tone is ignored without losing the topic or interpreting hostile
     assert.equal(focusArea(h).querySelector('.nw-tone'), null);
     assert.equal(focusArea(h).querySelector('img'), null);
   }
-  h.message(topicListing([], [topicRecord({count:10, tone:toneCounts({positive:5, neutral:5})})]));
-  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調：中性 5・正面 5');
+  h.message(toneListing(topicRecord({count:10, tone:toneCounts({positive:5, neutral:5})})));
+  assert.equal(focusArea(h).querySelector('.nw-tone .nw-hint').textContent, '報導基調：中性 5 則報導正面 5 則報導');
   focusTopicButtons(h)[0].focus();
-  h.message(topicListing([], [topicRecord({count:10, tone:toneCounts({negative:5, neutral:5})})]));
+  h.message(toneListing(topicRecord({count:10, tone:toneCounts({negative:5, neutral:5})})));
   assert.equal(h.window.document.activeElement, focusTopicButtons(h)[0]);
 });
 const watchKey = 'modudock.module.news.watch';
@@ -2225,7 +2230,7 @@ test('topic progress counts new events with old representatives and coexists wit
   const reports=[eventStory('111111111111','old representative',8,{topic:id}),
     eventStory('111111111111','new child',11,{topic:id}),eventStory('111111111111','new sibling',12,{topic:id}),
     eventStory('222222222222','new event',11,{topic:id}),eventStory('333333333333','old event',7,{topic:id})];
-  const body=topicListing(reports,[topicRecord({count:5,tone:{positive:2,negative:3,neutral:0,mixed:0}})]);
+  const body=topicListing(reports.map((item,i)=>({...item,tone:i<2?'positive':'negative'})),[topicRecord({count:5,tone:{positive:2,negative:3,neutral:0,mixed:0}})]);
   const first=setup(t); first.message(body);
   assert.equal(first.container.querySelector('.nw-topic-new'),null);
   const h=setup(t,withSeen(seenAt)); h.message(body);
@@ -2736,7 +2741,7 @@ test('topic latest selects newest member across filters and renders before tone 
   const newest = article({title, topic:topic.id, source:'乙', category:'world', published:'2026-09-24T12:00:00Z'});
   const middle = article({title:'較舊', topic:topic.id, published:'2026-09-24T10:00:00Z'});
   const outside = article({title:'不屬於話題', published:'2026-09-25T12:00:00Z'});
-  h.message(topicListing([newest, seed, outside, middle], [topic]));
+  h.message(topicListing([newest, seed, middle, {...middle,link:'https://example.com/4'}, {...middle,link:'https://example.com/5'}].map(item=>({...item,tone:'neutral'})).concat(outside), [topic]));
   choose(h, h.categories, 'finance');
   choose(h, h.select, '甲');
   const row = h.container.querySelector('.nw-topic-latest');
@@ -3821,8 +3826,8 @@ for (const [category,name,report] of [['finance','財經',financeArticle()],['te
 }
 
 test('R8 finance labels and macro controls explain news impact while report tone stays unchanged', t => {
-  const h=setup(t), topic=topicRecord({count:10,tone:{positive:2,negative:1,mixed:1,neutral:1}});
-  h.message(topicListing(countFixture('finance').map(i=>({...i,topic:topic.id,tone:'positive'})),[topic]));
+  const h=setup(t), topic=topicRecord({count:10,tone:{positive:2,negative:1,mixed:1,neutral:6}});
+  h.message(topicListing(countFixture('finance').map((i,n)=>({...i,topic:topic.id,tone:n<2?'positive':n===2?'negative':n===3?'mixed':'neutral'})),[topic]));
   choose(h,h.categories,'finance');
   const p=panel(h), expected=['偏多','多空互見','與股市無關','偏空'];
   assert.equal(p.querySelector('.nw-signal-heading small').textContent,'依新聞內容判斷對股市的影響，非行情');
@@ -4043,7 +4048,10 @@ test('R11 zero and absent baseline cannot activate new filter; zero while active
   const h=setup(t,withSeen(seenAt)); h.message(listing(r11Rows()));
   const toggle=h.container.querySelector('.nw-new-only'); toggle.click();
   h.message(listing([r11Rows()[2]]));
-  assert.equal(toggle.disabled,true); assert.equal(toggle.getAttribute('aria-pressed'),'true');
+  assert.equal(toggle.disabled,true); assert.equal(toggle.hidden,true);
+  assert.equal(toggle.getAttribute('aria-pressed'),'true');
+  assert.equal(h.container.querySelector('.nw-new-hint').hidden,false);
+  assert.equal(h.container.querySelector('.nw-new-hint button').disabled,false);
   assert.equal(mainRows(h).length,0);
   h.container.querySelector('.nw-new-hint button').click(); assert.equal(mainRows(h).length,1);
   toggle.dispatchEvent(new h.window.Event('click'));
@@ -4106,3 +4114,177 @@ for (const [category,name] of [['finance','財經'],['tech','科技'],['world','
     search(h,''); assert.equal(hint.hidden,true); assert.equal(sample.textContent,full);
   });
 }
+
+// §20.12: complete per-report evidence, including different tones in one event.
+function auditFixture() {
+  const topics=[topicRecord({count:8,tone:toneCounts({negative:2,neutral:1,mixed:1,positive:2})}),
+    topicRecord({id:'fedcba654321',title:'第二話題',count:6,tone:toneCounts({negative:1,neutral:2,mixed:1,positive:2})})];
+  const items=topics.flatMap((topic,t)=>['negative','positive','negative','neutral','mixed','positive',null,'invalid']
+    .slice(0,t?6:8).map((tone,i)=>article({topic:topic.id,tone:t&&i===2?'neutral':tone,
+      event:(t?'bbbbbbbbbbbb':'aaaaaaaaaaaa'),event_size:t?6:8,
+      title:i?`話題${t}報導${i}`:topic.title,source:['甲','乙','丙'][i%3],
+      link:`https://example.com/audit/${t}/${i}`,summary:`來源摘要 ${t}-${i}`,
+      published:`2026-09-24T${String(8+i).padStart(2,'0')}:00:00Z`})));
+  return topicListing(items,topics);
+}
+const auditButton=(h,topic,tone)=>[...h.container.querySelectorAll('.nw-tone-button')]
+  .find(button=>button.dataset.toneKey===`${topic}:${tone}`);
+const auditRows=h=>[...h.container.querySelectorAll('.nw-tone-audit .nw-tone-report')];
+
+test('R12 every visible tone count opens exactly its contributing reports, including same-event disagreement',t=>{
+  const h=setup(t),body=auditFixture(); h.message(body);
+  for(const topic of body.topics.list) for(const tone of ['negative','neutral','mixed','positive']) {
+    const button=auditButton(h,topic.id,tone), expected=body.items.filter(item=>item.topic===topic.id&&item.tone===tone);
+    assert.equal(button.tagName,'BUTTON'); assert.equal(button.getAttribute('aria-label'),null);
+    assert.match(button.textContent,new RegExp(`${expected.length} 則報導$`));
+    button.focus(); button.click();
+    assert.equal(h.container.querySelectorAll('.nw-tone-audit').length,1);
+    assert.equal(auditRows(h).length,expected.length);
+    assert.deepEqual(auditRows(h).map(row=>row.querySelector('a').href),expected.map(item=>item.link));
+    assert.equal(h.container.querySelector('.nw-tone-audit h4').textContent,'依標題與摘要判斷的報導基調・按報導計');
+    for(const [i,row] of auditRows(h).entries()) {
+      assert.equal(row.querySelector('.nw-source').textContent,expected[i].source);
+      assert.ok(row.querySelector('.nw-time').textContent); assert.equal(row.querySelector('a').target,'_blank');
+      assert.equal(row.querySelector('a').rel,'noopener noreferrer');
+    }
+    assert.equal(h.container.querySelectorAll('.nw-tone-button[aria-expanded="true"]').length,1);
+    assert.ok(h.window.document.activeElement===auditButton(h,topic.id,tone));
+    assert.equal(auditButton(h,topic.id,tone).getAttribute('aria-controls'),h.container.querySelector('.nw-tone-audit').id);
+  }
+  assert.equal(h.container.querySelector('.nw-tone-pending').textContent,'待判定 2 則');
+});
+
+test('R12 same button and Escape collapse and return focus; evidence summaries use individual report identity',t=>{
+  const h=setup(t),body=auditFixture(),id=body.topics.list[0].id; h.message(body);
+  auditButton(h,id,'negative').click();
+  const first=auditRows(h)[0].querySelector('.nw-summary-toggle'); first.click();
+  assert.equal(first.getAttribute('aria-expanded'),'true');
+  assert.equal(h.window.document.getElementById(first.getAttribute('aria-controls')).hidden,false);
+  assert.equal(auditRows(h)[1].querySelector('.nw-summary').hidden,true);
+  first.focus(); first.dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert.equal(auditRows(h).length,0);
+  assert.equal(auditButton(h,id,'negative').getAttribute('aria-expanded'),'false');
+  assert.ok(h.window.document.activeElement===auditButton(h,id,'negative'));
+  auditButton(h,id,'negative').click(); assert.equal(auditRows(h)[0].querySelector('.nw-summary').hidden,false);
+  auditButton(h,id,'negative').click(); assert.equal(auditRows(h).length,0);
+  assert.ok(h.window.document.activeElement===auditButton(h,id,'negative'));
+});
+
+test('R12 resends refresh evidence counts and preserve focused report; disappearance closes the audit',t=>{
+  const h=setup(t),body=auditFixture(),id=body.topics.list[0].id; h.message(body);
+  auditButton(h,id,'negative').click(); const link=auditRows(h)[0].querySelector('a'); link.focus();
+  const updated={...body,items:body.items.map((item,i)=>i===6?{...item,tone:'negative'}:item),
+    topics:{list:body.topics.list.map((topic,i)=>i?topic:{...topic,tone:toneCounts({negative:3,neutral:1,mixed:1,positive:2})})}};
+  for(const at of [body.at,'2026-09-26T01:00:00Z']) {
+    h.message({...updated,at}); assert.equal(auditRows(h).length,3);
+    assert.match(auditButton(h,id,'negative').textContent,/3 則報導/);
+    assert.equal(h.window.document.activeElement.href,link.href);
+    assert.equal(h.container.querySelector('.nw-tone-pending').textContent,'待判定 1 則');
+  }
+  h.message({...body,topics:{list:[body.topics.list[1]]}});
+  assert.equal(auditRows(h).length,0);
+  h.message(body); assert.equal(auditRows(h).length,0); // Never revive a disappeared topic's open audit.
+});
+
+test('R12 topic view uses the same full-topic evidence even with category and search restrictions',t=>{
+  const h=setup(t),body=auditFixture(),id=body.topics.list[0].id;
+  body.items=body.items.map((item,i)=>({...item,category:i%2?'world':'finance'})); h.message(body);
+  focusTopicButtons(h)[0].click(); choose(h,h.categories,'finance'); search(h,'不存在');
+  assert.equal(mainRows(h).length,0);
+  auditButton(h,id,'positive').click(); assert.equal(auditRows(h).length,2);
+  assert.equal(h.container.querySelectorAll('.nw-tone-audit').length,1);
+  const anchor=auditRows(h)[0].querySelector('a'); anchor.focus();
+  anchor.dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert.equal(auditRows(h).length,0); assert.equal(h.container.querySelector('.nw-search-input').value,'不存在');
+});
+
+test('R12 pending reports stay out of counts, malformed aggregate is safe and mismatches cannot invent evidence',t=>{
+  const h=setup(t),body=auditFixture();
+  h.message({...body,items:body.items.map(item=>({...item,tone:null}))});
+  assert.equal(h.container.querySelectorAll('.nw-tone-button').length,0);
+  assert.deepEqual([...h.container.querySelectorAll('.nw-tone-pending')].map(node=>node.textContent),['待判定 8 則','待判定 6 則']);
+  h.message({...body,topics:{list:[{...body.topics.list[0],tone:toneCounts({negative:8})}]}});
+  assert.match(auditButton(h,body.topics.list[0].id,'negative').textContent,/2 則報導/);
+  auditButton(h,body.topics.list[0].id,'negative').click(); assert.equal(auditRows(h).length,2);
+});
+
+test('R12 long and hostile evidence stays safe, wraps on narrow layouts and removes listeners on unmount',t=>{
+  const h=setup(t),body=auditFixture(),id=body.topics.list[0].id;
+  body.items[0]={...body.items[0],title:'<img src=x>'+ 'W'.repeat(1000),source:'來源'.repeat(200),summary:'<script>bad</script>\n純文字'};
+  h.message(body); auditButton(h,id,'negative').click();
+  assert.equal(h.container.querySelector('img'),null); assert.equal(h.container.querySelector('script'),null);
+  const row=auditRows(h)[0],button=row.querySelector('.nw-summary-toggle'); button.click();
+  assert.ok(row.querySelector('.nw-summary').textContent.includes('<script>bad</script>'));
+  assert.equal(h.window.getComputedStyle(row).overflowWrap,'anywhere');
+  assert.equal(h.window.getComputedStyle(h.container.querySelector('.nw-tone-labels')).flexWrap,'wrap');
+  const root=h.container.querySelector('.nw'), toneButton=auditButton(h,id,'negative');
+  h.handle.unmount(); toneButton.click(); button.click();
+  root.dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert.equal(h.container.childElementCount,0);
+});
+
+test('R12 removed tone or filtered-out topic closes evidence without reviving it on return',t=>{
+  const h=setup(t),body=auditFixture(),id=body.topics.list[0].id; h.message(body);
+  auditButton(h,id,'negative').click();
+  h.message({...body,items:body.items.map(item=>item.topic===id&&item.tone==='negative'?{...item,tone:'positive'}:item)});
+  assert.equal(auditRows(h).length,0);
+  h.message(body); assert.equal(auditRows(h).length,0);
+  auditButton(h,id,'negative').click(); choose(h,h.categories,'world');
+  assert.equal(auditRows(h).length,0);
+  choose(h,h.categories,''); assert.equal(auditRows(h).length,0);
+});
+
+test('R12 tone controls are light text buttons with bold counts and synchronized pressed state',t=>{
+  const h=setup(t),body=auditFixture(),id=body.topics.list[0].id; h.message(body);
+  for(const tone of ['negative','neutral','mixed','positive']) {
+    const button=auditButton(h,id,tone),style=h.window.getComputedStyle(button);
+    assert.equal(style.borderTopWidth,'0px'); assert.equal(style.backgroundColor,'transparent');
+    assert.equal(style.paddingLeft,'0px'); assert.equal(style.paddingRight,'0px');
+    assert.equal(style.whiteSpace,'nowrap');
+    assert.equal(button.querySelector('strong').textContent,String(body.items.filter(item=>item.topic===id&&item.tone===tone).length));
+    assert.equal(h.window.getComputedStyle(button.querySelector('strong')).fontWeight,'700');
+    assert.ok(button.classList.contains(`nw-tone-text-${tone}`));
+    assert.equal(button.getAttribute('aria-pressed'),'false');
+  }
+  auditButton(h,id,'negative').click();
+  assert.equal(auditButton(h,id,'negative').getAttribute('aria-pressed'),'true');
+  auditButton(h,id,'positive').click();
+  assert.equal(auditButton(h,id,'negative').getAttribute('aria-pressed'),'false');
+  assert.equal(auditButton(h,id,'positive').getAttribute('aria-pressed'),'true');
+  auditButton(h,id,'positive').dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert.equal(auditButton(h,id,'positive').getAttribute('aria-pressed'),'false');
+  const css=h.container.querySelector('style').textContent;
+  assert.ok(css.includes('.nw .nw-tone-button:hover { text-decoration: underline; }'));
+  assert.ok(css.includes('text-decoration-thickness: 2px'));
+  assert.ok(css.includes('.nw button:focus-visible'));
+  assert.ok(css.includes('outline: 2px solid var(--nw-focus)'));
+});
+
+test('R11 absent baseline and zero new events leave no new button text or orphan status separator',t=>{
+  for(const prepare of [()=>{},withSeen(seenAt)]) {
+    const h=setup(t,prepare), status=()=>h.container.querySelector('.nw-status');
+    const zero=listing([r11Rows()[2]],[{name:'甲',ok:true}]);
+    h.message(zero);
+    const button=h.container.querySelector('.nw-new-only');
+    assert.equal(button.hidden,true); assert.equal(button.textContent,'');
+    assert.match(status().textContent,/更新$/);
+    assert.doesNotMatch(status().textContent,/新增|·/);
+    h.message({...zero,classify:{enabled:false}});
+    assert.match(status().textContent,/更新 · 分類：關閉$/);
+    assert.equal((status().textContent.match(/·/g)||[]).length,1);
+    h.message({...zero,at:''}); assert.equal(status().textContent,'');
+    h.message({...zero,at:'',classify:{enabled:false}});
+    assert.equal(status().textContent,'分類：關閉');
+  }
+  const h=setup(t,withSeen(seenAt));
+  h.message(listing(r11Rows(),[{name:'甲',ok:true},{name:'乙',ok:true}]));
+  const toggle=h.container.querySelector('.nw-new-only'); assert.equal(toggle.hidden,false);
+  toggle.click();
+  h.message(listing([r11Rows()[2]],[{name:'甲',ok:true}]));
+  assert.equal(toggle.hidden,true); assert.doesNotMatch(h.container.querySelector('.nw-status').textContent,/新增|·/);
+  h.container.querySelector('.nw-new-hint button').click();
+  assert.equal(mainRows(h).length,1);
+  h.message(listing(r11Rows()));
+  assert.equal(toggle.hidden,false); assert.equal(toggle.getAttribute('aria-pressed'),'false');
+  assert.equal(toggle.textContent,'新增 2 個事件');
+});

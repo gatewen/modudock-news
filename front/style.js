@@ -65,6 +65,20 @@ export const css = `
 .nw .nw-focus-short { display: none; }
 .nw .nw-focus-copy { min-width: 0; }
 .nw .nw-topic-latest, .nw .nw-event-latest { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nw .nw-tone-labels { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+.nw .nw-tone-button { font-size: 12px; border: 0; border-radius: 0; background: transparent; padding: 1px 0; white-space: nowrap; text-underline-offset: 3px; }
+.nw .nw-tone-button strong { font-weight: 700; }
+.nw .nw-tone-button:hover { text-decoration: underline; }
+.nw .nw-tone-button[aria-pressed="true"] { text-decoration: underline; text-decoration-thickness: 2px; }
+.nw .nw-tone-text-positive { color: var(--nw-accent); }
+.nw .nw-tone-text-negative { color: var(--nw-tone-neg); }
+.nw .nw-tone-text-mixed { color: var(--nw-mixed); }
+.nw .nw-tone-text-neutral { color: var(--nw-muted); }
+.nw .nw-tone-audit { grid-column: 1 / -1; min-width: 0; border-top: 1px solid var(--nw-line); padding-top: 8px; }
+.nw .nw-tone-reports { margin: 8px 0 0; padding-left: 16px; }
+.nw .nw-tone-report { min-width: 0; margin-block: 8px; overflow-wrap: anywhere; }
+.nw .nw-tone-report a { color: var(--nw-accent); }
+.nw .nw-tone-audit .nw-heading { overflow-wrap: anywhere; }
 .nw .nw-tone { margin-top: 6px; }
 .nw .nw-bar.nw-tone-bar { height: 4px; margin-bottom: 4px; }
 .nw .nw-tone-negative { background: var(--nw-tone-neg); }

@@ -254,6 +254,7 @@ export default function mount(ctx) {
   let selectedTopic = "";
   let savedView = null;
   let topics = [];
+  let toneAudit = null;
   let analysisEnabled = true;
   let eventsPending = 0;
   let historyAt = Date.now();
@@ -385,7 +386,7 @@ export default function mount(ctx) {
   }
   function onSummary(event) {
     const button = event.target?.closest?.("button.nw-summary-toggle");
-    if (!button || !list.contains(button)) return;
+    if (!button || (!list.contains(button) && !focusList.contains(button))) return;
     const key = button.dataset.summary;
     const open = button.getAttribute("aria-expanded") !== "true";
     if (key) {
@@ -406,25 +407,96 @@ export default function mount(ctx) {
     if (!expanded.has(id) && reports.contains(document.activeElement)) button.focus({preventScroll: true});
     reports.hidden = !expanded.has(id);
   }
+  const toneLabels = [["negative", "負面"], ["neutral", "中性"], ["mixed", "正反"], ["positive", "正面"]];
+  const auditKey = item => `tone:${JSON.stringify([text(item.source), text(item.link), text(item.title)])}`;
+  function summaryParts(item, key) {
+    const paragraph = make("p", "nw-summary", item.summary);
+    paragraph.id = `nw-summary-${++summaryId}`;
+    paragraph.hidden = !summaries.has(key);
+    paragraph.prepend(make("small", "nw-summary-label", "來源摘要"));
+    const button = make("button", "nw-summary-toggle", "摘要");
+    button.type = "button";
+    button.dataset.summary = key;
+    button.setAttribute("aria-expanded", String(summaries.has(key)));
+    button.setAttribute("aria-controls", paragraph.id);
+    return {button, paragraph};
+  }
   function toneSummary(topic) {
     const tone = topic.tone;
-    const labels = [["negative", "負面"], ["neutral", "中性"], ["mixed", "正反"], ["positive", "正面"]];
     if (!tone || typeof tone !== "object" || Array.isArray(tone)
-        || labels.some(([id]) => !Number.isSafeInteger(tone[id]) || tone[id] < 0)) return null;
-    const total = labels.reduce((sum, [id]) => sum + tone[id], 0);
-    if (!Number.isSafeInteger(total) || total < 5 || total > topic.count) return null;
-    const ranked = labels.filter(([id]) => tone[id] > 0).sort((a, b) => tone[b[0]] - tone[a[0]]);
-    const summary = make("div", "nw-tone");
-    const bar = make("div", "nw-bar nw-tone-bar");
-    bar.setAttribute("aria-hidden", "true");
-    // Fixed segment order (like the market bar) keeps colors comparable across topics.
-    for (const id of ["positive", "mixed", "neutral", "negative"].filter(id => tone[id] > 0)) {
-      const segment = make("span", `nw-segment nw-tone-${id}`);
-      segment.style.width = `${tone[id] / total * 100}%`;
-      bar.append(segment);
+        || toneLabels.some(([id]) => !Number.isSafeInteger(tone[id]) || tone[id] < 0)) return null;
+    const declared = toneLabels.reduce((sum, [id]) => sum + tone[id], 0);
+    if (!Number.isSafeInteger(declared) || declared > topic.count) return null;
+    // Count the reports we can actually show, never unverifiable aggregate numbers.
+    const members = items.filter(item => item?.topic === topic.id);
+    const counts = new Map(toneLabels.map(([id]) => [id, members.filter(item => item.tone === id).length]));
+    const total = [...counts.values()].reduce((a, b) => a + b, 0);
+    const pending = members.length - total;
+    if (total < 5 && !pending) return null;
+    const summary = make("div", total < 5 ? "nw-tone-wait" : "nw-tone");
+    if (total >= 5) {
+      const bar = make("div", "nw-bar nw-tone-bar");
+      bar.setAttribute("aria-hidden", "true");
+      for (const id of ["positive", "mixed", "neutral", "negative"].filter(id => counts.get(id) > 0)) {
+        const segment = make("span", `nw-segment nw-tone-${id}`);
+        segment.style.width = `${counts.get(id) / total * 100}%`;
+        bar.append(segment);
+      }
+      const labels = make("div", "nw-hint nw-tone-labels", "報導基調：");
+      for (const [id, name] of toneLabels.filter(([id]) => counts.get(id) > 0).sort((a, b) => counts.get(b[0]) - counts.get(a[0]))) {
+        const button = make("button", `nw-tone-button nw-tone-text-${id}`);
+        button.append(document.createTextNode(`${name} `), make("strong", "", String(counts.get(id))), document.createTextNode(" 則報導"));
+        button.type = "button";
+        button.dataset.toneKey = `${topic.id}:${id}`;
+        button.setAttribute("aria-expanded", String(toneAudit === button.dataset.toneKey));
+        button.setAttribute("aria-pressed", String(toneAudit === button.dataset.toneKey));
+        labels.append(button);
+      }
+      summary.append(bar, labels);
     }
-    summary.append(bar, make("span", "nw-hint", `報導基調：${ranked.map(([id, name]) => `${name} ${tone[id]}`).join("・")}`));
+    if (pending) summary.append(make("span", "nw-hint nw-tone-pending", `待判定 ${pending} 則`));
     return summary;
+  }
+  function drawToneAudit(row, topic) {
+    const button = [...row.querySelectorAll(".nw-tone-button")].find(node => node.dataset.toneKey === toneAudit);
+    if (!button) return;
+    const tone = toneAudit.split(":")[1];
+    const area = make("section", "nw-tone-audit");
+    area.id = `nw-tone-audit-${++descriptionId}`;
+    button.setAttribute("aria-controls", area.id);
+    const heading = make("h4", "nw-heading", "依標題與摘要判斷的報導基調・按報導計");
+    heading.id = `${area.id}-heading`;
+    area.setAttribute("aria-labelledby", heading.id);
+    area.append(heading, make("p", "nw-hint", button.textContent));
+    const reports = make("ul", "nw-tone-reports");
+    for (const item of items.filter(item => item?.topic === topic.id && item.tone === tone)) {
+      const entry = make("li", "nw-tone-report");
+      const title = newsTitle(item, "nw-audit-title", false);
+      title.dataset.reportKey = auditKey(item);
+      const meta = make("div", "nw-report-meta");
+      meta.append(make("span", "nw-source", text(item.source)), newsTime(item));
+      entry.append(title, meta);
+      if (text(item.summary)) {
+        const {button, paragraph} = summaryParts(item, auditKey(item));
+        meta.append(button); entry.append(paragraph);
+      }
+      reports.append(entry);
+    }
+    area.append(reports); row.append(area);
+  }
+  function onTone(event) {
+    const button = event.target?.closest?.(".nw-tone-button");
+    if (disposed || !button || !focusList.contains(button)) return;
+    const key = button.dataset.toneKey;
+    toneAudit = toneAudit === key ? null : key;
+    drawItems();
+    [...focusList.querySelectorAll(".nw-tone-button")].find(node => node.dataset.toneKey === key)?.focus({preventScroll: true});
+  }
+  function closeToneAudit() {
+    const key = toneAudit;
+    toneAudit = null;
+    drawItems();
+    [...focusList.querySelectorAll(".nw-tone-button")].find(node => node.dataset.toneKey === key)?.focus({preventScroll: true});
   }
   function describe(button, value, parent) {
     const previousId = button.getAttribute("aria-describedby");
@@ -481,6 +553,7 @@ export default function mount(ctx) {
         const newEvents = groupItems(members).filter(group => group.reports.some(isNew)).length;
         if (lastSeen !== null && newEvents) copy.append(make("div", "nw-topic-new", `上次之後新增 ${newEvents} 個事件`));
         row.append(copy, button);
+        drawToneAudit(row, topic);
         focusList.append(row);
       }
       focus.hidden = focusList.childElementCount === 0;
@@ -905,12 +978,13 @@ export default function mount(ctx) {
     if (node.matches(".nw-list a")) return {
       selector: node.classList.contains("nw-event-latest") ? ".nw-list a.nw-event-latest" : ".nw-list a:not(.nw-event-latest)", href: node.href, event: node.closest(".nw-row")?.dataset.event || "",
     };
+    if (node.matches(".nw-tone-audit a")) return {selector: ".nw-tone-audit a", attribute: "reportKey", value: node.dataset.reportKey};
     if (node.matches(".nw-focus-row a")) {
       const row = node.closest(".nw-focus-row");
       return {selector: ".nw-focus-row a", href: node.href,
         event: row.dataset.event || "", topic: row.dataset.topicId || ""};
     }
-    for (const [selector, attribute] of [[".nw-list .nw-summary-toggle", "summary"], [".nw-list .nw-expand", "event"],
+    for (const [selector, attribute] of [[".nw-tone-button", "toneKey"], [".nw-tone-audit .nw-summary-toggle", "summary"], [".nw-list .nw-summary-toggle", "summary"], [".nw-list .nw-expand", "event"],
       [".nw-focus-count[data-event]", "event"], [".nw-focus-count[data-topic-id]", "topicId"],
       [".nw-theme[data-topic]", "topic"], [".nw-panel button[data-count]", "count"]]) {
       if (node.matches(selector)) return {selector, attribute, value: node.dataset[attribute],
@@ -1008,9 +1082,9 @@ export default function mount(ctx) {
     const matchedGroups = allGroups.filter(group => (!onlyWatched || matches.get(group)) && group.reports.some(hits));
     const count = matchedGroups.filter(group => group.reports.some(isNew)).length;
     const groups = matchedGroups.filter(group => !onlyNew || group.reports.some(isNew));
-    newOnly.hidden = lastSeen === null;
+    newOnly.hidden = lastSeen === null || count === 0;
     newOnly.disabled = count === 0;
-    newOnly.textContent = lastSeen === null ? "" : `新增 ${count} 個事件`;
+    newOnly.textContent = newOnly.hidden ? "" : `新增 ${count} 個事件`;
     newOnly.setAttribute("aria-pressed", String(onlyNew));
     newHint.hidden = !onlyNew;
     newHintText.textContent = `只看上次離開後的新進展（${groups.length} 個事件）`;
@@ -1035,6 +1109,14 @@ export default function mount(ctx) {
     watchHint.hidden = !onlyWatched;
     watchHint.textContent = onlyWatched ? `只看追蹤：${trackedWords.join("、")}` : "";
     drawFocus(groups);
+    if (toneAudit && ![...focusList.querySelectorAll(".nw-tone-button")].some(button =>
+      button.dataset.toneKey === toneAudit && !button.closest("[hidden]"))) {
+      toneAudit = null;
+      focusList.querySelectorAll(".nw-tone-audit").forEach(node => node.remove());
+      focusList.querySelectorAll(".nw-tone-button").forEach(button => {
+        button.setAttribute("aria-expanded", "false"); button.setAttribute("aria-pressed", "false"); button.removeAttribute("aria-controls");
+      });
+    }
     for (const [index, group] of groups.entries()) {
       if (index === dividerIndex) {
         const divider = make("li", "nw-divider", "以下為上次離開前的新聞");
@@ -1146,15 +1228,7 @@ export default function mount(ctx) {
       }
       if (text(item.summary)) {
         const key = summaryKey(group);
-        const paragraph = make("p", "nw-summary", item.summary);
-        paragraph.id = `nw-summary-${++summaryId}`;
-        paragraph.hidden = !summaries.has(key);
-        paragraph.prepend(make("small", "nw-summary-label", "來源摘要"));
-        const button = make("button", "nw-summary-toggle", "摘要");
-        button.type = "button";
-        button.dataset.summary = key;
-        button.setAttribute("aria-expanded", String(summaries.has(key)));
-        button.setAttribute("aria-controls", paragraph.id);
+        const {button, paragraph} = summaryParts(item, key);
         actions.prepend(button);
         meta.after(paragraph);  // Below meta, so the toggle does not move when expanded.
       }
@@ -1254,6 +1328,7 @@ export default function mount(ctx) {
       searchIndex.set(item, [searchText(item.title), searchText(item.summary)]);
     const presentSummaries = new Set(items.filter(item => item && typeof item === "object")
       .map(item => summaryKey({id: eventId(item), reports: [item]})).filter(Boolean));
+    for (const item of items) if (item && typeof item === "object") presentSummaries.add(auditKey(item));
     for (const key of summaries) if (!presentSummaries.has(key)) summaries.delete(key);
     const rawTopics = Array.isArray(body.topics?.list) ? body.topics.list : [];
     const topicIds = new Set();
@@ -1350,6 +1425,7 @@ export default function mount(ctx) {
     if (disposed || !root.contains(target) || event.ctrlKey || event.metaKey || event.altKey
         || event.shiftKey || event.isComposing || target.isContentEditable
         || target.closest?.('input, select, textarea, [contenteditable]:not([contenteditable="false"])')) return;
+    if (event.key === "Escape" && toneAudit) { closeToneAudit(); event.preventDefault(); return; }
     if (event.key === "Escape" && searchInput.value) { clearSearch(); event.preventDefault(); return; }
     if (event.key === "/") { openSearch(true); event.preventDefault(); return; }
     const row = target.closest?.(".nw-row");
@@ -1384,6 +1460,8 @@ export default function mount(ctx) {
   list.addEventListener("click", onExpand);
   list.addEventListener("click", onSummary);
   focusList.addEventListener("click", onFocus);
+  focusList.addEventListener("click", onTone);
+  focusList.addEventListener("click", onSummary);
   clearAll.addEventListener("click", onClearAll);
   ranking.addEventListener("click", onTheme);
   panel.addEventListener("click", onCount);
@@ -1437,6 +1515,9 @@ export default function mount(ctx) {
       list.removeEventListener("click", onSummary);
       summaries.clear();
       focusList.removeEventListener("click", onFocus);
+      focusList.removeEventListener("click", onTone);
+      focusList.removeEventListener("click", onSummary);
+      toneAudit = null;
       expanded.clear();
       sourceOrder.clear();
       sourceOutlets.clear();
