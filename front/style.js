@@ -169,7 +169,24 @@ export const css = `
 .nw .nw-note { display: block; margin-top: 16px; }
 .nw .nw-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 12px 0 0; color: var(--nw-muted); font-size: 12px; }
 .nw .nw-topic-tools { padding: 8px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex-basis: 100%; }
-.nw .nw-outlet { font-size: 12px; background: transparent; padding: 2px 4px; }
+.nw .nw-outlet { display: flex; align-items: center; gap: 6px; justify-content: space-between; min-width: 0; width: 100%; text-align: left; font-size: 12px; background: transparent; padding: 4px; }
+.nw .nw-outlet-name { min-width: 0; overflow-wrap: anywhere; }
+.nw .nw-outlet-count { flex: none; }
+.nw .nw-outlet-rows { display: grid; gap: 6px; }
+.nw .nw-outlet-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(36px, .6fr) minmax(0, 1.5fr); align-items: center; gap: 8px; }
+.nw .nw-outlet-bar { height: 6px; }
+.nw .nw-outlet-values, .nw .nw-outlet-legend { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.nw .nw-outlet-legend { margin-bottom: 8px; }
+.nw .nw-outlet-tone, .nw .nw-outlet-legend-item { white-space: nowrap; }
+.nw .nw-tone-swatch { display: inline-block; width: 6px; height: 6px; margin-right: 4px; vertical-align: middle; }
+.nw .nw-outlet-chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--nw-line); border-radius: 4px; padding: 2px 6px; margin-bottom: 8px; }
+.nw .nw-topic-outlet-clear { border: 0; background: transparent; padding: 0 4px; }
+.nw .nw-outlet-more { margin-top: 8px; font-size: 12px; }
+.nw.nw-narrow .nw-outlet-rows { gap: 12px; }
+.nw.nw-narrow .nw-outlet-rows + .nw-outlet-rows { margin-top: 12px; }
+.nw.nw-narrow .nw-outlet-row { grid-template-columns: minmax(36px, .6fr) minmax(0, 1.4fr); gap: 3px 8px; }
+.nw.nw-narrow .nw-outlet { grid-column: 1 / -1; }
+.nw.nw-narrow .nw-outlet-values { min-width: 0; }
 .nw .nw-outlet[aria-pressed="true"], .nw .nw-topic-order[aria-pressed="true"] { border-color: var(--nw-accent); box-shadow: inset 0 -2px var(--nw-accent); }
 .nw .nw-date-divider { padding: 10px 16px; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-topic-totals { font-size: 12px; word-break: keep-all; }

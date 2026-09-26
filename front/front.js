@@ -181,7 +181,7 @@ export default function mount(ctx) {
   clearTheme.type = "button";
   clearTheme.textContent = "清除篩選";
   themeFilter.append(themeLabel, clearTheme);
-  const topicSources = make("span", "nw-hint nw-topic-sources");
+  const topicSources = make("section", "nw-hint nw-topic-sources");
   topicSources.hidden = true;
   const topicTotals = make("span", "nw-topic-totals");
   const topicVisible = make("span", "nw-topic-visible");
@@ -194,9 +194,23 @@ export default function mount(ctx) {
   topicOrder.type = "button";
   topicOrder.title = "依發布時間，非事件發生時間";
   const outletLabel = make("span", "nw-topic-outlet-label");
-  const outletClear = make("button", "nw-topic-outlet-clear", "清除");
+  const outletClear = make("button", "nw-topic-outlet-clear", "✕");
   outletClear.type = "button";
-  topicTools.append(topicOrder, outletLabel, outletClear);
+  outletClear.setAttribute("aria-label", "清除媒體篩選");
+  outletClear.title = "清除媒體篩選";
+  const outletChip = make("div", "nw-outlet-chip");
+  outletChip.hidden = true;
+  outletChip.append(outletLabel, outletClear);
+  const outletHeading = make("h3", "nw-heading", "各家基調對照（則）");
+  const outletLegend = make("div", "nw-outlet-legend");
+  const outletRows = make("div", "nw-outlet-rows");
+  const outletExtra = make("div", "nw-outlet-rows");
+  outletExtra.id = `nw-outlet-extra-${++descriptionId}`;
+  const outletMore = make("button", "nw-outlet-more");
+  outletMore.type = "button";
+  outletMore.setAttribute("aria-controls", outletExtra.id);
+  topicSources.append(outletHeading, outletLegend, outletChip, outletRows, outletExtra, outletMore);
+  topicTools.append(topicOrder);
 
   const panel = make("section", "nw-panel");
   const focus = make("section", "nw-focus-section");
@@ -423,6 +437,7 @@ export default function mount(ctx) {
   let selectedCount = null;
   let selectedTopic = "";
   let selectedOutlet = "", chronological = false;
+  let comparisonTopic = "", outletsExpanded = false;
   let savedView = null;
   let topics = [];
   let toneAudit = null;
@@ -592,6 +607,11 @@ export default function mount(ctx) {
     button.setAttribute("aria-controls", paragraph.id);
     return {button, paragraph};
   }
+  function toneSwatch(id) {
+    const swatch = make("span", `nw-tone-swatch nw-tone-${id}`);
+    swatch.setAttribute("aria-hidden", "true");
+    return swatch;
+  }
   function toneSummary(topic) {
     const tone = topic.tone;
     if (!tone || typeof tone !== "object" || Array.isArray(tone)
@@ -608,16 +628,16 @@ export default function mount(ctx) {
     if (total >= 5) {
       const bar = make("div", "nw-bar nw-tone-bar");
       bar.setAttribute("aria-hidden", "true");
-      for (const id of ["positive", "mixed", "neutral", "negative"].filter(id => counts.get(id) > 0)) {
+      for (const id of toneLabels.map(([id]) => id).filter(id => counts.get(id) > 0)) {
         const segment = make("span", `nw-segment nw-tone-${id}`);
         segment.style.width = `${counts.get(id) / total * 100}%`;
         bar.append(segment);
       }
       const labels = make("div", "nw-hint nw-tone-labels", "報導基調（則）：");
       labels.title = "整個話題：按報導計，不隨清單篩選變動";
-      for (const [id, name] of toneLabels.filter(([id]) => counts.get(id) > 0).sort((a, b) => counts.get(b[0]) - counts.get(a[0]))) {
+      for (const [id, name] of toneLabels.filter(([id]) => counts.get(id) > 0)) {
         const button = make("button", `nw-tone-button nw-tone-text-${id}`);
-        button.append(document.createTextNode(`${name} `), make("strong", "", String(counts.get(id))));
+        button.append(toneSwatch(id), document.createTextNode(`${name} `), make("strong", "", String(counts.get(id))));
         button.setAttribute("aria-label", `${name} ${counts.get(id)} 則報導`);
         button.type = "button";
         button.dataset.toneKey = `${topic.id}:${id}`;
@@ -1489,7 +1509,14 @@ export default function mount(ctx) {
     topicSources.hidden = !topic;
     outletLabel.textContent = "";
     topicOrder.setAttribute("aria-pressed", String(chronological));
-    topicSources.replaceChildren();
+    outletRows.replaceChildren();
+    outletExtra.replaceChildren();
+    outletLegend.replaceChildren();
+    if (comparisonTopic !== topic) { outletsExpanded = false; comparisonTopic = topic || ""; }
+    outletChip.hidden = !topic || !selectedOutlet;
+    outletExtra.hidden = !outletsExpanded;
+    outletMore.hidden = true;
+    outletMore.setAttribute("aria-expanded", String(outletsExpanded));
     topicSources.removeAttribute("title");
     if (!topic) return;
     const members = items.filter(item => item && item.topic === topic);
@@ -1502,24 +1529,57 @@ export default function mount(ctx) {
     topicOrder.textContent = "時間順讀";
     topicOrder.title = `切換為${chronological ? "最新優先" : "時間順讀"}；依發布時間，非事件發生時間`;
     topicOrder.setAttribute("aria-pressed", String(chronological));
-    outletLabel.textContent = selectedOutlet ? `話題內・${selectedOutlet}` : "";
+    outletLabel.textContent = selectedOutlet ? `只看：${selectedOutlet}` : "";
     outletClear.hidden = !selectedOutlet;
     const order = new Map();
     for (const item of items.filter(item => item?.topic === topic)) {
       const name = outletOf(item);
       if (name) order.set(name, Math.min(order.get(name) ?? Infinity, sourceOrder.get(text(item.source)) ?? Infinity));
     }
-    const ranked = [...order.keys()].map(name => [name, outletGroups(name, topic).reduce((n,g)=>n+g.reports.length,0)])
-      .sort((a,b)=>b[1]-a[1] || order.get(a[0])-order.get(b[0]));
-    ranked.slice(0,5).forEach(([name,count],index)=>{
-      if (index) topicSources.append(document.createTextNode("・"));
-      const button = make("button", "nw-outlet", `${name} ${count}`);
+    for (const [id,name] of toneLabels) {
+      const label = make("span", "nw-outlet-legend-item");
+      label.append(toneSwatch(id), document.createTextNode(name));
+      outletLegend.append(label);
+    }
+    const ranked = [...order.keys()].map(name => [name, outletGroups(name, topic).flatMap(group=>group.reports)])
+      .sort((a,b)=>b[1].length-a[1].length || order.get(a[0])-order.get(b[0]));
+    ranked.forEach(([name,reports],index)=>{
+      const row = make("div", "nw-outlet-row");
+      const button = make("button", "nw-outlet");
+      button.append(make("span", "nw-outlet-name", name), document.createTextNode(" "), make("strong", "nw-outlet-count", String(reports.length)));
       button.type = "button"; button.dataset.outlet = name;
       button.setAttribute("aria-pressed", String(selectedOutlet === name));
-      topicSources.append(button);
+      const counts = new Map(toneLabels.map(([id])=>[id,reports.filter(item=>item.tone===id).length]));
+      const known = [...counts.values()].reduce((a,b)=>a+b,0);
+      const bar = make("div", "nw-bar nw-outlet-bar");
+      bar.setAttribute("aria-hidden", "true");bar.hidden = known === 0;
+      const values = make("div", "nw-outlet-values");
+      for (const [id,label] of toneLabels) {
+        const count = counts.get(id);if (!count) continue;
+        const segment = make("span", `nw-segment nw-tone-${id}`);
+        segment.style.width = `${count/known*100}%`;bar.append(segment);
+        const value = make("span", "nw-outlet-tone");
+        value.dataset.tone = id;value.dataset.count = String(count);
+        value.title = `${label} ${count} 則報導`;
+        value.append(toneSwatch(id), document.createTextNode(`${({negative:"負",neutral:"中",mixed:"正負",positive:"正"})[id]} ${count}`));
+        values.append(value);
+      }
+      if (reports.length>known) values.append(make("span", "nw-outlet-pending", `待判定 ${reports.length-known}`));
+      row.append(button,bar,values);
+      (index<5?outletRows:outletExtra).append(row);
     });
-    if (ranked.length > 5) topicSources.append(document.createTextNode(`，另 ${ranked.length-5} 家（共 ${ranked.length} 家）`));
-    topicSources.title = ranked.map(([name,count])=>`${name} ${count}`).join("・") + `（共 ${ranked.length} 家）`;
+    outletMore.hidden = ranked.length <= 5;
+    outletMore.textContent = outletsExpanded ? `收合（共 ${ranked.length} 家）` : `另 ${ranked.length-5} 家（共 ${ranked.length} 家）`;
+    topicSources.title = ranked.map(([name,reports])=>`${name} ${reports.length}`).join("・") + `（共 ${ranked.length} 家）`;
+  }
+  function onOutletMore() {
+    if (disposed || outletMore.hidden) return;
+    outletsExpanded = !outletsExpanded;
+    outletExtra.hidden = !outletsExpanded;
+    outletMore.setAttribute("aria-expanded", String(outletsExpanded));
+    const total = outletRows.childElementCount+outletExtra.childElementCount;
+    outletMore.textContent = outletsExpanded ? `收合（共 ${total} 家）` : `另 ${total-5} 家（共 ${total} 家）`;
+
   }
   function onTopicOrder() {
     if (disposed || !(selectedTopic || selectedCount?.topic)) return;
@@ -1840,6 +1900,7 @@ export default function mount(ctx) {
   panelObserver?.observe(root);
   topicOrder.addEventListener("click", onTopicOrder);
   topicSources.addEventListener("click", onOutlet);
+  outletMore.addEventListener("click", onOutletMore);
   outletClear.addEventListener("click", onOutletClear);
   panelToggle.addEventListener("blur", syncPanelDisclosure);
   panelToggle.addEventListener("click", onPanelToggle);
@@ -1894,6 +1955,7 @@ export default function mount(ctx) {
       panelObserver?.disconnect();
       topicOrder.removeEventListener("click", onTopicOrder);
       topicSources.removeEventListener("click", onOutlet);
+      outletMore.removeEventListener("click", onOutletMore);
       outletClear.removeEventListener("click", onOutletClear);
       panelToggle.removeEventListener("blur", syncPanelDisclosure);
       panelToggle.removeEventListener("click", onPanelToggle);

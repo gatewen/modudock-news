@@ -370,7 +370,7 @@ test('theme filter toggles, cancels, preserves panel scope and survives same-at 
   assert.equal(themeButton(h, 'memory').getAttribute('aria-pressed'), 'true');
   const clear = h.container.querySelector('.nw-filter button');
   assert.equal(clear.parentElement.hidden, false);
-  assert.equal(clear.parentElement.textContent, '已篩選：記憶體清除篩選');
+  assert.equal(clear.parentElement.querySelector('span').textContent+clear.textContent, '已篩選：記憶體清除篩選');
   themeButton(h, 'memory').click();
   assert.deepEqual(rowTitles(h), ['甲記憶體', '甲代工']);
   themeButton(h, 'memory').click();
@@ -988,7 +988,7 @@ test('region filter acts before event folding, preserves scope and selections on
   assert.deepEqual(mainTitles(h), ['晚亞太', '獨立亞太']);
   assert.equal(worldPanel(h).textContent, before);
   assert.equal(regionButton(h, 'asia_pacific').getAttribute('aria-pressed'), 'true');
-  assert.equal(h.container.querySelector('.nw-filter').textContent, '已篩選：亞太清除篩選');
+  assert.equal(h.container.querySelector('.nw-filter > span').textContent, '已篩選：亞太');
   h.message(listing([...items, worldArticle({title: '新增亞太'})]));
   assert.equal(h.select.value, '甲');
   assert.equal(h.categories.value, 'world');
@@ -1498,9 +1498,9 @@ test('topic tone needs five judged reports, sorts positive counts and uses a dec
   assert.equal(bar.getAttribute('aria-hidden'), 'true');
   assert.equal(h.window.getComputedStyle(bar).height, '4px');
   assert.equal(tone.hasAttribute('aria-hidden'), false);
-  assert.deepEqual([...bar.children].map(n => n.className), ['nw-segment nw-tone-positive',
-    'nw-segment nw-tone-mixed','nw-segment nw-tone-neutral','nw-segment nw-tone-negative']);
-  [4,5,15,17].forEach((count,i) => assert.ok(Math.abs(parseFloat(bar.children[i].style.width)-count/41*100)<.001));
+  assert.deepEqual([...bar.children].map(n => n.className), ['nw-segment nw-tone-negative',
+    'nw-segment nw-tone-neutral','nw-segment nw-tone-mixed','nw-segment nw-tone-positive']);
+  [17,15,5,4].forEach((count,i) => assert.ok(Math.abs(parseFloat(bar.children[i].style.width)-count/41*100)<.001));
   const css = h.container.querySelector('style').textContent;
   for (const [id, token] of [['negative','tone-neg'],['positive','accent'],['mixed','mixed'],['neutral','idle']]) {
     assert.ok(css.includes(`.nw .nw-tone-${id} { background: var(--nw-${token}); }`));
@@ -2043,14 +2043,15 @@ test('topic source distribution counts reports, orders feed ties, limits five an
   assert.equal(hint.hidden,true);
   focusTopicButtons(h)[0].click();
   assert.equal(hint.hidden,false);
-  assert.equal(hint.textContent,'A 3・B 3・C 1・D 1・E 1，另 2 家（共 7 家）');
+  assert.equal(outletDistribution(h),'A 3・B 3・C 1・D 1・E 1');
+  assert.equal(h.container.querySelector('.nw-outlet-more').textContent,'另 2 家（共 7 家）');
   h.message({...body,items:[...reports,article({source:'G',topic:topic.id}),article({source:'G',topic:topic.id}),article({source:'G',topic:topic.id})]});
-  assert.equal(hint.textContent,'G 4・A 3・B 3・C 1・D 1，另 2 家（共 7 家）');
+  assert.equal(outletDistribution(h),'G 4・A 3・B 3・C 1・D 1');
   saveWatch(h,'A0'); watchControls(h).only.click();
-  assert.equal(hint.textContent,'A 3・B 0・C 0・D 0・E 0，另 2 家（共 7 家）');
+  assert.equal(outletDistribution(h),'A 3・B 0・C 0・D 0・E 0');
   focusTopicButtons(h)[0].click();
   assert.equal(hint.hidden,true);
-  assert.equal(hint.textContent,'');
+  assert.equal(hint.querySelectorAll('.nw-outlet').length,0);
 });
 
 test('politics panel ranks neutral issues by events, filters and clears incompatible selections', t => {
@@ -2104,6 +2105,7 @@ test('text buttons use visible names and external descriptions survive redraws a
   const scan=()=>{
     for (const button of h.container.querySelectorAll('button')) {
       if (button.matches('.nw-tone-button')) assert.equal(button.getAttribute('aria-label'),`${button.textContent} 則報導`);
+      else if (button.matches('.nw-topic-outlet-clear')) assert.equal(button.getAttribute('aria-label'),'清除媒體篩選');
       else if (button.matches('.nw-shortcut-toggle')) assert.equal(button.getAttribute('aria-label'),'快捷鍵說明');
       else if (button.textContent.trim()) assert.equal(button.hasAttribute('aria-label'),false);
       const id=button.getAttribute('aria-describedby');
@@ -3548,14 +3550,14 @@ test('topic heading and distribution show outlets while the source selector reta
   h.message(body);
   assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent,'看話題・3 家');
   focusTopicButtons(h)[0].click();
-  assert.equal(h.container.querySelector('.nw-topic-sources').textContent,'中央社 3・公視 1・BBC 1');
+  assert.equal(outletDistribution(h),'中央社 3・公視 1・BBC 1');
   assert.deepEqual([...h.select.options].slice(1).map(o=>o.value),names);
   h.message(body);
-  assert.equal(h.container.querySelector('.nw-topic-sources').textContent,'中央社 3・公視 1・BBC 1');
+  assert.equal(outletDistribution(h),'中央社 3・公視 1・BBC 1');
   const extra=Array.from({length:4},(_,i)=>({name:`來源${i}`,outlet:`媒體${i}`,ok:true}));
   h.message({...body,sources:[...sources,...extra],items:[...reports,...extra.map(s=>article({source:s.name,topic:topic.id}))],
     topics:{list:[{...topic,sources:7,count:9}]}});
-  assert.match(h.container.querySelector('.nw-topic-sources').textContent,/另 2 家（共 7 家）$/);
+  assert.equal(h.container.querySelector('.nw-outlet-more').textContent,'另 2 家（共 7 家）');
 });
 
 const search = (h, value) => {
@@ -4826,7 +4828,8 @@ test('R25 truncated source distribution states remaining and total outlet counts
   h.message(body);assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent,'看話題・10 家');
   focusTopicButtons(h)[0].click();
   const hint=h.container.querySelector('.nw-topic-sources');
-  assert.equal(hint.textContent,'中央社 2・媒體0 1・媒體1 1・媒體2 1・媒體3 1，另 5 家（共 10 家）');
+  assert.equal(outletDistribution(h),'中央社 2・媒體0 1・媒體1 1・媒體2 1・媒體3 1');
+  assert.equal(h.container.querySelector('.nw-outlet-more').textContent,'另 5 家（共 10 家）');
   assert.equal(hint.title,'中央社 2・'+Array.from({length:9},(_,i)=>`媒體${i} 1`).join('・')+'（共 10 家）');
   focusTopicButtons(h)[0].click();assert.equal(hint.hasAttribute('title'),false);
 });
@@ -4860,7 +4863,7 @@ test('R26 outlet combines feeds, matches button report count through intersectio
   const reportCount=()=>mainRows(h).length+h.container.querySelectorAll('.nw-report').length;
   assert.equal(outlet().textContent,'中央社 3');outlet().click();assert.equal(reportCount(),3);
   assert.equal(h.select.value,'');assert.equal(outlet().getAttribute('aria-pressed'),'true');
-  assert.equal(h.container.querySelector('.nw-topic-outlet-label').textContent,'話題內・中央社');
+  assert.equal(h.container.querySelector('.nw-topic-outlet-label').textContent,'只看：中央社');
   outlet().click();assert.equal(reportCount(),5);
   choose(h,h.categories,'finance');themeButton(h,'memory').click();search(h,'middle');
   assert.equal(outlet().textContent,'中央社 1');outlet().click();assert.equal(reportCount(),1);
@@ -5060,4 +5063,64 @@ test('R28 explicit search never corrects scroll even when a surviving visible ro
   search(h,'b');await new Promise(resolve=>h.window.queueMicrotask(resolve));
   assert.deepEqual(mainTitles(h),['b']);assert.equal(h.scroller.scrollTop,500);
   assert.equal(h.container.querySelector('a.nw-title').getBoundingClientRect().top,140);
+});
+
+function outletDistribution(h) { return [...h.container.querySelector(".nw-outlet-rows").querySelectorAll(".nw-outlet")].map(n=>n.textContent).join("・"); }
+
+function outletToneFixture() {
+  const names=['中央社 政治','中央社 財經','公視','BBC','D','E','F','G'];
+  const topic=topicRecord({count:40,sources:7,tone:{negative:8,neutral:8,mixed:8,positive:8}});
+  const reports=names.flatMap((source,i)=>['negative','neutral','mixed','positive',null].map((tone,j)=>article({
+    title:`報導${i}-${j}`,link:`https://e.test/${i}/${j}`,source,topic:topic.id,tone,event:'111111111111',event_size:40})));
+  return {...topicListing(reports,[topic]),sources:names.map((name,i)=>({name,ok:true,outlet:i<2?'中央社':name}))};
+}
+test('R32 outlet tone rows conserve judged counts, pending and proportions; every outlet click matches reports',t=>{
+  const h=setup(t),body=outletToneFixture();h.message(body);focusTopicButtons(h)[0].click();
+  const section=h.container.querySelector('.nw-topic-sources'),more=section.querySelector('.nw-outlet-more');
+  assert.equal(section.querySelector('h3').textContent,'各家基調對照（則）');
+  assert.equal(more.textContent,'另 2 家（共 7 家）');assert.equal(more.getAttribute('aria-expanded'),'false');
+  assert.equal(h.window.document.getElementById(more.getAttribute('aria-controls')).hidden,true);
+  more.click();assert.equal(more.getAttribute('aria-expanded'),'true');
+  for(const name of ['中央社','公視','BBC','D','E','F','G']) {
+    const button=[...section.querySelectorAll('.nw-outlet')].find(b=>b.dataset.outlet===name),row=button.closest('.nw-outlet-row');
+    const total=name==='中央社'?10:5,known=total*4/5;
+    assert.equal(button.textContent,`${name} ${total}`);
+    const values=[...row.querySelectorAll('.nw-outlet-tone')];
+    assert.deepEqual(values.map(v=>v.dataset.tone),['negative','neutral','mixed','positive']);
+    assert.equal(values.reduce((sum,v)=>sum+Number(v.dataset.count),0),known);
+    assert.equal(row.querySelector('.nw-outlet-pending').textContent,`待判定 ${total-known}`);
+    assert.deepEqual([...row.querySelectorAll('.nw-outlet-bar .nw-segment')].map(v=>v.style.width),['25%','25%','25%','25%']);
+    assert.ok(values.every(v=>v.querySelector('.nw-tone-swatch').getAttribute('aria-hidden')==='true'));
+    button.click();assert.equal(mainRows(h).length+h.container.querySelectorAll('.nw-report').length,total);
+    const chip=h.container.querySelector('.nw-outlet-chip'),clear=chip.querySelector('button');
+    assert.equal(chip.hidden,false);assert.equal(clear.textContent,'✕');assert.equal(clear.getAttribute('aria-label'),'清除媒體篩選');
+    assert.equal(chip.closest('.nw-topic-sources'),section);assert.equal(h.container.querySelector('.nw-topic-tools').contains(chip),false);
+    clear.click();assert.equal(mainRows(h).length+h.container.querySelectorAll('.nw-report').length,40);
+  }
+  h.message(body);assert.equal(more.getAttribute('aria-expanded'),'true');more.click();assert.equal(more.getAttribute('aria-expanded'),'false');
+  h.handle.unmount();more.click();assert.equal(more.getAttribute('aria-expanded'),'false');
+});
+test('R32 focus and outlet bars/legends share fixed order and palette even when larger counts come last',t=>{
+  const h=setup(t),body=outletToneFixture();body.items=body.items.map((item,i)=>({...item,tone:i%5===0?'negative':i%5===1?'neutral':i%5===2?'mixed':'positive'}));
+  body.topics.list[0].tone={negative:8,neutral:8,mixed:8,positive:16};h.message(body);focusTopicButtons(h)[0].click();
+  const ids=['negative','neutral','mixed','positive'];
+  assert.deepEqual([...h.container.querySelectorAll('.nw-tone-bar .nw-segment')].map(n=>n.className.split('nw-tone-')[1]),ids);
+  assert.deepEqual([...h.container.querySelectorAll('.nw-tone-button')].map(n=>n.dataset.toneKey.split(':')[1]),ids);
+  assert.deepEqual([...h.container.querySelectorAll('.nw-outlet-legend-item')].map(n=>n.textContent),['負面','中性','正負並陳','正面']);
+  for(const swatch of h.container.querySelectorAll('.nw-tone-swatch'))assert.equal(swatch.getAttribute('aria-hidden'),'true');
+  const fresh=structuredClone(body);fresh.items=fresh.items.map(i=>({...i,tone:{bad:true}}));fresh.topics.list[0].tone={negative:0,neutral:0,mixed:0,positive:0};h.message(fresh);
+  assert.equal(h.container.querySelectorAll('.nw-outlet-tone').length,0);
+  assert.ok([...h.container.querySelectorAll('.nw-outlet-bar')].every(n=>n.hidden));
+  assert.equal(h.container.querySelector('.nw-outlet-pending').textContent,'待判定 10');
+});
+
+test('R32 narrow outlet groups keep the button above its bar and counts, with larger spacing between outlets', t => {
+  const h = setup(t);
+  const css = h.container.querySelector('style').textContent;
+  assert.match(css, /\.nw\.nw-narrow \.nw-outlet-rows \{ gap: 12px; \}/);
+  assert.match(css, /\.nw\.nw-narrow \.nw-outlet-rows \+ \.nw-outlet-rows \{ margin-top: 12px; \}/);
+  assert.match(css, /\.nw\.nw-narrow \.nw-outlet-row \{[^}]*gap: 3px 8px;/);
+  assert.match(css, /\.nw\.nw-narrow \.nw-outlet \{ grid-column: 1 \/ -1; \}/);
+  assert.doesNotMatch(css, /\.nw\.nw-narrow \.nw-outlet-values \{[^}]*grid-column:/);
+  assert.match(css, /\.nw \.nw-outlet-row \{[^}]*grid-template-columns: minmax\(0, 1fr\) minmax\(36px, \.6fr\) minmax\(0, 1.5fr\)/);
 });

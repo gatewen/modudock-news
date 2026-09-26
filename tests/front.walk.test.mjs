@@ -107,7 +107,7 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
         label===`已篩選：${id==='region:other'?'其他地區':id==='issue:other'?'其他議題':name}`
         &&(namespace?id.startsWith(namespace):!id.includes(':')))?.[0]||'':'';
     return {label,topic:topicScope,count,theme,source:h.source.value,category:h.category.value,
-      outlet:h.q('.nw-topic-outlet-label').textContent.replace(/^話題內・/,''), chronological:h.q('.nw-topic-order').getAttribute('aria-pressed')==='true',
+      outlet:h.q('.nw-topic-outlet-label').textContent.replace(/^只看：/,''), chronological:h.q('.nw-topic-order').getAttribute('aria-pressed')==='true',
       watch:h.watch.getAttribute('aria-pressed')==='true',new:h.new.getAttribute('aria-pressed')==='true',query:searchText(h.search.value).trim()};
   }
   const isNew=group=>group.some(item=>Date.parse(item.published)>seen);
