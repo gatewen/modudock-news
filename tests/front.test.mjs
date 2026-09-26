@@ -292,7 +292,7 @@ test('panel counts scope, unknowns, pending and macro direction using validated 
   assert.deepEqual(lines(), [
     '8 個事件（8 則報導），2 個來源', '待分析 2',
     '偏多 2、多空互見 1、與股市無關 4、偏空 1', '與股市無關 1、未明 3',
-    '大盤方向：大盤／總經 2 個事件・利多 0・利空 1',
+    '大盤方向：大盤／總經 2 個事件利多 0利空 1',
   ]);
   assert.deepEqual(themeButtons(h).map(rankLabel), ['記憶體 2', '光通訊 1', '能源 1']);
   choose(h, h.select, '甲');
@@ -790,7 +790,7 @@ test('panel counts events and takes earliest valid analysis while retaining repo
   assert.equal(panel(h).querySelector('.nw-pending').textContent, '待分析 1');
   assert.equal(panel(h).querySelector('.nw-warning').hidden, false); // 10 reports but only 3 events.
   assert.equal(panel(h).querySelector('.nw-market-bar').getAttribute('aria-label'), '偏多 0、多空互見 1、與股市無關 1、偏空 1');
-  assert.equal(panel(h).querySelector('.nw-macro').textContent, '大盤方向：大盤／總經 1 個事件・利多 1・利空 0');
+  assert.equal(panel(h).querySelector('.nw-macro').textContent, '大盤方向：大盤／總經 1 個事件利多 1利空 0');
   assert.equal(rankLabel(themeButton(h, 'memory')), '記憶體 1');
   assert.equal(panel(h).querySelector('.nw-note').textContent, '同一事件多家報導只算一次。');
   choose(h, h.select, '甲');
@@ -1528,7 +1528,7 @@ test('watch settings normalize stored words and save with Enter for reload', t =
     ...Array.from({length:12}, (_, i) => `詞${i}`)];
   const h = setup(t, window => window.localStorage.setItem(watchKey, JSON.stringify(raw)));
   const c = watchControls(h);
-  assert.equal(c.toggle.textContent, '追蹤設定');
+  assert.equal(c.toggle.textContent, '追蹤關鍵字');
   assert.equal(c.toggle.getAttribute('aria-expanded'), 'false');
   assert.equal(h.window.getComputedStyle(c.settings).display, 'none');
   c.toggle.click();
@@ -2118,8 +2118,8 @@ test('text buttons use visible names and external descriptions survive redraws a
   themeButton(h,'memory').click();
   assert.equal(h.container.querySelector('.nw-filter button').textContent,'清除篩選');
   scan();
-  // Button descriptions are rebuilt; the source select keeps one stable description.
-  const oldIds=[...h.container.querySelectorAll('button[aria-describedby]')].map(node=>node.getAttribute('aria-describedby'));
+  // Dynamic button descriptions rebuild; source select and watch-only keep stable descriptions.
+  const oldIds=[...h.container.querySelectorAll('button[aria-describedby]:not(.nw-watch-only)')].map(node=>node.getAttribute('aria-describedby'));
   h.message(body); scan();
   for (const id of oldIds) assert.equal(h.window.document.getElementById(id),null);
   choose(h,h.categories,'world');
@@ -2196,7 +2196,7 @@ test('summary handles missing text, link fallback and forgets rows that disappea
 
 test('watch toggle stays on toolbar while settings close and disappears with empty keywords', t => {
   const h=setup(t), c=watchControls(h);
-  assert.equal(c.toggle.textContent,'追蹤設定');
+  assert.equal(c.toggle.textContent,'追蹤關鍵字');
   assert.equal(c.toggle.nextElementSibling,c.only);
   assert.equal(c.only.hidden,true);
   assert.equal(c.settings.querySelector('.nw-watch-only'),null);
@@ -2244,7 +2244,7 @@ test('model status shows working and paused, with focus hint only while topics a
     else assert.doesNotMatch(status,/整理/);
     const focus=focusArea(h);
     assert.equal(focus.hidden,false);
-    if(state!=='working') assert.match(focus.textContent,/目前沒有 3 家以上媒體同時報導的新聞/);
+    if(state!=='working') assert.match(focus.textContent,/目前沒有多家媒體同時報導的新聞/);
     if(state==='working') assert.match(focus.textContent,/正在整理多家媒體同報的話題/);
   }
   h.message({...topicListing([article({topic:topicRecord().id})]),model:{state:'working'}});
@@ -2524,7 +2524,7 @@ test('summary fallback distinguishes same-link reports and does not persist link
   assert.deepEqual(hidden(),[false,true,true,true,true]);
 });
 
-test('category option counts are events scoped only by source, including zero categories', t => {
+test('category option counts are events scoped by source, including zero categories', t => {
   const h=setup(t), id=topicRecord().id;
   const body=topicListing([
     eventStory('111111111111','AI',8,{source:'甲',topic:id}),
@@ -2573,13 +2573,13 @@ test('source counts and failure labels update existing options without losing se
     assert.equal(h.select.value,'甲'); assert.equal(h.categories.value,'finance');
     assert.deepEqual([...h.select.options],options);
     assert.deepEqual([...h.categories.options],categories);
-    assert.deepEqual([...h.select.options].map(o=>o.textContent),['全部來源 3','甲 2（失敗）','乙 1',`${evil} 0`]);
+    assert.deepEqual([...h.select.options].map(o=>o.textContent),['全部來源 2','甲 2（失敗）','乙 0',`${evil} 0`]);
     assert.equal(h.categories.selectedOptions[0].textContent,'財經 2');
   }
   h.message({...body,sources:[{name:'乙',count:null},{name:'新來源',count:'4'},{name:'乙',count:99}]});
   assert.equal(h.select.value,'');
   assert.equal(h.select.options[1],options[2]);
-  assert.deepEqual([...h.select.options].map(o=>o.textContent),['全部來源 2','乙 0','新來源 0']);
+  assert.deepEqual([...h.select.options].map(o=>o.textContent),['全部來源 1','乙 0','新來源 0']);
 });
 
 function refreshClock(t,h) {
@@ -3386,7 +3386,7 @@ test('count controls remove listener on unmount and stay safe for malicious inpu
 });
 
 test('empty focus distinguishes no multi-source event, working, filtered topics and watch-only', t => {
-  const h=setup(t); const hint='目前沒有 3 家以上媒體同時報導的新聞';
+  const h=setup(t); const hint='目前沒有多家媒體同時報導的新聞';
   for(const state of ['done','paused','off']) {
     h.message({...listing([financeArticle()]),model:{state}});
     assert.equal(focusArea(h).hidden,false);
@@ -3511,7 +3511,7 @@ test('event focus counts publishers: three CNA feeds are one, CNA PTS BBC are th
   const reports=names.map((source,i)=>eventStory('111111111111',`headline-${i}`,8+i,{source}));
   h.message(listing(reports.slice(0,3),sources));
   assert.equal(focusButtons(h).length,0);
-  assert.match(focusArea(h).textContent,/目前沒有 3 家以上/);
+  assert.match(focusArea(h).textContent,/目前沒有多家媒體/);
   h.message(listing(reports,sources));
   assert.equal(focusButtons(h).length,1);
   assert.equal(focusButtons(h)[0].querySelector('.nw-focus-long').textContent,'看同事件・3 家');
@@ -3717,10 +3717,10 @@ test('R6 focus empty message is reserved for unfiltered data without a three-out
     if(filter==='theme') { choose(h,h.categories,'finance'); h.container.querySelector('[data-topic="energy"]').click(); }
     if(filter==='search') search(h,'no match');
     assert.equal(focusArea(h).hidden,true,filter);
-    assert.doesNotMatch(focusArea(h).textContent,/目前沒有 3 家以上/);
+    assert.doesNotMatch(focusArea(h).textContent,/目前沒有多家媒體/);
   }
   const h=setup(t); h.message({...listing([article()]),model:{state:'done'}});
-  assert.equal(focusArea(h).hidden,false); assert.match(focusArea(h).textContent,/目前沒有 3 家以上/);
+  assert.equal(focusArea(h).hidden,false); assert.match(focusArea(h).textContent,/目前沒有多家媒體/);
 });
 
 test('R6 search count is live beside input with only one clear control', t => {
@@ -3828,7 +3828,7 @@ test('R8 finance labels and macro controls explain news impact while report tone
   }
   assert.doesNotMatch(p.querySelector('.nw-market-bar').getAttribute('aria-label'),/正面|負面|正反/);
   assert.match(p.querySelector('.nw-market').title,/與股市無關/);
-  assert.equal(p.querySelector('.nw-macro').textContent,'大盤方向：大盤／總經 4 個事件・利多 1・利空 1');
+  assert.equal(p.querySelector('.nw-macro').textContent,'大盤方向：大盤／總經 4 個事件利多 1利空 1');
   for(const id of ['macro:all','macro:bull','macro:bear']) {
     const button=countButton(h,id); assert.equal(button.hasAttribute('aria-label'),false);
     button.click(); assert.equal(countButton(h,id).getAttribute('aria-pressed'),'true');
@@ -3863,4 +3863,86 @@ test('R8 theme legends switch semantic labels and color tokens; politics has no 
   assert.equal(p.querySelector('.nw-signal-heading small').hidden,true);
   choose(h,h.categories,'politics'); assert.equal(legend.hidden,true); assert.equal(legend.textContent,'');
   choose(h,h.categories,'finance'); assert.equal(legend.hidden,false);
+});
+
+test('R9 faceted source and category menus count events, ignore backend report counts and update on resend', t => {
+  const h=setup(t), id='123456abcdef';
+  const items=[eventStory(id,'A',8,{source:'甲'}),eventStory(id,'B',9,{source:'甲'}),
+    eventStory(id,'C',10,{source:'乙'}),worldArticle({source:'乙'}),
+    article({event:'bad',source:'甲',category:'world'})];
+  const body=listing(items,[{name:'甲',ok:true,count:999},{name:'乙',ok:false,count:888}]);
+  h.message(body);
+  const labels=()=>[...h.select.options].map(o=>o.textContent);
+  assert.deepEqual(labels(),['全部來源 3','甲 2','乙 2（失敗）']);
+  const categories=[...h.categories.options].map(o=>o.textContent);
+  assert.equal(categories[0],'全部類別 3');
+  assert.equal(h.categories.querySelector('[value=finance]').textContent,'財經 1');
+  // Each option's displayed count predicts the list after a real change event.
+  const optionCount=o=>Number(o.textContent.match(/ (\d+)(?:（.*）)?$/)[1]);
+  for (const source of ['', '甲', '乙']) {
+    choose(h,h.select,source);
+    for (const option of h.categories.options) {
+      const expected=optionCount(option);
+      choose(h,h.categories,option.value);
+      assert.equal(mainRows(h).length,expected,`${source}/${option.value}`);
+    }
+  }
+  for (const category of ['', 'finance', 'world', 'sports']) {
+    choose(h,h.categories,category);
+    for (const option of h.select.options) {
+      const expected=optionCount(option);
+      choose(h,h.select,option.value);
+      assert.equal(mainRows(h).length,expected,`${option.value}/${category}`);
+    }
+  }
+  choose(h,h.select,''); choose(h,h.categories,'');
+  search(h,'absent'); assert.deepEqual(labels(),['全部來源 3','甲 2','乙 2（失敗）']);
+  h.message({...body,items:[items[0],items[2]]});
+  assert.deepEqual(labels(),['全部來源 1','甲 1','乙 1（失敗）']);
+  assert.equal(h.categories.options[0].textContent,'全部類別 1');
+});
+
+test('R9 empty focus is a compact hint with threshold title and resets when data arrives', t => {
+  const h=setup(t); h.message({...listing([article()]),model:{state:'done'}});
+  const focus=focusArea(h), hint=focus.querySelector('.nw-focus-list .nw-hint');
+  assert.equal(hint.textContent,'目前沒有多家媒體同時報導的新聞');
+  assert.match(hint.title,/至少 3 家不同媒體/);
+  assert.equal(focus.querySelector('.nw-focus-heading').hidden,true);
+  assert.equal(h.window.getComputedStyle(focus).backgroundColor,'transparent');
+  assert.equal(h.window.getComputedStyle(focus).paddingTop,'0px');
+  assert.equal(h.window.getComputedStyle(hint).marginTop,'0px');
+  h.message(listing(focusReports('111111111111',3)));
+  assert.equal(focus.classList.contains('nw-focus-empty'),false);
+  assert.equal(focus.querySelector('.nw-focus-heading').hidden,false);
+  assert.equal(focusButtons(h).length,1);
+  h.message({...listing([]),model:{state:'working'}});
+  assert.equal(focus.classList.contains('nw-focus-empty'),false);
+  assert.match(focus.textContent,/正在整理/);
+});
+
+test('R9 watch keyword guidance and accessible event count stay synchronized', t => {
+  const h=setup(t); h.message(listing([article({title:'AI'})]));
+  const {toggle,only}=watchControls(h);
+  assert.equal(toggle.textContent,'追蹤關鍵字'); assert.equal(only.hidden,true); assert.equal(only.disabled,true);
+  only.dispatchEvent(new h.window.Event('click'));
+  assert.equal(only.getAttribute('aria-pressed'),'false');
+  toggle.click(); const guide=h.container.querySelector('.nw-watch-guide');
+  assert.equal(guide.hidden,false); assert.match(guide.textContent,/先輸入並儲存關鍵字/);
+  saveWatch(h,'AI');
+  const check=n=>{const expected=`只顯示標題或摘要含你的關鍵字的新聞（${n} 個事件）`;
+    assert.equal(only.title,expected); assert.equal(described(h,only),expected); assert.equal(only.textContent,`只看追蹤 ${n}`);};
+  check(1); assert.equal(guide.hidden,true);
+  h.message(listing([eventStory('111111111111','AI',8),eventStory('111111111111','AI again',9)])); check(1);
+  choose(h,h.categories,'world'); check(0);
+  h.handle.unmount(); assert.equal(h.container.childElementCount,0);
+});
+
+test('R9 macro buttons use gap without floating separators and keep visible accessible names', t => {
+  const h=setup(t); h.message(listing([financeArticle({analysis:analysis({theme:'macro'})})]));
+  choose(h,h.categories,'finance');
+  const macro=h.container.querySelector('.nw-macro');
+  assert.doesNotMatch(macro.textContent,/・/);
+  assert.deepEqual([...macro.querySelectorAll('button')].map(n=>n.textContent),['大盤／總經 1 個事件','利多 1','利空 0']);
+  assert.ok([...macro.querySelectorAll('button')].every(n=>!n.hasAttribute('aria-label')));
+  assert.equal(h.window.getComputedStyle(macro).gap,'6px 16px');
 });

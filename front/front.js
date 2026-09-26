@@ -107,7 +107,7 @@ export default function mount(ctx) {
   searchHint.setAttribute("aria-live", "polite");
   searchBox.append(searchHint);
   searchHint.hidden = true;
-  const watchToggle = make("button", "", "追蹤設定");
+  const watchToggle = make("button", "", "追蹤關鍵字");
   watchToggle.type = "button";
   watchToggle.setAttribute("aria-expanded", "false");
   const watchSettings = make("div", "nw-watch-settings");
@@ -123,11 +123,17 @@ export default function mount(ctx) {
   const watchOnly = make("button", "nw-watch-only", "只看追蹤 0");
   watchOnly.type = "button";
   watchOnly.setAttribute("aria-pressed", "false");
+  const watchDescription = make("span", "nw-sr", "只顯示標題或摘要含你的關鍵字的新聞（0 個事件）");
+  watchOnly.title = watchDescription.textContent;
+  watchDescription.id = `nw-watch-description-${++descriptionId}`;
+  watchOnly.setAttribute("aria-describedby", watchDescription.id);
   let trackedWords = watchWords(), onlyWatched = false;
   watchInput.value = trackedWords.join(" ");
   watchOnly.disabled = trackedWords.length === 0;
   watchOnly.hidden = trackedWords.length === 0;
-  watchSettings.append(watchLabel, watchInput, watchSave);
+  const watchGuide = make("span", "nw-hint nw-watch-guide", "先輸入並儲存關鍵字，即可使用「只看追蹤」篩選標題或摘要。");
+  watchGuide.hidden = trackedWords.length > 0;
+  watchSettings.append(watchLabel, watchInput, watchSave, watchGuide);
   const status = make("span", "nw-status");
   status.setAttribute("role", "status");
   status.textContent = "等待模組就緒";
@@ -214,7 +220,7 @@ export default function mount(ctx) {
   rankingSection.append(rankingHeading, ranking);
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(searchScope, sample, market, history, macro, rankingSection, note);
-  toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, searchToggle, status, searchBox, watchSettings);
+  toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, watchDescription, searchToggle, status, searchBox, watchSettings);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
   root.append(toolbar, focus, panel, themeFilter, watchHint, list, empty);
@@ -419,6 +425,8 @@ export default function mount(ctx) {
     button.setAttribute("aria-describedby", description.id);
   }
   function drawFocus(groups) {
+    focus.classList.remove("nw-focus-empty");
+    focusHeader.hidden = false;
     if (onlyWatched) { focus.hidden = true; return; }
     if (topics.length) {
       focusList.replaceChildren();
@@ -487,7 +495,13 @@ export default function mount(ctx) {
       const filtered = sources.value || categories.value || selectedTheme || selectedCount || selectedTopic
         || searchText(searchInput.value).trim();
       focus.hidden = Boolean(hasEvent || filtered);
-      if (!focus.hidden) focusList.append(make("p", "nw-hint", "目前沒有 3 家以上媒體同時報導的新聞"));
+      if (!focus.hidden) {
+        focus.classList.add("nw-focus-empty");
+        focusHeader.hidden = true;
+        const hint = make("p", "nw-hint", "目前沒有多家媒體同時報導的新聞");
+        hint.title = "焦點事件門檻：至少 3 家不同媒體同時報導";
+        focusList.append(hint);
+      }
     }
     for (const group of ranked) {
       const row = make("div", "nw-focus-row");
@@ -736,7 +750,6 @@ export default function mount(ctx) {
       button.type = "button";
       button.dataset.count = id;
       button.setAttribute("aria-pressed", String(selectedCount?.id === id));
-      if (id !== "macro:all") macro.append(document.createTextNode("・"));
       macro.append(button);
     }
     // Stable sorting preserves the fixed table order for equal counts.
@@ -929,11 +942,17 @@ export default function mount(ctx) {
     sourceDescription.textContent = [...sources.options].find(option => option.value === sources.value)?.title || "";
     const focusWasInside = keepFocus && root.contains(document.activeElement);
     const focused = keepFocus ? focusIdentity(document.activeElement) : null;
-    const sourceItems = items.filter(item => item && typeof item === "object"
-      && (!sources.value || text(item.source) === sources.value));
+    const availableItems = items.filter(item => item && typeof item === "object");
     for (const option of searchOnly ? [] : categories.options) {
-      const count = groupItems(sourceItems.filter(item => !option.value || text(item.category) === option.value)).length;
+      const count = groupItems(availableItems.filter(item => (!sources.value || text(item.source) === sources.value)
+        && (!option.value || text(item.category) === option.value))).length;
       const next = `${categoryNames.get(option.value) || "全部類別"} ${count}`;
+      if (option.textContent !== next) option.textContent = next;
+    }
+    for (const option of searchOnly ? [] : sources.options) {
+      const count = groupItems(availableItems.filter(item => (!categories.value || text(item.category) === categories.value)
+        && (!option.value || text(item.source) === option.value))).length;
+      const next = `${option.value || "全部來源"} ${count}${option.dataset.statusSuffix || ""}`;
       if (option.textContent !== next) option.textContent = next;
     }
     const applicable = categories.value === "politics" ? issueTopics : categories.value === "world" ? regionTopics
@@ -959,6 +978,9 @@ export default function mount(ctx) {
     watchOnly.disabled = trackedWords.length === 0;
     watchOnly.hidden = trackedWords.length === 0;
     watchOnly.setAttribute("aria-pressed", String(onlyWatched));
+    watchOnly.title = `只顯示標題或摘要含你的關鍵字的新聞（${watchedCount} 個事件）`;
+    watchDescription.textContent = watchOnly.title;
+    watchGuide.hidden = trackedWords.length > 0;
     watchOnly.textContent = `只看追蹤 ${watchedCount}`;  // Events, like the list and status.
     const query = searchText(searchInput.value).trim();
     const hits = item => !query || (searchIndex.get(item) || []).some(value => value.includes(query));
@@ -1209,7 +1231,8 @@ export default function mount(ctx) {
     const previous = sources.value;
     const records = Array.isArray(body.sources) ? body.sources : [];
     const options = new Map([...sources.options].map(option => [option.value, option]));
-    const allText = `全部來源 ${items.filter(item => item && typeof item === "object").length}`;
+    const allText = `全部來源 ${groupItems(items.filter(item => item && typeof item === "object"
+      && (!categories.value || text(item.category) === categories.value))).length}`;
     if (all.textContent !== allText) all.textContent = allText;
     const names = new Set();
     sourceOutlets = new Map();
@@ -1221,13 +1244,15 @@ export default function mount(ctx) {
       sourceOutlets.set(name, outlet && outlet.length <= 64 ? outlet : name);
       const option = options.get(name) || document.createElement("option");
       option.value = name;
-      const count = Number.isSafeInteger(source.count) && source.count >= 0 ? source.count : 0;
+      const count = groupItems(items.filter(item => item && typeof item === "object" && text(item.source) === name
+        && (!categories.value || text(item.category) === categories.value))).length;
       const date = confirmedAt(source);
       const today = new Date();
       const sameDay = date && date.getFullYear() === today.getFullYear()
         && date.getMonth() === today.getMonth() && date.getDate() === today.getDate();
       const calendar = date && !sameDay ? `${date.getMonth()+1}/${date.getDate()} ` : "";
       const suffix = source.ok === false ? (date ? `（${calendar}${localTime(source.last_success)} 資料）` : "（失敗）") : "";
+      option.dataset.statusSuffix = suffix;
       const next = `${name} ${count}${suffix}`;
       option.title = date || source.ok === false ? sourceDetail(source) : "";
       if (option.textContent !== next) option.textContent = next;

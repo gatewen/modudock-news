@@ -122,6 +122,13 @@ function check() {
     const s = new Set(); let c = 0; for (const i of its) { const id = eventId(i); if (!id) c++; else if (!s.has(id)) { s.add(id); c++; } }
     if (!o.textContent.endsWith(' ' + c)) errs.push(`cat option ${o.value} "${o.textContent}" expected ${c}`);
   }
+  // R9: faceted menus count events within the other selected dimension.
+  for (const o of h.q('[aria-label=新聞來源]').options) {
+    const its = last.items.filter(i => (!cat || i.category === cat) && (!o.value || i.source === o.value));
+    const seen = new Set(); let count = 0;
+    for (const item of its) { const id = eventId(item); if (!id) count++; else if (!seen.has(id)) { seen.add(id); count++; } }
+    if (o.textContent !== `${o.value || '全部來源'} ${count}`) errs.push(`source option ${o.value} expected ${count}`);
+  }
   const a = document.activeElement;
   if (a && h.container.contains(a) && (a.closest('[hidden]') || a.disabled)) errs.push('focus in hidden/disabled: ' + a.className + ' ' + a.textContent.slice(0, 20));
   for (const b of h.qa('.nw-list .nw-expand')) if ((b.getAttribute('aria-expanded') === 'true') === b.closest('.nw-row').querySelector('.nw-reports').hidden) errs.push('expand aria mismatch');

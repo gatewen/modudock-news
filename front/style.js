@@ -50,6 +50,9 @@ export const css = `
 .nw .nw-watch { color: var(--nw-accent); border: 1px solid var(--nw-accent); border-radius: 3px; padding: 0 4px; font-size: 12px; }
 .nw .nw-panel { background: var(--nw-surface); border-radius: 8px; padding: 14px 16px; }
 .nw .nw-focus-section { background: var(--nw-surface); border-radius: 8px; padding: 14px 16px; margin-bottom: 12px; }
+.nw .nw-focus-section.nw-focus-empty { background: transparent; padding: 0 16px; border-radius: 0; }
+.nw .nw-focus-empty .nw-hint { margin: 0; }
+.nw .nw-watch-guide { flex-basis: 100%; }
 .nw .nw-focus-heading { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; }
 .nw .nw-event-latest { display: block; min-width: 0; text-decoration: none; }
 .nw a.nw-event-latest:hover { text-decoration: underline; }
