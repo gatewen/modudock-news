@@ -315,7 +315,7 @@ export default function mount(ctx) {
   root.append(toolbar, focus, panel, themeFilter, topicTools, watchHint, newHint, shortcutHelp, list, empty);
   ctx.container.append(root);
 
-  let narrow = false, panelOpen = false;
+  let narrow = false, wideRanking = false, panelOpen = false;
   function arrangeToolbar() {
     const active = document.activeElement;
     if (narrow) toolbarActions.append(refresh, watchToggle, watchOnly, searchToggle);
@@ -325,12 +325,16 @@ export default function mount(ctx) {
     if (toolbar.contains(active) && document.activeElement !== active) active.focus({preventScroll: true});
   }
   function syncPanelDisclosure() {
+    // Resizing must not displace a reader's focus: keep its content open, or
+    // retain the wide-mode toggle until the user naturally leaves it.
+    if (narrow && panelContent.contains(document.activeElement)) panelOpen = true;
     const hiding = narrow && !panelOpen;
-    panelToggle.hidden = !narrow;
-    if (hiding && panelContent.contains(document.activeElement)) panelToggle.focus({preventScroll: true});
-    if (!narrow && document.activeElement === panelToggle) list.focus({preventScroll: true});
+    panelToggle.hidden = !narrow && document.activeElement !== panelToggle;
     panelToggle.setAttribute("aria-expanded", String(!hiding));
     panelContent.hidden = hiding;
+  }
+  function updatePanelTitle() {
+    panelToggle.title = `${panelToggle.textContent}；${onlyNew ? "上次離開後的新進展；" : ""}${searchInput.value.trim() ? "未套用搜尋；" : ""}${sampleCount.textContent}`;
   }
   function onPanelToggle() {
     if (disposed || !narrow) return;
@@ -938,7 +942,7 @@ export default function mount(ctx) {
     panelToggle.textContent = `${politics ? `議題分布：${groups.length} 個事件` : world
       ? `局勢走向：升級 ${values[0]}・緩和 ${values[2]}`
       : `股市訊號：偏多 ${values[0]}・偏空 ${values[3]}`}${analyzed < groups.length ? `・已分析 ${analyzed}／${groups.length}` : ""}`;
-    panelToggle.title = `${panelToggle.textContent}；${onlyNew ? "上次離開後的新進展；" : ""}${searchInput.value.trim() ? "未套用搜尋；" : ""}${sampleCount.textContent}`;
+    updatePanelTitle();
     syncPanelDisclosure();
     marketBar.dataset.empty = String(analyzed === 0);
     marketBar.setAttribute("aria-label", marketParts.map((part, i) => `${part.name} ${values[i]}`).join("、"));
@@ -1155,6 +1159,7 @@ export default function mount(ctx) {
   function drawItems(keepFocus = true, searchOnly = false) {
     if (!searchOnly) searchRows.clear();
     const searching = Boolean(searchText(searchInput.value).trim());
+    updatePanelTitle();
     searchScope.hidden = !searching;
     searchScope.textContent = searching ? `統計為全部${categoryNames.get(categories.value) || "類別"}，未套用搜尋` : "";
     sourceDescription.textContent = [...sources.options].find(option => option.value === sources.value)?.title || "";
@@ -1421,7 +1426,7 @@ export default function mount(ctx) {
     topicSources.replaceChildren();
     topicSources.removeAttribute("title");
     if (!topic) return;
-    topicOrder.textContent = chronological ? "時間順讀" : "最新優先";
+    topicOrder.textContent = "時間順讀";
     topicOrder.title = `切換為${chronological ? "最新優先" : "時間順讀"}；依發布時間，非事件發生時間`;
     topicOrder.setAttribute("aria-pressed", String(chronological));
     outletLabel.textContent = selectedOutlet ? `話題內・${selectedOutlet}` : "";
@@ -1746,9 +1751,13 @@ export default function mount(ctx) {
     if (disposed) return;
     const entry = entries.find(entry => entry.target === root);
     if (!entry) return;
-    const nextNarrow = entry.contentRect.width <= 480;
+    const width = entry.contentRect.width;
+    const nextNarrow = narrow ? width < 500 : width <= 480;
+    wideRanking = wideRanking ? width > 540 : width >= 560;
+    root.classList.toggle("nw-wide-ranking", wideRanking);
     if (narrow !== nextNarrow) {
       narrow = nextNarrow;
+      root.classList.toggle("nw-narrow", narrow);
       arrangeToolbar();
     }
     syncPanelDisclosure();
@@ -1757,6 +1766,7 @@ export default function mount(ctx) {
   topicOrder.addEventListener("click", onTopicOrder);
   topicSources.addEventListener("click", onOutlet);
   outletClear.addEventListener("click", onOutletClear);
+  panelToggle.addEventListener("blur", syncPanelDisclosure);
   panelToggle.addEventListener("click", onPanelToggle);
   shortcutToggle.addEventListener("click", toggleShortcuts);
   overview.addEventListener("click", onOverview);
@@ -1807,6 +1817,7 @@ export default function mount(ctx) {
       topicOrder.removeEventListener("click", onTopicOrder);
       topicSources.removeEventListener("click", onOutlet);
       outletClear.removeEventListener("click", onOutletClear);
+      panelToggle.removeEventListener("blur", syncPanelDisclosure);
       panelToggle.removeEventListener("click", onPanelToggle);
       up = false;
       finishRefresh();

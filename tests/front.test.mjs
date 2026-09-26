@@ -496,8 +496,9 @@ test('style stays inside module root, scopes parsed CSS rules and leaves host un
   assert.doesNotMatch(style.textContent, /data-theme/);
   inspect(style.sheet.cssRules);
   assert.ok(selectors.length > 50);
-  assert.ok(groups.some(text => text.startsWith('@container (min-width: 560px)')));
-  assert.ok(groups.some(text => text.startsWith('@container (max-width: 419.98px)')));
+  assert.ok(selectors.includes('.nw.nw-wide-ranking .nw-ranking'));
+  assert.ok(selectors.includes('.nw.nw-narrow .nw-actions'));
+  assert.doesNotMatch(style.textContent, /@container/);
   assert.ok(groups.some(text => text.includes('prefers-reduced-motion: reduce') && text.includes('transition: none')));
   assert.match(style.textContent, /container-type: inline-size/);
   assert.match(style.textContent, /transition: width 240ms ease/);
@@ -1173,7 +1174,7 @@ test('focus titles keep text and URL defenses and responsive labels stay scoped'
   const link = focusArea(h).querySelector('a');
   assert.equal(link.target, '_blank'); assert.equal(link.rel, 'noopener noreferrer');
   const css = h.container.querySelector('style').textContent;
-  assert.match(css, /@container \(max-width: 419\.98px\)\s*\{[\s\S]*?\.nw \.nw-focus-long \{ display: none; \}\s*\.nw \.nw-focus-short \{ display: inline; \}/);
+  assert.match(css, /\.nw.nw-narrow \.nw-focus-long \{ display: none; \}\s*\.nw.nw-narrow \.nw-focus-short \{ display: inline; \}/);
   const other = setup(t);
   assert.notEqual(focusArea(h).getAttribute('aria-labelledby'), focusArea(other).getAttribute('aria-labelledby'));
 });
@@ -1733,7 +1734,7 @@ test('history bins are left inclusive, exclude next boundary and include final e
     ['nw-segment nw-positive', 'nw-segment nw-mixed', 'nw-segment nw-idle', 'nw-segment nw-negative']);
   assert.ok(Math.abs(parseFloat(bar.firstElementChild.style.width) - 100 / 6) < 0.001);
   const css = h.container.querySelector('style').textContent;
-  assert.match(css, /@container \(max-width: 419\.98px\)\s*\{[\s\S]*?\.nw \.nw-history-long \{ display: none; \}\s*\.nw \.nw-history-short \{ display: inline; \}/);
+  assert.match(css, /\.nw.nw-narrow \.nw-history-long \{ display: none; \}\s*\.nw.nw-narrow \.nw-history-short \{ display: inline; \}/);
 });
 
 test('history requires five analyzed events and reports dash for no directional denominator', t => {
@@ -2380,7 +2381,7 @@ test('row separates ordered information from right-aligned actions with narrow l
   const style=h.window.getComputedStyle(actions);
   assert.equal(style.marginLeft,'auto'); assert.equal(style.gap,'6px');
   const css=h.container.querySelector('style').textContent;
-  assert.match(css,/@container \(max-width: 419\.98px\)\s*\{\s*\.nw \.nw-actions \{ margin-left: 0; \}/);
+  assert.match(css,/\.nw.nw-narrow \.nw-actions \{ margin-left: 0; \}/);
   h.message(listing([article({summary:''})]));
   assert.equal(mainRows(h)[0].querySelector('.nw-actions'),null);
 });
@@ -4735,7 +4736,7 @@ test('R23 reading and shortcut entries share secondary button height and narrow 
   }
   const shortcut=h.container.querySelector('.nw-shortcut-toggle');
   assert.equal(shortcut.getAttribute('aria-label'),'快捷鍵說明');assert.equal(shortcut.title,'快捷鍵說明');
-  assert.match(css,/\.nw \.nw-shortcut-toggle \{ border-radius: 50%; width: 30px; height: 30px; padding: 0; \}/);
+  assert.match(css,/\.nw.nw-narrow \.nw-shortcut-toggle \{ border-radius: 50%; width: 30px; height: 30px; padding: 0; \}/);
   assert.ok(css.includes('.nw .nw-mark-read:hover'));
 });
 
@@ -4772,7 +4773,7 @@ test('R24 panel uses module width, defaults closed and preserves only mounted di
   h.message({...body,at:'2026-09-22T00:00:00Z'});assert.equal(content.hidden,false);
   choose(h,h.categories,'world');assert.equal(content.hidden,false);assert.match(toggle.textContent,/局勢走向：升級/);
   toggle.click();choose(h,h.categories,'politics');assert.equal(content.hidden,true);assert.match(toggle.textContent,/議題分布：1 個事件/);
-  h.resize(481);assert.equal(content.hidden,false);assert.equal(toggle.hidden,true);assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  h.resize(500);assert.equal(content.hidden,false);assert.equal(toggle.hidden,true);assert.equal(toggle.getAttribute('aria-expanded'),'true');
   h.resize(380);assert.equal(content.hidden,true);
   const stored=[...Array(h.window.localStorage.length)].map((_,i)=>h.window.localStorage.key(i));
   assert.ok(stored.every(key=>!key.includes('panel')));
@@ -4783,18 +4784,19 @@ test('R24 panel uses module width, defaults closed and preserves only mounted di
 test('R24 summary updates incomplete analysis and resize never strands focus in collapsed content',t=>{
   const h=responsiveSetup(t);h.message(listing([financeArticle({analysis:null})]));choose(h,h.categories,'finance');
   const toggle=h.container.querySelector('.nw-panel-toggle');
-  countButton(h,'signal:0').focus();h.resize(380);assert.equal(h.window.document.activeElement,toggle);
+  const focused=countButton(h,'signal:0');focused.focus();h.resize(380);assert.equal(h.window.document.activeElement,focused);
+  assert.equal(h.container.querySelector('.nw-panel-content').hidden,false);
   assert.match(toggle.textContent,/已分析 0／1/);
   h.message(listing([financeArticle()]));assert.doesNotMatch(toggle.textContent,/已分析/);
-  h.resize(800);assert.equal(h.window.document.activeElement,h.container.querySelector('.nw-list'));
+  h.resize(800);assert.equal(h.window.document.activeElement,countButton(h,'signal:0'));
 });
 test('R24 narrow CSS keeps select row, action row and two-column non-breaking signals',t=>{
   const h=setup(t),css=h.container.querySelector('style').textContent;
-  assert.match(css,/@container \(max-width: 480px\)/);
-  assert.match(css,/\.nw \.nw-toolbar > select \{[^}]*50%/);
-  assert.match(css,/\.nw \.nw-toolbar-actions \{[^}]*flex-wrap: nowrap;[^}]*overflow-x: auto/);
-  assert.match(css,/\.nw \.nw-legend \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
-  assert.match(css,/\.nw \.nw-legend-item \{ white-space: nowrap; word-break: keep-all;/);
+  assert.doesNotMatch(css,/@container/);
+  assert.match(css,/\.nw.nw-narrow \.nw-toolbar > select \{[^}]*50%/);
+  assert.match(css,/\.nw.nw-narrow \.nw-toolbar-actions \{[^}]*flex-wrap: nowrap;[^}]*overflow-x: auto/);
+  assert.match(css,/\.nw.nw-narrow \.nw-legend \{ grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(css,/\.nw.nw-narrow \.nw-legend-item \{ white-space: nowrap; word-break: keep-all;/);
   h.message(auditFixture());
   const button=focusTopicButtons(h)[0];
   assert.equal(button.querySelector('.nw-focus-short').textContent,button.querySelector('.nw-focus-long').textContent);
@@ -4813,7 +4815,7 @@ test('R25 toolbar DOM and tab order follow wide and narrow visual rows, preservi
   assert.deepEqual([...h.container.querySelector('.nw-toolbar-actions').children].filter(n=>!n.hidden),[refresh,watch,search]);
   for(const n of primary())assert.equal(n.tabIndex,0);
   search.focus();h.resize(744);assert.deepEqual(primary(),wide);assert.equal(h.window.document.activeElement,search);
-  h.resize(480);assert.deepEqual(primary(),narrow);h.resize(481);assert.deepEqual(primary(),wide);
+  h.resize(480);assert.deepEqual(primary(),narrow);h.resize(500);assert.deepEqual(primary(),wide);
   assert.doesNotMatch(h.container.querySelector('style').textContent,/order:\s*-?[12];/);
 });
 test('R25 truncated source distribution states remaining and total outlet counts and titles every outlet',t=>{
@@ -4881,4 +4883,43 @@ test('R26 chronological outlet reading retains new-progress scope, survives rese
   assert.equal(h.container.querySelectorAll('.nw-divider').length,0);
   const oldOutlet=outlet(),clear=h.container.querySelector('.nw-topic-outlet-clear');
   h.handle.unmount();order.click();oldOutlet.click();clear.click();assert.equal(h.container.children.length,0);
+});
+
+test('R27 chronological toggle has a fixed visible name and pressed state explains the mode',t=>{
+  const h=setup(t);h.message(readingTopic());focusTopicButtons(h)[0].click();
+  const button=h.container.querySelector('.nw-topic-order');
+  assert.equal(button.textContent,'時間順讀');assert.equal(button.getAttribute('aria-pressed'),'false');
+  assert.match(button.title,/切換為時間順讀/);button.click();
+  assert.equal(button.textContent,'時間順讀');assert.equal(button.getAttribute('aria-pressed'),'true');
+  assert.match(button.title,/切換為最新優先/);button.click();assert.equal(button.textContent,'時間順讀');
+});
+test('R27 20px hysteresis stabilizes scrollbar width feedback without moving focus',t=>{
+  const h=responsiveSetup(t);h.message(listing([financeArticle()]));choose(h,h.categories,'finance');
+  const root=h.container.querySelector('.nw'),toggle=h.container.querySelector('.nw-panel-toggle');
+  h.resize(600);h.categories.focus();h.resize(480);
+  assert.equal(root.classList.contains('nw-narrow'),true);
+  let moves=0;h.container.addEventListener('focusin',()=>moves++);
+  for(let i=0;i<120;i++)h.resize(i%2?496:480);
+  assert.equal(moves,0);assert.equal(h.window.document.activeElement,h.categories);
+  assert.equal(root.classList.contains('nw-narrow'),true);assert.equal(toggle.hidden,false);
+  h.resize(499.9);assert.equal(root.classList.contains('nw-narrow'),true);
+  h.resize(500);assert.equal(root.classList.contains('nw-narrow'),false);
+  h.resize(484);assert.equal(root.classList.contains('nw-narrow'),false);
+  const signal=countButton(h,'signal:0');signal.focus();h.resize(480);
+  assert.equal(h.window.document.activeElement,signal);assert.equal(h.container.querySelector('.nw-panel-content').hidden,false);
+  toggle.focus();h.resize(500);assert.equal(h.window.document.activeElement,toggle);assert.equal(toggle.hidden,false);
+  h.categories.focus();assert.equal(toggle.hidden,true);
+  h.resize(560);assert.equal(root.classList.contains('nw-wide-ranking'),true);
+  h.resize(544);assert.equal(root.classList.contains('nw-wide-ranking'),true);
+  h.resize(540);assert.equal(root.classList.contains('nw-wide-ranking'),false);
+});
+test('R27 search-only redraw updates collapsed panel title scope immediately on input and clear',t=>{
+  const h=responsiveSetup(t);h.message(listing([financeArticle({title:'台積電'})]));choose(h,h.categories,'finance');h.resize(380);
+  const toggle=h.container.querySelector('.nw-panel-toggle');
+  assert.doesNotMatch(toggle.title,/未套用搜尋/);
+  search(h,'台積');assert.match(toggle.title,/未套用搜尋/);assert.equal(toggle.getAttribute('aria-expanded'),'false');
+  search(h,'');assert.doesNotMatch(toggle.title,/未套用搜尋/);
+  search(h,'無命中');assert.match(toggle.title,/未套用搜尋/);
+  h.container.querySelector('.nw-search-input').dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true}));
+  assert.doesNotMatch(toggle.title,/未套用搜尋/);
 });

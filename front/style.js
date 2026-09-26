@@ -195,32 +195,26 @@ export const css = `
 .nw .nw-empty { padding: 32px 0; text-align: center; color: var(--nw-muted); }
 .nw .nw-empty button { display: block; margin: 12px auto 0; }
 .nw .nw-toolbar, .nw .nw-filter, .nw .nw-watch-hint, .nw .nw-new-hint, .nw .nw-row { padding-inline: 16px; }
-@container (min-width: 560px) {
-  .nw .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
-@container (max-width: 480px) {
-  .nw .nw-toolbar > select { flex: 1 1 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; }
-  .nw .nw-toolbar-actions { display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; overflow-x: auto; padding-block: 3px; }
-  .nw .nw-toolbar-actions > button { flex: none; white-space: nowrap; font-size: 12px; padding-inline: 7px; }
-  .nw .nw-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .nw .nw-legend-item { white-space: nowrap; word-break: keep-all; }
-  .nw .nw-focus-long { display: none; }
-  .nw .nw-focus-short { display: inline; }
-}
-@container (max-width: 419.98px) {
-  .nw .nw-actions { margin-left: 0; }
-  .nw .nw-history-long { display: none; }
-  .nw .nw-history-short { display: inline; }
-  .nw .nw-history-row { grid-template-columns: 7.5ch minmax(0, 1fr) 6em; }
-  .nw .nw-shortcut-name { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
-  .nw .nw-shortcut-icon { display: inline; }
-  .nw .nw-shortcut-toggle { border-radius: 50%; width: 30px; height: 30px; padding: 0; }
-  .nw .nw-focus-long { display: none; }
-  .nw .nw-focus-short { display: inline; }
-  .nw .nw-status-group { flex-basis: 100%; margin-left: 0; }
-  .nw .nw-theme { grid-template-columns: minmax(0, 1fr) 3ch; }
-  .nw .nw-theme-track { display: none; }
-}
+.nw.nw-wide-ranking .nw-ranking { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.nw.nw-narrow .nw-toolbar > select { flex: 1 1 calc(50% - 4px); width: calc(50% - 4px); min-width: 0; }
+.nw.nw-narrow .nw-toolbar-actions { display: flex; flex-wrap: nowrap; gap: 6px; width: 100%; overflow-x: auto; padding-block: 3px; }
+.nw.nw-narrow .nw-toolbar-actions > button { flex: none; white-space: nowrap; font-size: 12px; padding-inline: 7px; }
+.nw.nw-narrow .nw-legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.nw.nw-narrow .nw-legend-item { white-space: nowrap; word-break: keep-all; }
+.nw.nw-narrow .nw-focus-long { display: none; }
+.nw.nw-narrow .nw-focus-short { display: inline; }
+.nw.nw-narrow .nw-actions { margin-left: 0; }
+.nw.nw-narrow .nw-history-long { display: none; }
+.nw.nw-narrow .nw-history-short { display: inline; }
+.nw.nw-narrow .nw-history-row { grid-template-columns: 7.5ch minmax(0, 1fr) 6em; }
+.nw.nw-narrow .nw-shortcut-name { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); clip-path: inset(50%); white-space: nowrap; }
+.nw.nw-narrow .nw-shortcut-icon { display: inline; }
+.nw.nw-narrow .nw-shortcut-toggle { border-radius: 50%; width: 30px; height: 30px; padding: 0; }
+.nw.nw-narrow .nw-focus-long { display: none; }
+.nw.nw-narrow .nw-focus-short { display: inline; }
+.nw.nw-narrow .nw-status-group { flex-basis: 100%; margin-left: 0; }
+.nw.nw-narrow .nw-theme { grid-template-columns: minmax(0, 1fr) 3ch; }
+.nw.nw-narrow .nw-theme-track { display: none; }
 @media (prefers-reduced-motion: reduce) {
   .nw .nw-segment, .nw .nw-theme-bar { transition: none; }
 }
