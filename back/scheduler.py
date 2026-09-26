@@ -16,13 +16,13 @@ import threading
 import time
 
 if __package__:
-    from .feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
+    from .feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round, _retryable_failure
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from .events import candidate_pairs, group_events, _fits as pairs_fit
     from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
-    from feedparse import parse_feed, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
+    from feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round, _retryable_failure
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from events import candidate_pairs, group_events, _fits as pairs_fit
@@ -40,6 +40,7 @@ class Cache:
     validators: dict = field(default_factory=dict)
     first_seen: OrderedDict = field(default_factory=OrderedDict)
     available: bool = False
+    current_keys: frozenset = field(default_factory=frozenset)
 
 
 @dataclass
@@ -163,6 +164,10 @@ class Scheduler:
         self.event_in_flight = set()
         self._event_candidates_list = None
         self._event_candidate_keys = ()
+        self._event_candidate_pairs = ()
+        self._event_candidate_keys_ready = False
+        self._event_pairs_list = None  # One in-progress list, separate from last_list.
+        self._event_pairs = ()
         self.model_clock = getattr(classifier, "clock", clock)
         self.model_budget = getattr(classifier, "budget", 60)
         self.analysis_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
@@ -268,7 +273,11 @@ class Scheduler:
                 if result.status == "ok":
                     candidate.outcome = "parse"
                     items, seen = parse_feed(result.data_bytes, result.final_url, feed["name"], cache.first_seen, self.now())
-                    candidate.cache = Cache(items, deepcopy(result.validators), seen, True)
+                    current_keys = {dedup_key(item["link"]) for item in items} if "retain_hours" in feed else set()
+                    items = retain_items(items, cache.items, feed, self.now())
+                    if current_keys:
+                        current_keys.intersection_update(dedup_key(item["link"]) for item in items)
+                    candidate.cache = Cache(items, deepcopy(result.validators), seen, True, frozenset(current_keys))
                     candidate.outcome = "ok"
                 elif result.status == "not_modified":
                     if cache.available:
@@ -321,7 +330,7 @@ class Scheduler:
                     continue
                 self.in_flight.add(key)
             if self.matcher is not None:
-                for pair in candidate_pairs(packet["body"]["items"]):
+                for pair in self._pairs_for(packet):
                     if pair.automatic or pair.key in self.event_cache or pair.key in self.event_in_flight:
                         continue
                     try:
@@ -430,10 +439,10 @@ class Scheduler:
         # resend outside cv. Check current cache, not that stale pending count.
         if self.last_list is None or self.matcher is None or not self._classify_enabled():
             return False
-        if self._event_candidates_list is not self.last_list:
-            self._event_candidate_keys = tuple(pair.key for pair in
-                candidate_pairs(self.last_list['body']['items']) if not pair.automatic)
-            self._event_candidates_list = self.last_list
+        pairs = self._pairs_for(self.last_list)
+        if not self._event_candidate_keys_ready:
+            self._event_candidate_keys = tuple(pair.key for pair in pairs if not pair.automatic)
+            self._event_candidate_keys_ready = True
         # Cache only immutable candidate keys, never the resolved boolean: cache
         # acceptance/eviction can change the answer without replacing last_list.
         return any(key not in self.event_cache for key in self._event_candidate_keys)
@@ -584,6 +593,7 @@ class Scheduler:
 
     def _decorate(self, packet):
         # Coordinator only, under cv. Never mutate parser/source caches.
+        pairs = self._pairs_for(packet)
         packet = deepcopy(packet)
         body = packet["body"]
         for item in body["items"]:
@@ -596,7 +606,7 @@ class Scheduler:
                             "pending": sum(not i["category"] for i in body["items"]) if enabled else 0}
         body["analysis"] = {"pending": sum(i["category"] in ANALYSIS_CATEGORIES
                               and i["analysis"] is None for i in body["items"]) if enabled else 0}
-        return self._decorate_events(packet)
+        return self._decorate_events(packet, pairs)
 
     def _cache_events(self, matches):
         # Coordinator only, under cv. False is a successful answer too.
@@ -606,9 +616,57 @@ class Scheduler:
                 if len(self.event_cache) > 20000:
                     self.event_cache.popitem(last=False)
 
-    def _decorate_events(self, packet):
+    def _remember_pairs(self, packet, pairs):
+        # cv held. Keep at most the published list and one in-progress copy.
+        # Known copies share immutable Pair records, not resolved answers.
+        if packet is self.last_list:
+            if pairs is not self._event_candidate_pairs:
+                self._event_candidate_keys = ()
+                self._event_candidate_keys_ready = False
+            self._event_candidates_list = packet
+            self._event_candidate_pairs = pairs
+        else:
+            self._event_pairs_list = packet
+            self._event_pairs = pairs
+        return pairs
+
+    def _pairs_for(self, packet, fresh=False):
+        if fresh:
+            return self._remember_pairs(packet, tuple(candidate_pairs(packet["body"]["items"])))
+        if packet is self._event_candidates_list:
+            return self._event_candidate_pairs
+        if packet is self._event_pairs_list:
+            return self._remember_pairs(packet, self._event_pairs)
+        # More than one resend copy can be produced before the coordinator
+        # sends the last changed packet. Do not retain an unbounded identity
+        # map: validate an older copy against the still-published input instead.
+        if (packet is not self.last_list and self.last_list is not None
+                and self._event_candidates_list is self.last_list
+                and self._pair_inputs(packet) == self._pair_inputs(self.last_list)):
+            return self._remember_pairs(packet, self._event_candidate_pairs)
+        return self._remember_pairs(packet, tuple(candidate_pairs(packet['body']['items'])))
+
+    @staticmethod
+    def _pair_inputs(packet):
+        # Candidate generation reads these fields only. Fit may return a copy,
+        # trim it, or (in an injected implementation) change a request payload.
+        return tuple((i['link'], i['title'], i['summary'], i['published'])
+                     for i in packet['body']['items'])
+
+    def _fit_list(self, packet):
+        with self.cv:
+            pairs = self._pairs_for(packet)
+            inputs = self._pair_inputs(packet)
+        fitted = self.fit(packet)  # Expensive serialization stays outside cv.
+        with self.cv:
+            if self._pair_inputs(fitted) != inputs:
+                pairs = tuple(candidate_pairs(fitted['body']['items']))
+            self._remember_pairs(fitted, pairs)
+        return fitted
+
+    def _decorate_events(self, packet, pairs=None):
         body = packet["body"]
-        pairs = candidate_pairs(body["items"])
+        pairs = self._pairs_for(packet) if pairs is None else self._remember_pairs(packet, pairs)
         # Automatic edges may outnumber the FIFO capacity; derive evicted ones
         # locally as well so they never become pending work or lose grouping.
         matches = {pair.key: True for pair in pairs if pair.automatic}
@@ -852,9 +910,9 @@ class Scheduler:
             self.dropped_results += 1
             return
         if candidate.cache is not None:
-            self.caches[i] = candidate.cache  # All three cache components together.
+            self.caches[i] = candidate.cache  # Commit the full source snapshot together.
         elif candidate.clear_validators:
-            self.caches[i] = Cache(self.caches[i].items, {}, self.caches[i].first_seen, self.caches[i].available)
+            self.caches[i] = Cache(self.caches[i].items, {}, self.caches[i].first_seen, self.caches[i].available, self.caches[i].current_keys)
         if candidate.cache is not None and candidate.error is None:
             self.last_success[i] = self.now().isoformat()
         self.status[i].update(ok=candidate.error is None, error=candidate.error,
@@ -889,17 +947,19 @@ class Scheduler:
         try:
             item_count = len(packet["body"]["items"])
             if not fitted:
-                packet = self.fit(packet)
+                packet = self._fit_list(packet)
             with self.cv:
                 # Fit can remove a representative or whole pair; recount only
                 # the actually emitted items. IDs have fixed length and sizes
                 # were reserved to three digits during fitting.
                 packet = self._decorate_events(packet)
+                pairs = self._pairs_for(packet)
             if not publish and len(packet["body"]["items"]) < item_count:
                 self.log("classify: resend unexpectedly trimmed items")
             if self.outbox.put(packet):
                 with self.cv:
                     self.last_list = deepcopy(packet)
+                    self._remember_pairs(self.last_list, pairs)
                     keys = [dedup_key(item['link']) for item in packet['body']['items']]
                     seeds = {sha1(key.encode('utf-8')).hexdigest()[:12]: key for key in keys}
                     # A seed trimmed by fit simply stops being sticky.
@@ -920,12 +980,12 @@ class Scheduler:
             "sources": statuses, "at": self.now().isoformat()}}
         with self.cv:
             self.model_work = ModelRound(self.round_id)
-            self._cache_events({pair.key: True for pair in candidate_pairs(packet["body"]["items"])
+            self._cache_events({pair.key: True for pair in self._pairs_for(packet, fresh=True)
                                 if pair.automatic and pair.key not in self.event_cache})
             packet = self._decorate(packet)
         # Fit/output remain outside cv so bye can interrupt slow serialization.
         try:
-            packet = self.fit(packet)
+            packet = self._fit_list(packet)
         except ValueError as exc:
             self.log("list packet rejected: " + str(exc)[:200])
             return None
@@ -985,6 +1045,10 @@ class Scheduler:
                             self.source_elapsed[i] = max(0, now - (self.deadlines[i] - self.source_timeout)) if i in self.deadlines else 0
                             self.pending.remove(i)
                     if not self.pending:
+                        # Expire retained items even on 304, failure or deadline.
+                        for feed, cache in zip(self.feeds, self.caches):
+                            if "retain_hours" in feed:
+                                cache.items = retain_items([], cache.items, feed, self.now(), cache.current_keys)
                         completed = deepcopy(self.caches), deepcopy(self.status)
                         source_summary = self._source_summary()
                     else:

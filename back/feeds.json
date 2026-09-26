@@ -1,7 +1,7 @@
 [
   {"name": "公視新聞網", "url": "https://news.pts.org.tw/xml/newsfeed.xml"},
   {"name": "報導者", "url": "https://www.twreporter.org/a/rss2.xml"},
-  {"name": "自由時報即時", "url": "https://news.ltn.com.tw/rss/all.xml"},
+  {"name": "自由時報即時", "url": "https://news.ltn.com.tw/rss/all.xml", "retain_hours": 3, "max_items": 120},
   {"name": "中央社 政治", "outlet": "中央社", "url": "https://feeds.feedburner.com/rsscna/politics", "link_domains": ["cna.com.tw"]},
   {"name": "中央社 財經", "outlet": "中央社", "url": "https://feeds.feedburner.com/rsscna/finance", "link_domains": ["cna.com.tw"]},
   {"name": "中央社 國際", "outlet": "中央社", "url": "https://feeds.feedburner.com/rsscna/intworld", "link_domains": ["cna.com.tw"]},
@@ -11,5 +11,8 @@
   {"name": "經濟日報 證券", "outlet": "經濟日報", "url": "https://money.udn.com/rssfeed/news/1001/5590?ch=money"},
   {"name": "經濟日報 產業", "outlet": "經濟日報", "url": "https://money.udn.com/rssfeed/news/1001/5591?ch=money"},
   {"name": "MoneyDJ 頭條", "url": "https://www.moneydj.com/KMDJ/RssCenter.aspx?svc=NR&fno=1&arg=MB010000"},
-  {"name": "Yahoo 台股動態", "url": "https://tw.stock.yahoo.com/rss?category=tw-market"}
+  {"name": "Yahoo 台股動態", "url": "https://tw.stock.yahoo.com/rss?category=tw-market"},
+  {"name": "ETtoday 即時", "url": "https://feeds.feedburner.com/ettoday/realtime", "link_domains": ["ettoday.net"]},
+  {"name": "新頭殼", "url": "https://newtalk.tw/rss/all"},
+  {"name": "RFI 中文", "url": "https://www.rfi.fr/tw/rss", "link_domains": ["rfi.fr"]}
 ]

@@ -8,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 from urllib.request import Request
 
-from back.feedparse import plain, merge_items, MAX_ITEMS_SOURCE
+from back.feedparse import plain, merge_items, MAX_ITEMS_SOURCE, MAX_ITEMS_LIST, MIN_ITEMS_SOURCE
 from back.fetch import Fetcher, FetchError, _Redirect
 from tests import test_parse
 
@@ -66,14 +66,14 @@ class SecurityLimitsTests(unittest.TestCase):
 
     def test_source_ceiling_preserves_floor_and_global_cap_without_mutating_inputs(self):
         item = test_parse.MergeAndSizeTests.item
-        sources = [[item(self, str(i), f'https://e/{source}/{i}', f'2026-09-{25 if source < 5 else 1:02d}', str(source))
-                    for i in range(100 if source < 5 else 4)] for source in range(6)]
+        sources = [[item(self, str(i), f'https://e/{source}/{i}', f'2026-09-{25 if source < 10 else 1:02d}', str(source))
+                    for i in range(100 if source < 10 else 4)] for source in range(11)]
         result = merge_items(sources)
         counts = Counter(i['source'] for i in result)
-        self.assertEqual(len(result),300)
+        self.assertEqual(len(result),MAX_ITEMS_LIST)
         self.assertEqual(MAX_ITEMS_SOURCE,60)
-        self.assertTrue(all(3 <= count <= 60 for count in counts.values()),counts)
-        self.assertEqual(counts['5'],3)
+        self.assertTrue(all(min(MIN_ITEMS_SOURCE, len(sources[int(source)])) <= count <= 60 for source, count in counts.items()),counts)
+        self.assertEqual(counts['10'],4)
         self.assertEqual(len(merge_items([sources[0]])),60)
         self.assertEqual(len(sources[0]),100)
         self.assertEqual(result,merge_items([list(reversed(s)) for s in sources]))

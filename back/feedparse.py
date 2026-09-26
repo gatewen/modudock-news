@@ -33,8 +33,9 @@ MAX_POLITICS_ANALYSIS = {name: max(criteria, key=len) for name, (_, criteria, _)
 MAX_POLITICS_ANALYSIS["kind"] = "politics"
 MAX_ANALYSIS = max((MAX_ANALYSIS, MAX_WORLD_ANALYSIS, MAX_POLITICS_ANALYSIS), key=lambda value: len(json.dumps(value)))
 ANALYSIS_RESERVE = len(json.dumps(MAX_ANALYSIS)) - len(json.dumps(None))
-MAX_ITEMS_LIST = 300
+MAX_ITEMS_LIST = 550
 MAX_ITEMS_SOURCE = 60
+MIN_ITEMS_SOURCE = 20
 MAX_PACKET = 900 * 1024
 # Titles can contain 300 non-BMP code points (12 ASCII bytes each on wire).
 TOPICS_RESERVE = len(json.dumps({'pending': MAX_ITEMS_LIST, 'tone_pending': MAX_ITEMS_LIST, 'list': [
@@ -322,6 +323,32 @@ def parse_feed(data, final_url, source, first_seen, now):
     return items, seen
 
 
+def retain_items(items, previous, feed, now, current_keys=None):
+    """Opt-in rolling source cache; neither 304 nor failure renews item dates.
+
+    Fresh versions replace previous versions of the same link. This state is
+    separate from first_seen: inferred dates remain the original observation.
+    Current RSS members do not expire; only omitted history uses the window.
+    """
+    if "retain_hours" not in feed:
+        return items
+    cutoff = datetime.fromisoformat(_iso(now)) - timedelta(hours=feed["retain_hours"])
+    if current_keys is None:
+        current_keys = {dedup_key(item["link"]) for item in items}
+    winners = {dedup_key(item["link"]): item for item in previous}
+    fresh = {}
+    for item in items:
+        key = dedup_key(item["link"])
+        if key not in fresh or item["published"] > fresh[key]["published"]:
+            fresh[key] = item
+    winners.update(fresh)
+    kept = [item for item in winners.values()
+            if dedup_key(item["link"]) in current_keys
+            or datetime.fromisoformat(item["published"]) >= cutoff]
+    kept.sort(key=lambda item: (item["published"], dedup_key(item["link"])), reverse=True)
+    return deepcopy(kept[:feed.get("max_items", MAX_ITEMS_SOURCE)])
+
+
 def merge_items(source_items, feeds=()):
     """Trusted publisher domain, then configured order, owns cross-source keys.
 
@@ -331,6 +358,7 @@ def merge_items(source_items, feeds=()):
     winners = {}
     source_order = {feed["name"]: i for i, feed in enumerate(feeds)}
     domains = {}
+    limits = {feed["name"]: feed.get("max_items", MAX_ITEMS_SOURCE) for feed in feeds}
     for feed in feeds:
         host = urlsplit(feed["url"]).hostname or ""
         domains[feed["name"]] = feed.get("link_domains", [host.removeprefix("www.")])
@@ -355,7 +383,7 @@ def merge_items(source_items, feeds=()):
     by_source = {source: [] for source in source_order}
     for item in result:
         reserved = by_source[item["source"]]
-        if len(reserved) < 3:
+        if len(reserved) < min(MIN_ITEMS_SOURCE, limits.get(item["source"], MAX_ITEMS_SOURCE)):
             reserved.append(dedup_key(item["link"]))
     selected = set()
     counts = Counter()
@@ -368,7 +396,7 @@ def merge_items(source_items, feeds=()):
         if len(selected) >= MAX_ITEMS_LIST:
             break
         key = dedup_key(item["link"])
-        if key not in selected and counts[item["source"]] < MAX_ITEMS_SOURCE:
+        if key not in selected and counts[item["source"]] < limits.get(item["source"], MAX_ITEMS_SOURCE):
             selected.add(key)
             counts[item["source"]] += 1
     return deepcopy([item for item in result if dedup_key(item["link"]) in selected])
@@ -410,7 +438,7 @@ def fit_packet(packet):
         reserved += sum(ANALYSIS_RESERVE for item in items
                         if "analysis" in item and item["analysis"] is None
                         and item.get("category") in ANALYSIS_CATEGORIES | {""})
-        reserved += sum(3 - len(str(item["event_size"])) for item in items if "event_size" in item)
+        reserved += sum(len(str(MAX_ITEMS_LIST)) - len(str(item["event_size"])) for item in items if "event_size" in item)
         if 'topics' in body:
             reserved += max(0, TOPICS_RESERVE - len(json.dumps(body['topics'], ensure_ascii=True)))
             reserved += sum(TOPIC_FIELD_RESERVE for item in items if 'topic' not in item)

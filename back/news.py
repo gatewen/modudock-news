@@ -16,6 +16,7 @@ if __package__:
     from .topics import TopicMatcher, ToneClient
     from .analyze import Analyzer
     from .classify import Classifier
+    from .feedparse import MAX_PACKET, MAX_ITEMS_SOURCE
     from .fetch import Fetcher
     from .scheduler import Scheduler
 else:
@@ -23,11 +24,11 @@ else:
     from topics import TopicMatcher, ToneClient
     from analyze import Analyzer
     from classify import Classifier
+    from feedparse import MAX_PACKET, MAX_ITEMS_SOURCE
     from fetch import Fetcher
     from scheduler import Scheduler
 
 
-MAX_PACKET = 900 * 1024
 BUSINESS = {"msg", "publish"}
 _STOP = object()
 
@@ -61,6 +62,12 @@ def preflight(feeds_path, python_version=None, expat_version=None):
             if parsed.username is not None or parsed.password is not None:
                 raise ValueError("source URL must not contain credentials")
             _ = parsed.port  # Reject malformed ports before ready.
+            hours = feed.get("retain_hours")
+            if "retain_hours" in feed and (type(hours) not in (int, float) or not 0 < hours <= 24):
+                raise ValueError("retain_hours must be a number in (0, 24]")
+            limit = feed.get("max_items", MAX_ITEMS_SOURCE)
+            if "max_items" in feed and ("retain_hours" not in feed or type(limit) is not int or not 1 <= limit <= 120):
+                raise ValueError("max_items requires retain_hours and an integer in 1..120")
             domains = feed.get("link_domains", [])
             if (not isinstance(domains, list) or len(domains) > 16
                     or any(not isinstance(domain, str) or not domain

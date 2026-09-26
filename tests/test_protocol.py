@@ -371,10 +371,10 @@ class ProtocolTests(unittest.TestCase):
 
 
 class PreflightTests(unittest.TestCase):
-    def test_shipped_thirteen_sources(self):
+    def test_shipped_sixteen_sources(self):
         feeds, error = preflight(ROOT / "back/feeds.json")
         self.assertIsNone(error)
-        self.assertEqual(len(feeds), 13)
+        self.assertEqual(len(feeds), 16)
 
     def test_invalid_shapes(self):
         with tempfile.TemporaryDirectory() as directory:

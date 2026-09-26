@@ -2,7 +2,7 @@
   "protocol": 1,
   "id": "news",
   "name": "新聞",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "frontend": { "entry": "front/front.js", "public": "front" },
   "backend": { "command": ["python3", "back/news.py"] },
   "placements": [{ "slot": "main", "title": "新聞" }],

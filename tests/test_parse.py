@@ -214,18 +214,19 @@ class MergeAndSizeTests(unittest.TestCase):
         self.assertEqual(fp.merge_items([[old], [newer], [tied]]), [tied])  # A owns the key; its newest wins.
         self.assertEqual(fp.dedup_key(old["link"]), "https://example.com/x?a=1")
 
-    def test_sort_ties_stable_and_300_cap(self):
-        items = [self.item(f"{i:03d}", f"https://example.com/{i}", source=chr(65 + i % 5)) for i in range(305)]
+    def test_sort_ties_stable_and_list_cap(self):
+        items = [self.item(f"{i:03d}", f"https://example.com/{i}", source=chr(65 + i % 10)) for i in range(fp.MAX_ITEMS_LIST + 10)]
         first = fp.merge_items([list(reversed(items))])
         self.assertEqual(first, fp.merge_items([items]))
-        self.assertEqual(len(first), 300)
-        self.assertEqual([(x["source"], x["title"]) for x in first], sorted((x["source"], x["title"]) for x in items if int(x["title"]) < 300))
+        self.assertEqual(len(first), fp.MAX_ITEMS_LIST)
+        ordered = sorted(items, key=lambda x: (x['source'], x['title']))
+        self.assertEqual(first, ordered[:fp.MAX_ITEMS_LIST])
 
     def test_size_guard_reachable_and_matches_outbox(self):
-        items = [dict(self.item("中" * 300, "https://example.com/" + "x" * 2028, source="源" * 64), summary="文" * 200, category="entertainment") for _ in range(300)]
+        items = [dict(self.item("中" * 300, "https://example.com/" + "x" * 2028, source="源" * 64), summary="文" * 200, category="entertainment") for _ in range(fp.MAX_ITEMS_LIST)]
         self.assertEqual(len(items[0]["link"]), 2048)
         sources = [dict(name="源" * 64 if i == 0 else str(i), ok=False, error="錯" * 200, count=0) for i in range(32)]
-        packet = dict(t="msg", seq=2**53 - 1, body=dict(op="list", items=items, sources=sources, count=300))
+        packet = dict(t="msg", seq=2**53 - 1, body=dict(op="list", items=items, sources=sources, count=fp.MAX_ITEMS_LIST))
         original = deepcopy(packet)
         self.assertGreater(len(fp.packet_bytes(packet)), 900 * 1024)
         fitted = fp.fit_packet(packet)
@@ -233,7 +234,7 @@ class MergeAndSizeTests(unittest.TestCase):
         self.assertEqual(fp.packet_bytes(fitted), Outbox.encode(fitted))
         remaining = len(fitted["body"]["items"])
         self.assertGreater(remaining, 0)
-        self.assertLess(remaining, 300)
+        self.assertLess(remaining, fp.MAX_ITEMS_LIST)
         self.assertEqual(fitted["body"]["items"], items[:remaining])
         self.assertEqual(fitted["body"]["count"], remaining)
         self.assertEqual(fitted["body"]["sources"][0]["count"], remaining)
@@ -264,12 +265,12 @@ class ClassifySizeTests(unittest.TestCase):
 
 class SourceFloorTests(unittest.TestCase):
     item = MergeAndSizeTests.item
-    def test_old_source_keeps_latest_three_with_300_total(self):
-        recent = [self.item(str(i), f'https://example.com/new/{i}', '2026-09-25', f'A{i % 5}') for i in range(300)]
-        old = [self.item(str(i), f'https://example.com/old/{i}', f'2026-09-{i + 1:02d}', 'B') for i in range(10)]
+    def test_old_source_keeps_latest_twenty_at_list_cap(self):
+        recent = [self.item(str(i), f'https://example.com/new/{i}', '2026-09-25', f'A{i % 10}') for i in range(600)]
+        old = [self.item(str(i), f'https://example.com/old/{i}', f'2026-09-{i + 1:02d}', 'B') for i in range(25)]
         result = fp.merge_items([recent, old])
         self.assertEqual(len(result), fp.MAX_ITEMS_LIST)
-        self.assertEqual([i['title'] for i in result if i['source'] == 'B'], ['9', '8', '7'])
+        self.assertEqual([i['title'] for i in result if i['source'] == 'B'], [str(i) for i in range(24, 4, -1)])
         self.assertEqual([i['published'] for i in result], sorted((i['published'] for i in result), reverse=True))
         self.assertEqual(result, fp.merge_items([recent[::-1], old[::-1]]))
 
@@ -290,6 +291,6 @@ class SourceFloorTests(unittest.TestCase):
         with patch.object(fp, 'MAX_ITEMS_LIST', 5):
             result = fp.merge_items(sources)
         self.assertEqual(len(result), 5)
-        self.assertEqual({i['link'] for i in result}, {sources[0][i]['link'] for i in [1, 2, 3]}
-                         | {sources[1][i]['link'] for i in [2, 3]})
+        self.assertEqual({i['link'] for i in result}, {sources[0][i]['link'] for i in range(4)}
+                         | {sources[1][3]['link']})
         self.assertEqual([i['published'] for i in result], sorted((i['published'] for i in result), reverse=True))

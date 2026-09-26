@@ -59,6 +59,10 @@ class EventSchedulerTests(unittest.TestCase):
         scheduler, sink, logs = self.create(lambda *_: Result('not_modified'), **(clients or {}), **options)
         if len({item['source'] for item in items}) > 1:
             scheduler.feeds = json.loads((Path(__file__).parents[1] / 'back/feeds.json').read_text())
+            # Historical snapshots exercise events, not today's opt-in expiry.
+            for feed in scheduler.feeds:
+                feed.pop('retain_hours', None)
+                feed.pop('max_items', None)
             scheduler.last_success = [None for _ in scheduler.feeds]
             scheduler.caches = [Cache([deepcopy(item) for item in items if item['source'] == feed['name']],
                                       available=True) for feed in scheduler.feeds]
@@ -76,6 +80,92 @@ class EventSchedulerTests(unittest.TestCase):
     def idle(self, scheduler):
         with scheduler.cv:
             return not (scheduler.in_flight or scheduler.analysis_in_flight or scheduler.event_in_flight)
+
+    def test_candidate_pairs_once_per_list_answers_and_eviction_stay_live(self):
+        items = self.pair_items()
+        scheduler, _, _ = self.make(items, self.clients('http://127.0.0.1:9'))
+        packet = {'body': {'items': deepcopy(items)}}
+        scheduler.last_list = packet
+        key = edge(*items)
+        with patch('back.scheduler.candidate_pairs', wraps=candidate_pairs) as generate:
+            with scheduler.cv:
+                for _ in range(3):
+                    self.assertEqual(scheduler._decorate_events(packet)['body']['events']['pending'], 1)
+                    self.assertTrue(scheduler._unresolved_events())
+                scheduler.event_cache[key] = False
+                self.assertEqual(scheduler._decorate_events(packet)['body']['events']['pending'], 0)
+                self.assertEqual([i['event_size'] for i in packet['body']['items']], [1, 1])
+                self.assertFalse(scheduler._unresolved_events())
+                scheduler.event_cache[key] = True
+                scheduler._decorate_events(packet)
+                self.assertEqual([i['event_size'] for i in packet['body']['items']], [2, 2])
+                scheduler.event_cache.clear()
+                self.assertEqual(scheduler._decorate_events(packet)['body']['events']['pending'], 1)
+                self.assertTrue(scheduler._unresolved_events())
+                self.assertEqual(generate.call_count, 1)
+                scheduler.last_list = deepcopy(packet)
+                scheduler.last_list['body']['items'][1]['title'] = 'unrelated'
+                self.assertEqual(scheduler._decorate_events(scheduler.last_list)['body']['events']['pending'], 0)
+                self.assertFalse(scheduler._unresolved_events())
+                self.assertEqual(generate.call_count, 2)
+
+    def test_candidate_pairs_survive_decorate_fit_send_copies_and_enqueue(self):
+        scheduler, sink, _ = self.make(self.pair_items(), self.clients('http://127.0.0.1:9'))
+        with patch('back.scheduler.candidate_pairs', wraps=candidate_pairs) as generate:
+            scheduler._emit(scheduler.caches, [])
+            self.round(sink)
+            for _ in range(4):
+                with scheduler.cv:
+                    packet = scheduler._decorate(scheduler.last_list)
+                    scheduler._enqueue_classification(packet)
+                    # A later acknowledgement can create a discarded copy
+                    # while this earlier resend is still the one to send.
+                    scheduler._decorate(scheduler.last_list)
+                    self.assertTrue(scheduler._unresolved_events())
+                scheduler._send_list(packet)
+                sink.packets.get_nowait()
+            self.assertEqual(generate.call_count, 1)
+            with scheduler.cv:
+                scheduler._cache_events({edge(*self.pair_items()): True})
+                packet = scheduler._decorate(scheduler.last_list)
+            scheduler._send_list(packet)
+            self.assertTrue(all(i['event_size'] == 2 for i in scheduler.last_list['body']['items']))
+            self.assertEqual(generate.call_count, 1)
+            # A new source round has its own identity even with identical news.
+            scheduler._emit(scheduler.caches, [])
+            self.assertEqual(generate.call_count, 2)
+
+    def test_candidate_pairs_invalidate_after_fit_trims_or_changes_payload(self):
+        for change in ('trim', 'summary', 'date', 'title', 'link', 'order'):
+            with self.subTest(change=change):
+                def altered_fit(packet):
+                    packet = deepcopy(packet)
+                    items = packet['body']['items']
+                    if change == 'trim':
+                        items.pop()
+                    elif change == 'order':
+                        items.reverse()
+                    elif change == 'summary':
+                        items[0]['summary'] = 'updated summary'
+                    elif change == 'date':
+                        items[0]['published'] = '2026-01-01T00:00:00Z'
+                    elif change == 'title':
+                        items[0]['title'] = 'unrelated'
+                    else:
+                        items[0]['link'] += '/updated'
+                    return packet
+                scheduler, _, _ = self.make(self.pair_items(), self.clients('http://127.0.0.1:9'), fit=altered_fit)
+                with patch('back.scheduler.candidate_pairs', wraps=candidate_pairs) as generate:
+                    scheduler._emit(scheduler.caches, [])
+                    self.assertEqual(generate.call_count, 2)
+                    expected = candidate_pairs(scheduler.last_list['body']['items'])
+                    self.assertEqual(scheduler.last_list['body']['events']['pending'], len(expected))
+                    with scheduler.cv:
+                        self.assertEqual(scheduler._pairs_for(scheduler.last_list), tuple(expected))
+                    self.assertEqual(generate.call_count, 2)
+                    if change == 'summary':
+                        queued = list(scheduler.event_jobs.queue)
+                        self.assertTrue(any('updated summary' in (p.left[2], p.right[2]) for _, p in queued))
 
     def test_auto_merge_without_key_or_model_thread(self):
         items = [article(0), article(1), article(2, title='unrelated')]
@@ -293,7 +383,7 @@ class EventSchedulerTests(unittest.TestCase):
 
     def test_real_300_snapshot_first_round_finishes_and_priority_holds(self):
         items = json.loads((Path(__file__).parent / 'fixtures/events-300-2026-09-24.json').read_text())
-        self.assertEqual(len(items), MAX_ITEMS_LIST)
+        self.assertEqual(len(items), 300)
         with server(response) as (url, received):
             scheduler, sink, _ = self.make(items, self.clients(url), cached=False)
             admissions = []
@@ -304,7 +394,7 @@ class EventSchedulerTests(unittest.TestCase):
             scheduler._take_batch = record_admission
             scheduler.start()
             first = self.round(sink)
-            self.assertEqual(len(first['items']), MAX_ITEMS_LIST)
+            self.assertEqual(len(first['items']), 300)
             self.assertGreater(first['events']['pending'], 0)
             eventually(lambda: scheduler.completed == 1 and self.idle(scheduler), timeout=10)
             eventually(lambda: scheduler.last_list['body']['events']['pending'] == 0
@@ -315,7 +405,7 @@ class EventSchedulerTests(unittest.TestCase):
             self.assertEqual(final['events']['pending'], 0)
             self.assertEqual(final['classify']['pending'], 0)
             self.assertEqual(final['analysis']['pending'], 0)
-            self.assertEqual(len(final['items']), MAX_ITEMS_LIST)
+            self.assertEqual(len(final['items']), 300)
             stages = [kind(p) for _, _, p in received]
             self.assertEqual(admissions, sorted(admissions, key=['classify', 'events', 'analysis'].index))
             self.assertCountEqual(stages, admissions)  # HTTP arrival order can differ from admission order.
@@ -326,7 +416,7 @@ class EventSchedulerTests(unittest.TestCase):
 
     def test_all_automatic_edges_exceeding_cache_capacity_still_merge_without_pending(self):
         feeds = json.loads((Path(__file__).parents[1] / 'back/feeds.json').read_text())
-        items = [article(i, source=feeds[i % 5]['name']) for i in range(MAX_ITEMS_LIST)]
+        items = [article(i, source=feeds[i % 10]['name']) for i in range(MAX_ITEMS_LIST)]
         scheduler, sink, _ = self.make(items, self.clients('http://127.0.0.1:9'))
         packet = scheduler._emit(scheduler.caches, [])
         body = self.round(sink)

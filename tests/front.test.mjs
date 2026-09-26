@@ -3643,11 +3643,11 @@ test('search keyboard is scoped, Esc clears, typing does not browse, listeners r
   assert.equal(input.value,'retained'); assert.equal(h.container.children.length,0);
 });
 
-test('300 reports search input including render has per-query median below 50ms', t => {
-  const h=setup(t), items=Array.from({length:300},(_,i)=>eventStory(i.toString(16).padStart(12,'0'),`Search ${i}`,8,
+for (const size of [300, 550]) test(`${size} reports search input including render has per-query median below 50ms`, t => {
+  const h=setup(t), items=Array.from({length:size},(_,i)=>eventStory(i.toString(16).padStart(12,'0'),`Search ${i}`,8,
     {link:`https://e.test/${i}`, summary:`${'摘要'.repeat(100)} ${i%2?'odd':'even'}`,event_size:1}));
   h.message(listing(items));
-  const queries=['search','odd','even','missing','search 1',''], counts=[300,150,150,0,111,300];
+  const queries=['search','odd','even','missing','search 1',''], counts=[size,size/2,size/2,0,111,size];
   const samples=queries.map(()=>[]);
   // Cycle every query each pass, including real input dispatch and synchronous rendering.
   // Per-query medians tolerate a GC/scheduler pause without hiding a consistently slow query.
@@ -3656,7 +3656,7 @@ test('300 reports search input including render has per-query median below 50ms'
     assert.equal(mainRows(h).length,counts[i]);
   }
   const medians=samples.map(values=>[...values].sort((a,b)=>a-b)[3]);
-  t.diagnostic(`300 reports input+render per-query median ms: ${medians.map(n=>n.toFixed(2)).join(', ')}; max sample ${Math.max(...samples.flat()).toFixed(2)}`);
+  t.diagnostic(`${size} reports input+render per-query median ms: ${medians.map(n=>n.toFixed(2)).join(', ')}; max sample ${Math.max(...samples.flat()).toFixed(2)}`);
   assert.ok(medians.every(n=>n<50),JSON.stringify({queries,medians}));
 });
 

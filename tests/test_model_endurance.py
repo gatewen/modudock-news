@@ -12,6 +12,7 @@ from back.analyze import Analyzer
 from back.classify import Classifier
 from back.events import EventMatcher
 from back.fetch import Result
+from back.feedparse import MAX_ITEMS_LIST
 from back.scheduler import Scheduler
 from back.topics import TopicMatcher, ToneClient
 from tests.test_model_chaos import Response
@@ -140,6 +141,9 @@ class Endurance:
                 'model_requeues': len(s.model_requeues), 'results': len(s.results), 'fetch_jobs': s.jobs.qsize(),
                 'last_topic_seeds': len(s.last_topic_seeds),
                 'candidate_keys': len(s._event_candidate_keys),
+                'candidate_pairs': len(s._event_candidate_pairs),
+                'building_pairs': len(s._event_pairs),
+                'building_items': len((s._event_pairs_list or {}).get('body', {}).get('items', [])),
                 'candidate_items': len((s._event_candidates_list or {}).get('body', {}).get('items', [])),
                 'last_items': len((s.last_list or {}).get('body', {}).get('items', [])),
             }
@@ -158,15 +162,17 @@ class Endurance:
         m = self.measure()
         caps = {'caches':3,'source_items':60,'first_seen':1000,'event_cache':20000,
                 'topic_cache':20000,'tone_cache':4000,'classify_cache':4000,
-                'analysis_cache':4000,'last_topic_seeds':5,'candidate_items':300,
-                'candidate_keys':44850,'last_items':300,'results':32,'fetch_jobs':32,
-                'model_requeues':300, 'model_rounds':3, 'classify_in_flight':360, 'analysis_in_flight':360,
-                'tone_in_flight':360, 'events_in_flight':720, 'topics_in_flight':357}
+                'analysis_cache':4000,'last_topic_seeds':5,'candidate_items':MAX_ITEMS_LIST,
+                'candidate_keys':MAX_ITEMS_LIST*(MAX_ITEMS_LIST-1)//2,
+                'candidate_pairs':MAX_ITEMS_LIST*(MAX_ITEMS_LIST-1)//2,
+                'building_pairs':MAX_ITEMS_LIST*(MAX_ITEMS_LIST-1)//2, 'building_items':MAX_ITEMS_LIST,'last_items':MAX_ITEMS_LIST,'results':32,'fetch_jobs':32,
+                'model_requeues':MAX_ITEMS_LIST, 'model_rounds':3, 'classify_in_flight':MAX_ITEMS_LIST+60, 'analysis_in_flight':MAX_ITEMS_LIST+60,
+                'tone_in_flight':MAX_ITEMS_LIST+60, 'events_in_flight':MAX_ITEMS_LIST*2+120, 'topics_in_flight':MAX_ITEMS_LIST+57}
         for name,value in m.items():
             if name in caps:
                 assert value <= caps[name], (name,value,caps[name])
             if name.endswith('_jobs'):
-                assert value <= (600 if name=='events_jobs' else 32 if name=='fetch_jobs' else 300),(name,value)
+                assert value <= (MAX_ITEMS_LIST*2 if name=='events_jobs' else 32 if name=='fetch_jobs' else MAX_ITEMS_LIST),(name,value)
             if idle and (name.endswith('_jobs') or name.endswith('_in_flight') or name in ('results','model_rounds','model_requeues')):
                 assert value == 0,(name,value)
             self.peak[name] = max(self.peak[name],value)

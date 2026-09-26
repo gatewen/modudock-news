@@ -620,14 +620,14 @@ class ClassificationSchedulerTests(unittest.TestCase):
             prefix, count = group[0]
             data = ('<rss><channel>' + ''.join(
                 f'<item><title>{prefix}{i}</title><link>https://example.com/{prefix}{i}</link></item>'
-                for i in range(int(source), count, 5)) + '</channel></rss>').encode()
+                for i in range(int(source), count, 10)) + '</channel></rss>').encode()
             return Result("ok", data, "https://example.com")
         def respond(payload, *_):
             entered.set()
             gate.wait()
             return 200, answers(len(payload["state"])), {}
         with server(respond) as (url, received):
-            scheduler, sink, _ = self.create(fetch, count=5, classifier=self.classifier(url))
+            scheduler, sink, _ = self.create(fetch, count=10, classifier=self.classifier(url))
             before = threading.active_count()
             scheduler.start()
             try:
@@ -1135,7 +1135,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             gate.wait()
             return 200, model_answers(payload), {}
         with server(respond) as (url, received):
-            scheduler, sink, _ = self.create(lambda source, _: analysis_feed(labels[0][int(source)::5]), count=5, **self.clients(url))
+            scheduler, sink, _ = self.create(lambda source, _: analysis_feed(labels[0][int(source)::10]), count=10, **self.clients(url))
             with scheduler.cv:
                 for label in ['finance-a'] + [f'finance-b{i}' for i in range(100)] + [f'finance-c{i}' for i in range(MAX_ITEMS_LIST)]:
                     scheduler.classify_cache['https://example.com/' + label] = 'finance'
@@ -1272,18 +1272,18 @@ class AnalysisSchedulerTests(unittest.TestCase):
                 gate.set()
 
 
-    def test_300_items_classified_and_analyzed_in_first_round(self):
+    def test_full_list_classified_and_analyzed_in_first_round(self):
         self.complete_full_model_round(cached_categories=False)
 
-    def test_300_cached_categories_analyzed_in_first_round(self):
+    def test_full_list_cached_categories_analyzed_in_first_round(self):
         self.complete_full_model_round(cached_categories=True)
 
     def complete_full_model_round(self, cached_categories):
         from tests.test_classify import server
-        self.assertEqual(MAX_ITEMS_LIST, 300)
+        self.assertEqual(MAX_ITEMS_LIST, 550)
         labels = [f'finance-{i:03d}' for i in range(MAX_ITEMS_LIST)]
         with server(lambda p, *_: (200, model_answers(p), {})) as (url, received):
-            scheduler, sink, _ = self.create(lambda source, _: analysis_feed(labels[int(source)*60:(int(source)+1)*60]), count=5, **self.clients(url))
+            scheduler, sink, _ = self.create(lambda source, _: analysis_feed(labels[int(source)*60:(int(source)+1)*60]), count=(MAX_ITEMS_LIST + 59)//60, interval=3600, **self.clients(url))
             if cached_categories:
                 with scheduler.cv:
                     scheduler.classify_cache.update({'https://example.com/' + label: 'finance' for label in labels})
@@ -1296,7 +1296,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
                     return (scheduler.completed == 1 and scheduler.last_list is not None
                             and scheduler.last_list['body']['classify']['pending'] == 0
                             and scheduler.last_list['body']['analysis']['pending'] == 0)
-            eventually(complete, timeout=4)
+            eventually(complete, timeout=20)  # 550 articles/56 batches; keep the next periodic round out of this test.
             with scheduler.cv:
                 final = deepcopy(scheduler.last_list['body'])
                 self.assertEqual(scheduler.round_id, 1)

@@ -123,16 +123,16 @@ class RecoveryTests(unittest.TestCase):
         self.assertEqual(s.model_work.requests['analysis'], 1)
         self.assertEqual(s.last_list['body']['model']['state'], 'done')
 
-    def test_event_queue_refills_all_candidates_beyond_six_hundred(self):
+    def test_event_queue_refills_all_candidates_beyond_capacity(self):
         suffix = '甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉戌亥天地玄黃宇宙洪荒日月盈昃辰宿列張寒來暑往秋收冬藏'
-        items = [article(i, title='美國聯準會宣布升息'+suffix[i]+suffix[(i*7)%len(suffix)]+suffix[(i*13)%len(suffix)]) for i in range(40)]
+        items = [article(i, title='美國聯準會宣布升息'+suffix[i % len(suffix)]+suffix[(i*7)%len(suffix)]+suffix[(i*13)%len(suffix)]) for i in range(52)]
         s, packet, calls, logs, now, gate = self.make(items, 'events')
         s.matcher.match = lambda batch: (calls.append(batch), {p.key:False for p in batch})[1]
         expected = {p.key for p in candidate_pairs(items) if not p.automatic}
-        self.assertGreater(len(expected), 600)
+        self.assertGreater(len(expected), s.event_jobs.maxsize)
         s.last_list = s._decorate(packet)
         s._enqueue_classification(s.last_list)
-        self.assertEqual(s.event_jobs.qsize(), 600)
+        self.assertEqual(s.event_jobs.qsize(), s.event_jobs.maxsize)
         for w in s.classify_workers: w.start()
         eventually(lambda: self.pump(s), timeout=10)
         asked = [p.key for batch in calls for p in batch]
