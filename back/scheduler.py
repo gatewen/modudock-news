@@ -363,10 +363,22 @@ class Scheduler:
 
     def _next_lane(self):
         for lane in self.lanes:
+            # Includes queued and completed-but-unaccepted event work. Lower
+            # lanes may proceed while an event HTTP request is still in flight.
+            if lane.name == 'topics' and self.event_in_flight:
+                continue
             with lane.jobs.mutex:
                 if lane.jobs.queue and lane.jobs.queue[0][0].admitted:
                     return lane
         return None
+
+    def _unresolved_events(self):
+        # last_list can lag cache acceptance while the coordinator sends a
+        # resend outside cv. Check current cache, not that stale pending count.
+        if self.last_list is None or self.matcher is None or not self._classify_enabled():
+            return False
+        return any(not pair.automatic and pair.key not in self.event_cache
+                   for pair in candidate_pairs(self.last_list['body']['items']))
 
     def _take_batch(self, lane, work, first):
         # Called under cv. Capture analysis kind here, before releasing cv for HTTP.
@@ -431,6 +443,12 @@ class Scheduler:
                     work.deadline = self.model_clock() + self.model_budget
                     self.cv.notify_all()  # Coordinator must schedule its deadline wake.
                 allowed = self._classify_enabled() and not work.failed and self.model_clock() < work.deadline
+                deferred = lane.name == 'topics' and self._unresolved_events()
+                if deferred:
+                    # No event jobs remain, but failed/expired/overflowed pairs
+                    # are unresolved. Acknowledge old topics without HTTP so
+                    # in-flight keys are released and the next round can retry.
+                    allowed = False
                 if allowed:
                     if work.started is None:
                         work.started = self.model_clock()
@@ -451,7 +469,7 @@ class Scheduler:
                     work.awaiting += 1
                 if allowed and result is None:
                     work.failures += 1
-                if result is None:
+                if result is None and not deferred:
                     work.failed = True
                 # Publish completion under the same cv acquisition: another
                 # worker must see dependency results before taking new work.

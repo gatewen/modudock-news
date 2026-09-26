@@ -4551,3 +4551,40 @@ test('R17 module root contains visually hidden absolute positioning', t => {
     'white-space': 'nowrap', border: '0px',
   })) assert.equal(sr.getPropertyValue(property), value, property);
 });
+
+for (const mode of ['search', 'theme-new']) test(`R19 watched count equals clicked rows: ${mode}`, t => {
+  const h = setup(t, w => {
+    w.localStorage.setItem('modudock.module.news.watch', JSON.stringify(['AI']));
+    w.localStorage.setItem('modudock.module.news.lastSeen', JSON.stringify('2026-09-21T02:00:00Z'));
+  });
+  const make = (n, event, theme, published, title) => financeArticle({link:`https://e.test/${n}`,
+    event, event_size:2, title, published, analysis:analysis({theme})});
+  h.message(listing(mode === 'search' ? [article({title:'AI needle',link:'https://e.test/1'}),
+    article({title:'AI other',link:'https://e.test/2'})] : [
+    make(1,'000000000001','memory','2026-09-21T01:00:00Z','AI old'),
+    make(2,'000000000001','foundry','2026-09-21T03:00:00Z','AI new'),
+    make(3,'000000000002','memory','2026-09-21T03:00:00Z','AI memory')]));
+  if (mode === 'search') {
+    h.container.querySelector('.nw-search-toggle').click(); search(h,'needle');
+  } else {
+    h.categories.value='finance'; h.categories.dispatchEvent(new h.window.Event('change'));
+    h.container.querySelector('[data-topic="memory"]').click();
+    h.container.querySelector('.nw-new-only').click();
+  }
+  const button=h.container.querySelector('.nw-watch-only');
+  const count=Number(button.textContent.match(/\d+/)[0]);
+  button.click(); assert.equal(mainRows(h).length,1);
+  assert.equal(count,mainRows(h).length);
+  assert.equal(button.textContent,'只看追蹤 1');
+});
+
+for (const category of ['world','politics']) test(`R19 largest other bar scales to maximum: ${category}`, t => {
+  const h=setup(t);
+  h.message(listing(Array.from({length:6},(_,i)=>article({link:`https://e.test/${i}`,category,
+    analysis:category==='world'?{kind:'world',region:i?'other':'us_china',trend:'escalation'}
+      :{kind:'politics',issue:i?'other':'budget'}}))));
+  h.categories.value=category; h.categories.dispatchEvent(new h.window.Event('change'));
+  const buttons=[...h.container.querySelectorAll('button[data-topic]')];
+  assert.equal(buttons.length,2); assert.ok(buttons[1].dataset.topic.endsWith(':other'));
+  assert.deepEqual(buttons.map(b=>b.querySelector('.nw-theme-bar').style.width),['20%','100%']);
+});

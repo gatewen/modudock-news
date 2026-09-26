@@ -912,6 +912,7 @@ export default function mount(ctx) {
     const ranked = [...themes].filter(([id, count]) => id !== "macro" && id !== "other" && count.count)
       // Region/issue "other" stays visible but always ranks last.
       .sort((a, b) => a[0].endsWith(":other") - b[0].endsWith(":other") || b[1].count - a[1].count).slice(0, 10);
+    const largestCount = Math.max(0, ...ranked.map(([, count]) => count.count));
     const existing = new Map([...ranking.querySelectorAll("button")].map(button => [button.dataset.topic, button]));
     const rankedIds = new Set(ranked.map(([id]) => id));
     for (const child of [...ranking.children]) {
@@ -937,7 +938,7 @@ export default function mount(ctx) {
       button.title = `${names.get(id)} ${count.count}${description ? `（${description}）` : ""}`;
       button.querySelector(".nw-theme-count").textContent = String(count.count);
       const bar = button.querySelector(".nw-theme-bar");
-      bar.style.width = `${count.count / ranked[0][1].count * 100}%`;
+      bar.style.width = `${count.count / largestCount * 100}%`;
       (politics ? [count.count] : [count.bull, count.bear, count.count - count.bull - count.bear]).forEach((value, i) => {
         bar.children[i].style.width = `${value / count.count * 100}%`;
       });
@@ -1140,7 +1141,11 @@ export default function mount(ctx) {
     const groupIndices = new Map(allGroups.map((group, index) => [group, index]));
     const matches = new Map(allGroups.map(group => [group, trackedWords.find(word => group.reports.some(item =>
       text(item.title).toLowerCase().includes(word.toLowerCase()) || text(item.summary).toLowerCase().includes(word.toLowerCase())))]));
-    const watchedCount = allGroups.filter(group => matches.get(group)).length;
+    const query = searchText(searchInput.value).trim();
+    const hits = item => !query || (searchIndex.get(item) || []).some(value => value.includes(query));
+    const searchedGroups = allGroups.filter(group => group.reports.some(hits));
+    const watchedCount = searchedGroups.filter(group => matches.get(group)
+      && (!onlyNew || group.reports.some(isNew))).length;
     watchOnly.disabled = trackedWords.length === 0;
     watchOnly.hidden = trackedWords.length === 0;
     watchOnly.setAttribute("aria-pressed", String(onlyWatched));
@@ -1148,9 +1153,7 @@ export default function mount(ctx) {
     watchDescription.textContent = watchOnly.title;
     watchGuide.hidden = trackedWords.length > 0;
     watchOnly.textContent = `只看追蹤 ${watchedCount}`;  // Events, like the list and status.
-    const query = searchText(searchInput.value).trim();
-    const hits = item => !query || (searchIndex.get(item) || []).some(value => value.includes(query));
-    const matchedGroups = allGroups.filter(group => (!onlyWatched || matches.get(group)) && group.reports.some(hits));
+    const matchedGroups = searchedGroups.filter(group => !onlyWatched || matches.get(group));
     const count = matchedGroups.filter(group => group.reports.some(isNew)).length;
     const groups = matchedGroups.filter(group => !onlyNew || group.reports.some(isNew));
     newOnly.hidden = lastSeen === null || count === 0;

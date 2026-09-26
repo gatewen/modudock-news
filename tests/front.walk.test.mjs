@@ -202,6 +202,11 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
     const matching=base.filter(g=>(!s.watch||g.some(i=>words.some(w=>(i.title+i.summary).toLowerCase().includes(w.toLowerCase()))))
       &&(!s.query||g.some(i=>[i.title,i.summary].some(value=>searchText(value).includes(s.query)))));
     const expected=matching.filter(g=>!s.new||isNew(g));
+    const watched=base.filter(g=>g.some(i=>words.some(w=>[i.title,i.summary].some(value=>value.toLowerCase().includes(w.toLowerCase()))))
+      &&(!s.query||g.some(i=>[i.title,i.summary].some(value=>searchText(value).includes(s.query))))
+      &&(!s.new||isNew(g))).length;
+    assert.equal(h.watch.textContent,`只看追蹤 ${watched}`,'watch count includes all intersections');
+    if(s.watch) assert.equal(watched,rows.length,'pressed watch count vs rows');
     assert.equal(rows.length,expected.length,`rows source=${s.source} category=${s.category} theme=${s.theme} topic=${s.topic} count=${s.count}`);
     const newCount=matching.filter(isNew).length;
     assert.equal(h.new.hidden,newCount===0,'new visibility');

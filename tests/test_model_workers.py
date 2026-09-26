@@ -308,3 +308,65 @@ class ModelWorkerTests(unittest.TestCase):
             for worker in self.s.workers+[self.s.coordinator]:
                 worker.join(2)
                 self.assertFalse(worker.is_alive())
+
+    def test_r19_old_topic_waits_for_inflight_events_but_analysis_can_run(self):
+        self.s.active = True  # Test acceptance without constructing a display packet.
+        self.s.model_work = ModelRound(2)
+        self.s.last_list = {'body': {'events': {'pending': 1}, 'items': [
+            {'link':f'https://e.test/{i}', 'title':title, 'summary':'', 'source':'A',
+             'published':'2026-09-21T00:00:00Z'}
+            for i, title in enumerate(('台積電宣布擴大投資計畫', '台積電宣布擴大海外布局'))]}}
+        pair = TopicPair(('a', 'seed', ''), ('b', 'candidate', ''))
+        event_key = frozenset(('https://e.test/0', 'https://e.test/1'))
+        self.s.event_in_flight.add(event_key)
+        self.s.topic_in_flight.add(pair.key)
+        self.queue('topics', [pair])  # Old work=1 survives the new round.
+        self.queue('analysis', [('x', 'analysis', '')])
+        with self.s.cv:
+            self.assertEqual(self.s._next_lane().name, 'analysis')
+        self.start()
+        eventually(lambda: any(lane == 'analysis' for lane, _ in self.calls))
+        with self.s.cv:
+            self.assertFalse(any(lane == 'topics' for lane, _ in self.calls))
+            self.s._accept(EventResult({event_key: False}, (event_key,), 2))
+            # Resend still carries stale pending=1; accepted cache must unblock topics.
+            self.s.cv.notify_all()
+        eventually(self.accept)
+        self.assertEqual([lane for lane, _ in self.calls], ['analysis', 'topics'])
+        self.assertFalse(self.s.topic_in_flight)
+
+    def test_r19_unresolved_events_release_old_topics_on_failure_or_budget(self):
+        for reason in ('failed', 'budget', 'waiting'):
+            with self.subTest(reason=reason):
+                # Fresh independent scheduler: unresolved pending remains after the
+                # current round ends; old healthy work must drain without HTTP.
+                calls = []
+                client = SimpleNamespace(enabled=True, clock=lambda:100, budget=60,
+                                         classify=lambda batch: {}, match=lambda batch:calls.append(batch) or {})
+                s = Scheduler([{'name':'A','url':'unused'}], None, Sink(), 1,
+                              classifier=client, matcher=client, topic_matcher=client, log=lambda _:None)
+                s.active = True
+                s.model_work = ModelRound(2, failed=reason == 'failed', deadline=99 if reason == 'budget' else 160)
+                s.last_list = {'body': {'events': {'pending': 1}, 'items': [
+                    {'link':f'https://e.test/{i}', 'title':title, 'summary':'', 'source':'A',
+                     'published':'2026-09-21T00:00:00Z'}
+                    for i, title in enumerate(('台積電宣布擴大投資計畫', '台積電宣布擴大海外布局'))]}}
+                pair = TopicPair(('a','seed',''), ('b','candidate',''))
+                s.topic_in_flight.add(pair.key)
+                old_work = ModelRound(1)
+                s.topic_jobs.put((old_work, pair))
+                worker = s.classify_workers[0]
+                try:
+                    worker.start()
+                    eventually(lambda:bool(s.results))
+                    with s.cv:
+                        s._accept(s.results.popleft())
+                        s.cv.notify_all()
+                    self.assertEqual(calls, [])
+                    self.assertFalse(old_work.failed)  # Deferral is not an API failure.
+                    self.assertTrue(s.topic_jobs.empty())
+                    self.assertFalse(s.topic_in_flight)
+                    self.assertEqual(s._model_state({'events':{'pending':1}})['state'], 'paused')
+                finally:
+                    s.stop(); worker.join(2)
+                    self.assertFalse(worker.is_alive())
