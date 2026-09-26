@@ -263,7 +263,8 @@ test('analysis panel appears only for finance or tech between toolbar and list',
     assert.equal(panel(h).hidden, !['finance', 'tech'].includes(category));
   }
   assert.equal(panel(h).nextElementSibling.className, 'nw-filter');
-  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling, h.container.querySelector('ul'));
+  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.className, 'nw-hint nw-search-hint');
+  assert.equal(panel(h).nextElementSibling.nextElementSibling.nextElementSibling.nextElementSibling, h.container.querySelector('.nw-list'));
   assert.equal(panel(h).previousElementSibling.className, 'nw-focus-section');
   assert.equal(panel(h).previousElementSibling.previousElementSibling.contains(h.categories), true);
   assert.equal(panel(h).children.length, 6);
@@ -3038,7 +3039,8 @@ test('watch-only hides focus and every analysis panel, restores them and safely 
     assert.equal(h.container.querySelector('.nw-panel').hidden,true); assert.equal(focusArea(h).hidden,true);
     const hint=h.container.querySelector('.nw-watch-hint');
     assert.equal(hint.hidden,false); assert.equal(hint.textContent,'只看追蹤：AI、<img>');
-    assert.equal(hint.nextElementSibling.className,'nw-list');
+    assert.equal(hint.nextElementSibling.className,'nw-hint nw-search-hint');
+    assert.equal(hint.nextElementSibling.nextElementSibling.className,'nw-list');
     assert.equal(hint.querySelector('img'),null);
     assert.equal(mainRows(h).length,1);
     watchControls(h).only.click();
@@ -3539,4 +3541,128 @@ test('topic heading and distribution show outlets while the source selector reta
   h.message({...body,sources:[...sources,...extra],items:[...reports,...extra.map(s=>article({source:s.name,topic:topic.id}))],
     topics:{list:[{...topic,sources:7,count:9}]}});
   assert.match(h.container.querySelector('.nw-topic-sources').textContent,/等 2 家$/);
+});
+
+const search = (h, value) => {
+  const input = h.container.querySelector('.nw-search-input');
+  input.value = value;
+  input.dispatchEvent(new h.window.Event('input', {bubbles:true}));
+  return input;
+};
+test('temporary search folds fullwidth and invisible separators, preserves ZWJ, searches safe summaries', async t => {
+  const {searchText} = await import('../front/labels.js');
+  assert.equal(searchText('ＡＩ　a\u200bb\u200cc\u2060d\ufeff👩\u200d💻'), 'ai abcd👩\u200d💻');
+  const h=setup(t);
+  h.message(listing([article({title:'ＡＩ\u200bChip',summary:'<img src=x>\n更多',link:'https://e.test/a'}),
+    article({title:{bad:1},summary:[],link:'https://e.test/b'})]));
+  assert.equal(h.container.querySelector('.nw-search-box').hidden,true);
+  const toggle=h.container.querySelector('.nw-search-toggle'); toggle.click();
+  assert.equal(toggle.getAttribute('aria-expanded'),'true');
+  assert.equal(h.window.document.activeElement,h.container.querySelector('.nw-search-input'));
+  search(h,'aichip'); assert.equal(mainRows(h).length,1);
+  search(h,'<img'); assert.equal(mainRows(h).length,1); assert.equal(h.container.querySelector('img'),null);
+  assert.equal(h.container.querySelector('.nw-search-hint').textContent,'搜尋「<img」：1 個事件');
+  toggle.click(); assert.equal(h.container.querySelector('.nw-search-box').hidden,true);
+  assert.equal(mainRows(h).length,1); // Closing the input does not silently clear the query.
+  search(h,'none'); assert.equal(mainRows(h).length,0);
+  assert.match(h.container.querySelector('.nw-empty').textContent,/沒有符合搜尋/);
+  h.container.querySelector('.nw-empty button').click(); assert.equal(mainRows(h).length,2);
+  assert.equal(h.window.localStorage.length,0);
+});
+
+test('search finds child report, expands and marks it, survives both resend kinds and leaves manual expansion intact', t => {
+  const h=setup(t), reports=[eventStory('111111111111','代表',8,{link:'https://e.test/a'}),
+    eventStory('111111111111','子報導',9,{summary:'Needle',link:'https://e.test/b'})];
+  h.message(listing(reports)); const input=search(h,'needle');
+  assert.equal(mainRows(h).length,1); assert.deepEqual(mainTitles(h),['代表']);
+  assert.equal(h.container.querySelector('.nw-reports').hidden,false);
+  assert.equal(h.container.querySelector('.nw-report .nw-search-match').textContent,'搜尋命中');
+  const expand=h.container.querySelector('.nw-expand');
+  assert.equal(expand.getAttribute('aria-expanded'),'true'); expand.click();
+  assert.equal(h.container.querySelector('.nw-reports').hidden,true);
+  for (const at of ['2026-09-21T02:04:00Z','2026-09-26T02:04:00Z']) {
+    h.message({...listing(reports),at}); assert.equal(input.value,'needle');
+    assert.equal(mainRows(h).length,1); assert.equal(h.container.querySelector('.nw-reports').hidden,false);
+  }
+  h.message(listing(reports.map(i=>({...i,summary:'changed'})))); assert.equal(mainRows(h).length,0);
+  search(h,''); assert.equal(mainRows(h).length,1); assert.equal(h.container.querySelector('.nw-reports').hidden,true);
+  h.container.querySelector('.nw-expand').click(); search(h,'代表'); search(h,'');
+  assert.equal(h.container.querySelector('.nw-reports').hidden,false);
+});
+
+test('search intersects source category theme count and topic without replacing those selections', t => {
+  const h=setup(t), topic=topicRecord();
+  const items=countFixture('finance').map(item=>({...item,title:item.source==='甲'?'needle':'other',topic:topic.id}));
+  h.message(topicListing([...items,eventStory('999999999999','needle outside',12)]));
+  choose(h,h.categories,'finance'); choose(h,h.select,'甲'); search(h,'needle');
+  assert.equal(mainRows(h).length,6);
+  h.container.querySelector('[data-topic="memory"]').click(); assert.equal(mainRows(h).length,2);
+  countButton(h,'signal:3').click(); assert.equal(mainRows(h).length,2);
+  search(h,'absent'); assert.equal(mainRows(h).length,0);
+  assert.equal(countButton(h,'signal:3').getAttribute('aria-pressed'),'true');
+  search(h,'needle'); focusTopicButtons(h)[0].click();
+  assert.ok(mainRows(h).length>0);
+  assert.ok(!mainTitles(h).some(title=>title.includes('outside')));
+  assert.equal(h.container.querySelector('.nw-search-input').value,'needle');
+  h.container.querySelector('.nw-filter button').click();
+  assert.equal(h.container.querySelector('.nw-search-input').value,'needle');
+});
+
+test('search keyboard is scoped, Esc clears, typing does not browse, listeners removed on unmount', t => {
+  const h=setup(t); h.message(listing([article()]));
+  const root=h.container.querySelector('.nw'), toggle=h.container.querySelector('.nw-search-toggle');
+  const key=(node,value,extra={})=>node.dispatchEvent(new h.window.KeyboardEvent('keydown',{key:value,bubbles:true,cancelable:true,...extra}));
+  key(h.window.document.body,'/'); assert.equal(toggle.getAttribute('aria-expanded'),'false');
+  key(root,'/',{ctrlKey:true}); assert.equal(toggle.getAttribute('aria-expanded'),'false');
+  key(root,'/'); const input=search(h,'新聞');
+  assert.equal(h.window.document.activeElement,input);
+  for(const k of ['j','k','s','e','/']) { key(input,k); assert.equal(h.window.document.activeElement,input); }
+  key(input,'Escape'); assert.equal(input.value,''); assert.equal(mainRows(h).length,1);
+  key(input,'Escape',{isComposing:true});
+  h.handle.unmount(); toggle.click(); input.value='retained';
+  input.dispatchEvent(new h.window.Event('input')); key(input,'Escape');
+  assert.equal(input.value,'retained'); assert.equal(h.container.children.length,0);
+});
+
+test('300 reports search input including render stays below 50ms per input', t => {
+  const h=setup(t), items=Array.from({length:300},(_,i)=>eventStory(i.toString(16).padStart(12,'0'),`Search ${i}`,8,
+    {link:`https://e.test/${i}`, summary:`${'摘要'.repeat(100)} ${i%2?'odd':'even'}`,event_size:1}));
+  h.message(listing(items));
+  const elapsed=[];
+  for (const query of ['search','odd','even','missing','search 1','']) {
+    const start=performance.now(); search(h,query); elapsed.push(performance.now()-start);
+  }
+  t.diagnostic(`300 reports input+render ms: ${elapsed.map(n=>n.toFixed(2)).join(', ')}`);
+  assert.ok(elapsed.every(n=>n<50),JSON.stringify(elapsed));
+  assert.equal(mainRows(h).length,300);
+});
+
+test('search intersects watch-only, clears via Escape outside input and never restores on remount', t => {
+  const h=setup(t); saveWatch(h,'AI');
+  h.message(listing([article({title:'AI needle',link:'https://e.test/a'}),article({title:'needle',link:'https://e.test/b'})]));
+  search(h,'needle'); watchControls(h).only.click(); assert.equal(mainRows(h).length,1);
+  search(h,'absent'); assert.equal(mainRows(h).length,0);
+  search(h,'needle'); const root=h.container.querySelector('.nw');
+  root.dispatchEvent(new h.window.KeyboardEvent('keydown',{key:'Escape',bubbles:true,cancelable:true}));
+  assert.equal(h.container.querySelector('.nw-search-input').value,'');
+  assert.equal(watchControls(h).only.getAttribute('aria-pressed'),'true');
+  search(h,'needle'); h.handle.unmount();
+  const again=setup(t,w=>{for(let i=0;i<h.window.localStorage.length;i++) {
+    const key=h.window.localStorage.key(i); w.localStorage.setItem(key,h.window.localStorage.getItem(key));
+  }});
+  assert.equal(again.container.querySelector('.nw-search-input').value,'');
+});
+
+test('search row reuse recomputes new badges and keeps invalid duplicate events separate', t => {
+  const h=setup(t,withSeen('2026-09-24T08:30:00Z'));
+  const old=eventStory('111111111111','old',8,{link:'https://e.test/old'});
+  const fresh=eventStory('222222222222','fresh',9,{link:'https://e.test/fresh'});
+  h.message(listing([old,fresh]));
+  assert.equal(h.container.querySelectorAll('.nw-new').length,1);
+  search(h,'fresh'); assert.equal(h.container.querySelectorAll('.nw-new').length,0);
+  search(h,''); assert.equal(h.container.querySelectorAll('.nw-new').length,1);
+  const duplicate=article({title:'duplicate',event:'invalid'});
+  h.message(listing([duplicate,duplicate])); search(h,'duplicate');
+  assert.equal(mainRows(h).length,2);
+  assert.equal(h.container.querySelector('.nw-search-hint').textContent,'搜尋「duplicate」：2 個事件');
 });

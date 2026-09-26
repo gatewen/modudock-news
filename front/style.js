@@ -40,6 +40,10 @@ export const css = `
   outline-offset: 2px;
 }
 .nw .nw-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 0 0 12px; }
+.nw .nw-search-box { display: flex; flex-wrap: wrap; gap: 8px; flex-basis: 100%; min-width: 0; }
+.nw .nw-search-input { flex: 1 1 180px; min-width: 0; max-width: 100%; }
+.nw .nw-search-hint { padding-inline: 16px; overflow-wrap: anywhere; }
+.nw .nw-search-match { color: var(--nw-accent); font-size: 12px; }
 .nw .nw-status { margin-left: auto; font-size: 12px; color: var(--nw-muted); }
 .nw .nw-watch-settings { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; flex-basis: 100%; }
 .nw .nw-watch-input { flex: 1 1 220px; min-width: 0; }

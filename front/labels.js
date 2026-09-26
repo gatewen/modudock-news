@@ -62,3 +62,11 @@ export function eventId(item) {
     && Number.isInteger(item.event_size) && item.event_size > 0 ? item.event.toLowerCase() : null;
 }
 
+
+// Matching only: backend match_text's ignored separators; keep ZWJ intact.
+// Also fold full-width ASCII/space for the local, case-insensitive search.
+export function searchText(value) {
+  return typeof value === "string" ? value.replace(/[\u200b\u200c\u2060\ufeff]/g, "")
+    .replace(/[\uff01-\uff5e]/g, char => String.fromCharCode(char.charCodeAt(0) - 0xfee0))
+    .replace(/\u3000/g, " ").toLowerCase() : "";
+}

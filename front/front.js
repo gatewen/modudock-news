@@ -2,7 +2,7 @@
 import { css } from "./style.js";
 import {
   categoryNames, themeNames, regionNames, regionTopics, issueNames, issueTopics, topicNames,
-  financial, validAnalysis, topicOf, arrow, eventId,
+  financial, validAnalysis, topicOf, arrow, eventId, searchText,
 } from "./labels.js";
 
 let focusHeadingId = 0;
@@ -85,6 +85,25 @@ export default function mount(ctx) {
     option.textContent = `${name} 0`;
     categories.append(option);
   }
+  const searchToggle = make("button", "nw-search-toggle", "搜尋");
+  searchToggle.type = "button";
+  searchToggle.setAttribute("aria-expanded", "false");
+  searchToggle.setAttribute("aria-pressed", "false");
+  searchToggle.setAttribute("aria-keyshortcuts", "/");
+  const searchBox = make("div", "nw-search-box");
+  searchBox.id = `nw-search-${++descriptionId}`;
+  searchBox.hidden = true;
+  searchToggle.setAttribute("aria-controls", searchBox.id);
+  const searchInput = make("input", "nw-search-input");
+  searchInput.type = "search";
+  searchInput.setAttribute("aria-label", "搜尋標題與摘要");
+  searchInput.placeholder = "搜尋標題與摘要（Esc 清除）";
+  const searchClear = make("button", "", "清除搜尋");
+  searchClear.type = "button";
+  searchBox.append(searchInput, searchClear);
+  const searchHint = make("p", "nw-hint nw-search-hint");
+  searchHint.setAttribute("role", "status");
+  searchHint.hidden = true;
   const watchToggle = make("button", "", "追蹤設定");
   watchToggle.type = "button";
   watchToggle.setAttribute("aria-expanded", "false");
@@ -186,10 +205,10 @@ export default function mount(ctx) {
   rankingSection.append(rankingHeading, ranking);
   const note = make("small", "nw-note", "同一事件多家報導只算一次。");
   panel.append(sample, market, history, macro, rankingSection, note);
-  toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, status, watchSettings);
+  toolbar.append(refresh, sources, sourceDescription, categories, watchToggle, watchOnly, searchToggle, status, searchBox, watchSettings);
   const watchHint = make("p", "nw-hint nw-watch-hint");
   watchHint.hidden = true;
-  root.append(toolbar, focus, panel, themeFilter, watchHint, list, empty);
+  root.append(toolbar, focus, panel, themeFilter, watchHint, searchHint, list, empty);
   ctx.container.append(root);
 
   let up = false;
@@ -197,6 +216,8 @@ export default function mount(ctx) {
   let refreshTimer = null;
   let latestAt = "", refreshAt = "", refreshNotice = "";
   let items = [];
+  let searchIndex = new WeakMap();
+  let searchRows = new Map();
   const dateOnlySources = new Set();
   let received = false;
   let modelState = "", modelReason = "";
@@ -350,7 +371,7 @@ export default function mount(ctx) {
     const button = event.target?.closest?.("button[data-event]");
     if (!button || !list.contains(button)) return;
     const id = button.dataset.event;
-    if (expanded.has(id)) expanded.delete(id);
+    if (button.getAttribute("aria-expanded") === "true") expanded.delete(id);
     else expanded.add(id);
     button.setAttribute("aria-expanded", String(expanded.has(id)));
     const reports = button.closest(".nw-row").querySelector(".nw-reports");
@@ -858,13 +879,14 @@ export default function mount(ctx) {
     if (target) target.focus({preventScroll: true});
     return Boolean(target) && !unavailableFocus();
   }
-  function drawItems(keepFocus = true) {
+  function drawItems(keepFocus = true, searchOnly = false) {
+    if (!searchOnly) searchRows.clear();
     sourceDescription.textContent = [...sources.options].find(option => option.value === sources.value)?.title || "";
     const focusWasInside = keepFocus && root.contains(document.activeElement);
     const focused = keepFocus ? focusIdentity(document.activeElement) : null;
     const sourceItems = items.filter(item => item && typeof item === "object"
       && (!sources.value || text(item.source) === sources.value));
-    for (const option of categories.options) {
+    for (const option of searchOnly ? [] : categories.options) {
       const count = groupItems(sourceItems.filter(item => !option.value || text(item.category) === option.value)).length;
       const next = `${categoryNames.get(option.value) || "全部類別"} ${count}`;
       if (option.textContent !== next) option.textContent = next;
@@ -881,10 +903,11 @@ export default function mount(ctx) {
     // Match the panel's event counts, even when watch-only hides the panel.
     if (selectedTheme && !groupItems(scoped).some(group =>
       topicOf(group.reports.map(validAnalysis).find(Boolean)) === selectedTheme)) selectedTheme = "";
-    drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
-    list.replaceChildren();
+    if (!searchOnly) drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
+    const rendered = document.createDocumentFragment();
     const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
     const allGroups = groupItems(filtered).filter(group => !selectedCount || contributes(group, selectedCount.id));
+    const groupIndices = new Map(allGroups.map((group, index) => [group, index]));
     const matches = new Map(allGroups.map(group => [group, trackedWords.find(word => group.reports.some(item =>
       text(item.title).toLowerCase().includes(word.toLowerCase()) || text(item.summary).toLowerCase().includes(word.toLowerCase())))]));
     const watchedCount = allGroups.filter(group => matches.get(group)).length;
@@ -892,7 +915,12 @@ export default function mount(ctx) {
     watchOnly.hidden = trackedWords.length === 0;
     watchOnly.setAttribute("aria-pressed", String(onlyWatched));
     watchOnly.textContent = `只看追蹤 ${watchedCount}`;  // Events, like the list and status.
-    const groups = onlyWatched ? allGroups.filter(group => matches.get(group)) : allGroups;
+    const query = searchText(searchInput.value).trim();
+    const hits = item => !query || (searchIndex.get(item) || []).some(value => value.includes(query));
+    const groups = allGroups.filter(group => (!onlyWatched || matches.get(group)) && group.reports.some(hits));
+    searchHint.hidden = !query;
+    searchHint.textContent = query ? `搜尋「${searchInput.value.trim()}」：${groups.length} 個事件` : "";
+    searchToggle.setAttribute("aria-pressed", String(Boolean(query)));
     const newGroups = groups.map(group => group.reports.some(isNew));
     // New groups normally form a prefix; the divider closes that prefix only
     // when old groups follow it. New groups outside the prefix keep a badge.
@@ -913,9 +941,37 @@ export default function mount(ctx) {
         const divider = make("li", "nw-divider", "以下為上次離開前的新聞");
         divider.setAttribute("role", "separator");
         divider.setAttribute("aria-label", "以下是上次離開前的新聞");
-        list.append(divider);
+        rendered.append(divider);
       }
       const item = group.reports[0];
+      const cacheKey = groupIndices.get(group);
+      const cached = searchOnly && searchRows.get(cacheKey);
+      if (cached) {
+        for (const [report, marker, parent] of cached.markers) {
+          const hit = Boolean(query && hits(report));
+          if (hit && !marker.parentNode) parent.prepend(marker);
+          else if (!hit) marker.remove();
+        }
+        if (cached.toggle) {
+          const open = expanded.has(group.id) || Boolean(query && group.reports.slice(1).some(hits));
+          cached.toggle.setAttribute("aria-expanded", String(open));
+          cached.reports.hidden = !open;
+        }
+        const title = cached.row.querySelector(".nw-title");
+        const badge = title.querySelector(".nw-new");
+        const marked = newGroups[index] && index >= prefix;
+        if (marked && !badge) title.prepend(make("span", "nw-new", "新"));
+        else if (!marked) badge?.remove();
+        rendered.append(cached.row);
+        continue;
+      }
+      const markers = [];
+      const mark = (parent, report) => {
+        const hit = Boolean(query && hits(report));
+        const marker = make("span", "nw-search-match", "搜尋命中");
+        markers.push([report, marker, parent]);
+        if (hit) parent.prepend(marker);
+      };
       const category = text(item.category);
       const analysis = validAnalysis(item);
       const row = make("li", "nw-row");
@@ -924,6 +980,7 @@ export default function mount(ctx) {
       const info = make("div", "nw-info");
       const actions = make("div", "nw-actions");
       meta.append(info);
+      mark(info, item);
       if (matches.get(group)) info.append(make("span", "nw-watch", `追蹤：${matches.get(group)}`));
       if (analysis?.kind === "politics") {
         if (categories.value === "politics") info.append(make("span", "nw-tag", issueNames.get(analysis.issue)));
@@ -948,15 +1005,17 @@ export default function mount(ctx) {
         const toggle = make("button", "nw-expand", `另 ${group.reports.length - 1} 則報導`);
         toggle.type = "button";
         toggle.dataset.event = group.id;
-        toggle.setAttribute("aria-expanded", String(expanded.has(group.id)));
+        const open = expanded.has(group.id) || Boolean(query && group.reports.slice(1).some(hits));
+        toggle.setAttribute("aria-expanded", String(open));
         actions.append(toggle);
         const reports = make("ul", "nw-reports");
         reports.setAttribute("aria-label", "同事件其他報導");
-        reports.hidden = !expanded.has(group.id);
+        reports.hidden = !open;
         for (const report of group.reports.slice(1)) {
           const entry = make("li", "nw-report");
           const details = make("div", "nw-report-meta");
           details.append(make("span", "nw-source", text(report.source)), newsTime(report));
+          mark(details, report);
           appendTone(details, report);
           entry.append(newsTitle(report, "nw-report-title", false), details);
           reports.append(entry);
@@ -978,17 +1037,32 @@ export default function mount(ctx) {
         meta.after(paragraph);  // Below meta, so the toggle does not move when expanded.
       }
       if (actions.childElementCount) meta.append(actions);
-      list.append(row);
+      searchRows.set(cacheKey, {row, markers, toggle: row.querySelector(".nw-expand"), reports: row.querySelector(".nw-reports")});
+      rendered.append(row);
     }
+    list.replaceChildren(rendered);
     empty.hidden = groups.length > 0;
     emptyText.textContent = received
-      ? categories.value && modelState === "working" ? "分類中，稍後出現" : "這個條件下沒有新聞"
+      ? query ? "目前篩選範圍內沒有符合搜尋的新聞" : categories.value && modelState === "working" ? "分類中，稍後出現" : "這個條件下沒有新聞"
       : "正在取得新聞";
     clearAll.hidden = !received;
     if (!restoreFocus(focused) && focusWasInside && unavailableFocus())
       list.focus({preventScroll: true});
   }
+  function onSearch() { if (!disposed) drawItems(true, true); }
+  function openSearch(open) {
+    searchBox.hidden = !open;
+    searchToggle.setAttribute("aria-expanded", String(open));
+    if (open) searchInput.focus();
+  }
+  function onSearchToggle() { openSearch(searchBox.hidden); }
+  function clearSearch() { searchInput.value = ""; drawItems(); }
+  function onSearchClear() { clearSearch(); searchInput.focus(); }
+  function onSearchKey(event) {
+    if (event.key === "Escape" && !event.isComposing) { event.preventDefault(); clearSearch(); }
+  }
   function onClearAll() {
+    searchInput.value = "";
     delete initialView.category;
     delete initialView.source;
     savedView = null;
@@ -1040,6 +1114,9 @@ export default function mount(ctx) {
     }
     for (const [source, counts] of sourceTimes)
       if (counts.total >= 3 && counts.midnight / counts.total >= 0.8) dateOnlySources.add(source);
+    searchIndex = new WeakMap();
+    for (const item of items) if (item && typeof item === "object")
+      searchIndex.set(item, [searchText(item.title), searchText(item.summary)]);
     const presentSummaries = new Set(items.filter(item => item && typeof item === "object")
       .map(item => summaryKey({id: eventId(item), reports: [item]})).filter(Boolean));
     for (const key of summaries) if (!presentSummaries.has(key)) summaries.delete(key);
@@ -1135,6 +1212,8 @@ export default function mount(ctx) {
     if (disposed || !root.contains(target) || event.ctrlKey || event.metaKey || event.altKey
         || event.shiftKey || event.isComposing || target.isContentEditable
         || target.closest?.('input, select, textarea, [contenteditable]:not([contenteditable="false"])')) return;
+    if (event.key === "Escape" && searchInput.value) { clearSearch(); event.preventDefault(); return; }
+    if (event.key === "/") { openSearch(true); event.preventDefault(); return; }
     const row = target.closest?.(".nw-row");
     const current = row && list.contains(row) ? row : null;
     if (event.key === "j" || event.key === "k") {
@@ -1157,6 +1236,10 @@ export default function mount(ctx) {
       }
     }
   }
+  searchToggle.addEventListener("click", onSearchToggle);
+  searchInput.addEventListener("input", onSearch);
+  searchInput.addEventListener("keydown", onSearchKey);
+  searchClear.addEventListener("click", onSearchClear);
   root.addEventListener("keydown", onBrowseKey);
   list.addEventListener("click", onExpand);
   list.addEventListener("click", onSummary);
@@ -1193,6 +1276,12 @@ export default function mount(ctx) {
       up = false;
       finishRefresh();
       refresh.disabled = true;
+      searchToggle.removeEventListener("click", onSearchToggle);
+      searchInput.removeEventListener("input", onSearch);
+      searchInput.removeEventListener("keydown", onSearchKey);
+      searchClear.removeEventListener("click", onSearchClear);
+      searchIndex = new WeakMap();
+      searchRows.clear();
       root.removeEventListener("keydown", onBrowseKey);
       historyToggle.removeEventListener("click", onHistory);
       refresh.removeEventListener("click", onRefresh);
