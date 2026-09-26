@@ -1909,7 +1909,7 @@ test('seen divider precedes first old group, omits child markers and retains foc
   assert.equal(line.previousElementSibling, rows[0]);
   assert.equal(line.nextElementSibling, rows[1]);
   assert.equal(line.textContent, '以下為上次離開前的新聞');
-  assert.equal(line.getAttribute('role'), 'separator');
+  assert.equal(line.hasAttribute('role'), false); // R45: retain native listitem semantics inside ul.
   assert.equal(line.getAttribute('aria-label'), '以下是上次離開前的新聞');
   assert.equal(line.querySelector('a,button,[tabindex]'), null);
   assert.equal(line.hasAttribute('tabindex'), false);
@@ -5257,4 +5257,28 @@ test('R44 a new at cancels the pending initial-stage timer, same at keeps it',t=
   h.message(body);assert.equal(timers.size,1);
   h.message({...body,at:'2026-09-26T04:00:40Z'});assert.equal(timers.size,0);
   assert.doesNotMatch(h.container.querySelector('.nw-status').textContent,/新聞已可閱讀/);
+});
+
+for(const mode of ['seen','dates']) test(`R45 list children retain listitem semantics and j/k skip ${mode} dividers`,t=>{
+  const h=setup(t,withSeen(seenAt));
+  if(mode==='seen') {
+    h.message(listing([eventStory('111111111111','new',11),eventStory('222222222222','old',7)]));
+    assert.equal(h.container.querySelector('.nw-divider').textContent,'以下為上次離開前的新聞');
+  } else {
+    h.message(readingTopic());focusTopicButtons(h)[0].click();h.container.querySelector('.nw-topic-order').click();
+    assert.equal(h.container.querySelectorAll('.nw-date-divider').length,3);
+  }
+  const list=h.container.querySelector('.nw-list');
+  for(const child of list.children) {
+    assert.equal(child.tagName,'LI');
+    assert.ok(!child.hasAttribute('role')||child.getAttribute('role')==='listitem',`${child.className}: ${child.getAttribute('role')}`);
+  }
+  const titles=[...list.querySelectorAll(':scope > .nw-row > a.nw-title')];
+  list.focus();
+  for(const title of titles) {
+    browseKey(h,h.window.document.activeElement,'j');assert.equal(h.window.document.activeElement,title);
+  }
+  for(const title of titles.slice(0,-1).reverse()) {
+    browseKey(h,h.window.document.activeElement,'k');assert.equal(h.window.document.activeElement,title);
+  }
 });

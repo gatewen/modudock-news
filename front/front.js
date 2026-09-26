@@ -1385,7 +1385,6 @@ export default function mount(ctx) {
       }
       if (index === dividerIndex) {
         const divider = make("li", "nw-divider", "以下為上次離開前的新聞");
-        divider.setAttribute("role", "separator");
         divider.setAttribute("aria-label", "以下是上次離開前的新聞");
         rendered.append(divider);
       }
