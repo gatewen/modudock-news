@@ -39,7 +39,7 @@ const signal=(group,category,id)=>{
 };
 const stats={actions:{},facetProbes:0,overviewProbes:0,assertions:0};
 
-for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>{
+for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async t=>{
   const originalSeed=firstSeed+run;
   let seed=originalSeed;
   const rnd=()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};
@@ -278,7 +278,16 @@ for(let run=0;run<seeds;run++) test(`front walk seed=${firstSeed+run}`,async()=>
   } catch(error) {
     throw new Error(`seed=${originalSeed} step=${step} actions=${log.join('; ')}: ${error.message}`,{cause:error});
   } finally {
-    h.handle.unmount();h.container.remove();await window.happyDOM.abort();
+    // abort() leaves the Window in Happy DOM's static browserFrames Map.
+    // close() releases that frame as well as destroying the document and cancelling tasks.
+    try { h?.handle.unmount();h?.container.remove(); }
+    finally { await window.happyDOM.close(); }
+    assert.equal(window.closed,true);
+    if (process.env.NEWS_WALK_MEMORY && (run+1)%100===0) {
+      assert.equal(typeof global.gc,'function','memory diagnostics require --expose-gc');
+      global.gc();
+      t.diagnostic(`memory seeds=${run+1} ${JSON.stringify(process.memoryUsage())}`);
+    }
   }
 });
 test('walk campaign covers required operations',t=>{

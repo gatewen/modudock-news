@@ -423,11 +423,11 @@ export default function mount(ctx) {
   function modelLabel() {
     if (modelState !== "working") return modelState === "paused" ? (modelReason === "waiting" ? "整理暫停，等待下次更新" : "整理暫停，下次更新繼續") : "";
     if (!initialStage) return "整理中";
-    return "新聞已可閱讀・整理分類與話題中" + (initialWorkAt !== null && Date.now()-initialWorkAt >= 30000 ? "・可按重新整理" : "");
+    return "新聞已可閱讀・整理分類與話題中" + (refreshTimer === null && initialWorkAt !== null && Date.now()-initialWorkAt >= 30000 ? "・可按重新整理" : "");
   }
-  function updateInitialStage() {
+  function updateInitialStage(newRound = false) {
     if (!initialStage) return;
-    if (modelState !== "working") {
+    if (newRound || modelState !== "working") {
       initialStage = false;
       if (initialTimer !== null) view.clearTimeout(initialTimer);
       initialTimer = null;
@@ -513,6 +513,7 @@ export default function mount(ctx) {
       if (received) drawItems();
       else status.textContent = refreshNotice;
     }, 30000);
+    if (received) drawItems();
     ctx.channel.send({ op: "refresh" });
   }
   function finishRefresh() {
@@ -737,7 +738,7 @@ export default function mount(ctx) {
       focusList.replaceChildren();
       for (const topic of topics) {
         const members = items.filter(item => item && item.topic === topic.id);
-        if (!selectedTopic && (sources.value || categories.value) && !members.some(item =>
+        if (!topicScope && (sources.value || categories.value) && !members.some(item =>
           (!sources.value || text(item.source) === sources.value)
           && (!categories.value || text(item.category) === categories.value))) continue;
         const representative = members.find(item => item.title === topic.title);
@@ -746,7 +747,7 @@ export default function mount(ctx) {
         const button = make("button", "nw-focus-count");
         button.type = "button";
         button.dataset.topicId = topic.id;
-        button.setAttribute("aria-pressed", String(selectedTopic === topic.id));
+        button.setAttribute("aria-pressed", String(topicScope === topic.id));
         describe(button, `進入話題：${topic.title}，${topic.count} 則報導`, row);
         button.append(make("span", "nw-focus-long", `看話題・${topic.sources} 家`),
           make("span", "nw-focus-short", `看話題・${topic.sources} 家`));
@@ -830,7 +831,7 @@ export default function mount(ctx) {
     const button = event.target?.closest?.("button[data-event], button[data-topic-id]");
     if (!button || !focusList.contains(button)) return;
     if (button.dataset.topicId) {
-      if (selectedTopic === button.dataset.topicId) { returnToView(); return; }
+      if ((selectedTopic || selectedCount?.topic) === button.dataset.topicId) { returnToView(); return; }
       if (!selectedTopic && !selectedCount?.topic) {
         const scroller = scrollHost();
         savedView = {source:sources.value, category:categories.value, theme:selectedTheme, count:selectedCount, watched:onlyWatched, newOnly:onlyNew,
@@ -1730,13 +1731,14 @@ export default function mount(ctx) {
     const readingPosition = captureReading();
     const undoHadFocus = document.activeElement === undoRead;
     undoReading = null;
+    const newRound = received && text(body.at) !== latestAt;
     if (text(body.at) !== latestAt) refreshNotice = "";
     latestAt = text(body.at);
     if (refreshTimer !== null && latestAt !== refreshAt) finishRefresh();
     modelReason = typeof body.model?.reason === "string" ? body.model.reason : "";
     modelState = body.model && typeof body.model === "object" && ["working", "paused", "done", "off"].includes(body.model.state)
       ? body.model.state : "";
-    updateInitialStage();
+    updateInitialStage(newRound);
     received = true;
     const previousEvents = new Map();
     for (const item of items) {
