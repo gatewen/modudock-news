@@ -212,6 +212,8 @@ export default function mount(ctx) {
   const expanded = new Set();
   const summaries = new Set();
   let sourceOrder = new Map();
+  let sourceOutlets = new Map();
+  const outletOf = item => sourceOutlets.get(text(item?.source)) || text(item?.source);
   const text = (value) => typeof value === "string" ? value : "";
   const localTime = (value) => {
     if (!text(value)) return "";
@@ -439,7 +441,7 @@ export default function mount(ctx) {
       return;
     }
     const ranked = groups.map(group => ({...group,
-      count: new Set(group.reports.map(item => text(item.source)).filter(Boolean)).size,
+      count: new Set(group.reports.map(outletOf).filter(Boolean)).size,
       latest: Math.max(...group.reports.map(item => {
         const stamp = Date.parse(text(item.published));
         return Number.isFinite(stamp) ? stamp : -Infinity;
@@ -594,13 +596,17 @@ export default function mount(ctx) {
     topicSources.hidden = !selectedTopic;
     topicSources.textContent = "";
     if (selectedTopic) {
-      const counts = new Map();
+      const counts = new Map(), outletOrder = new Map();
+      for (const [source, index] of sourceOrder) {
+        const outlet = sourceOutlets.get(source) || source;
+        if (!outletOrder.has(outlet)) outletOrder.set(outlet, index);
+      }
       for (const item of items) {
-        const name = text(item?.source);
+        const name = outletOf(item);
         if (item?.topic === selectedTopic && name) counts.set(name, (counts.get(name) || 0) + 1);
       }
       const ranked = [...counts].sort((a, b) => b[1] - a[1]
-        || (sourceOrder.get(a[0]) ?? Infinity) - (sourceOrder.get(b[0]) ?? Infinity));
+        || (outletOrder.get(a[0]) ?? Infinity) - (outletOrder.get(b[0]) ?? Infinity));
       topicSources.textContent = ranked.slice(0, 5).map(([name, count]) => `${name} ${count}`).join("・")
         + (ranked.length > 5 ? ` 等 ${ranked.length - 5} 家` : "");
       const title = Array.from(topics.find(topic => topic.id === selectedTopic).title);
@@ -1060,10 +1066,13 @@ export default function mount(ctx) {
     const allText = `全部來源 ${items.filter(item => item && typeof item === "object").length}`;
     if (all.textContent !== allText) all.textContent = allText;
     const names = new Set();
+    sourceOutlets = new Map();
     for (const source of records) {
       const name = text(source?.name);
       if (!name || names.has(name)) continue;
       names.add(name);
+      const outlet = text(source.outlet).trim();
+      sourceOutlets.set(name, outlet && outlet.length <= 64 ? outlet : name);
       const option = options.get(name) || document.createElement("option");
       option.value = name;
       const count = Number.isSafeInteger(source.count) && source.count >= 0 ? source.count : 0;
@@ -1199,6 +1208,7 @@ export default function mount(ctx) {
       focusList.removeEventListener("click", onFocus);
       expanded.clear();
       sourceOrder.clear();
+      sourceOutlets.clear();
       clearAll.removeEventListener("click", onClearAll);
       ranking.removeEventListener("click", onTheme);
       panel.removeEventListener("click", onCount);

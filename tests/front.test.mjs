@@ -3503,3 +3503,40 @@ test('source data note gains local M/D after midnight even on same-at replacemen
   h.message(body);
   assert.equal(option.textContent,'甲 1（9/25 23:10 資料）');
 });
+
+test('event focus counts publishers: three CNA feeds are one, CNA PTS BBC are three', t => {
+  const h=setup(t);
+  const names=['中央社 政治','中央社 財經','中央社 國際','公視','BBC'];
+  const sources=names.map((name,i)=>({name,ok:true,outlet:i<3?'中央社':name}));
+  const reports=names.map((source,i)=>eventStory('111111111111',`headline-${i}`,8+i,{source}));
+  h.message(listing(reports.slice(0,3),sources));
+  assert.equal(focusButtons(h).length,0);
+  assert.match(focusArea(h).textContent,/目前沒有 3 家以上/);
+  h.message(listing(reports,sources));
+  assert.equal(focusButtons(h).length,1);
+  assert.equal(focusButtons(h)[0].querySelector('.nw-focus-long').textContent,'看同事件・3 家');
+  choose(h,h.select,'中央社 政治'); assert.equal(focusButtons(h).length,0);
+  choose(h,h.select,''); assert.equal(focusButtons(h).length,1);
+  // Missing/invalid metadata safely falls back to the feed name.
+  h.message(listing(reports.slice(0,3),sources.map(s=>({...s,outlet:{bad:true}}))));
+  assert.equal(focusButtons(h)[0].querySelector('.nw-focus-long').textContent,'看同事件・3 家');
+});
+
+test('topic heading and distribution show outlets while the source selector retains feeds', t => {
+  const h=setup(t), topic=topicRecord({sources:3,count:5});
+  const names=['中央社 政治','中央社 財經','中央社 國際','公視','BBC'];
+  const sources=names.map((name,i)=>({name,ok:true,outlet:i<3?'中央社':name}));
+  const reports=names.map((source,i)=>article({source,title:`report-${i}`,topic:topic.id}));
+  const body={...topicListing(reports,[topic]),sources};
+  h.message(body);
+  assert.equal(focusTopicButtons(h)[0].querySelector('.nw-focus-long').textContent,'看話題・3 家');
+  focusTopicButtons(h)[0].click();
+  assert.equal(h.container.querySelector('.nw-topic-sources').textContent,'中央社 3・公視 1・BBC 1');
+  assert.deepEqual([...h.select.options].slice(1).map(o=>o.value),names);
+  h.message(body);
+  assert.equal(h.container.querySelector('.nw-topic-sources').textContent,'中央社 3・公視 1・BBC 1');
+  const extra=Array.from({length:4},(_,i)=>({name:`來源${i}`,outlet:`媒體${i}`,ok:true}));
+  h.message({...body,sources:[...sources,...extra],items:[...reports,...extra.map(s=>article({source:s.name,topic:topic.id}))],
+    topics:{list:[{...topic,sources:7,count:9}]}});
+  assert.match(h.container.querySelector('.nw-topic-sources').textContent,/等 2 家$/);
+});

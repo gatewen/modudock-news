@@ -50,6 +50,9 @@ def preflight(feeds_path, python_version=None, expat_version=None):
             name, url = feed.get("name"), feed.get("url")
             if not isinstance(name, str) or not name.strip() or len(name) > 64:
                 raise ValueError("source name must contain 1..64 characters")
+            outlet = feed.get("outlet", name)
+            if not isinstance(outlet, str) or not outlet.strip() or len(outlet) > 64 or outlet != outlet.strip():
+                raise ValueError("outlet must contain 1..64 characters without surrounding whitespace")
             if not isinstance(url, str) or not url or any(c.isspace() for c in url):
                 raise ValueError("source URL must be a nonempty URL without whitespace")
             parsed = urlsplit(url)

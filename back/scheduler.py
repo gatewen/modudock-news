@@ -211,7 +211,7 @@ class Scheduler:
         self.round_end = self.clock() + self.round_timeout
         self.pending = set(range(len(self.feeds)))
         self.deadlines = {}
-        self.status = [{"name": f["name"], "ok": False, "error": None, "count": 0,
+        self.status = [{"name": f["name"], "outlet": f.get("outlet", f["name"]), "ok": False, "error": None, "count": 0,
                         "last_success": self.last_success[i]} for i, f in enumerate(self.feeds)]
         while True:
             try:
@@ -497,11 +497,15 @@ class Scheduler:
                           if self._classify_enabled() and self.matcher is not None else 0}
         return self._decorate_topics(packet, groups)
 
+    def _outlets(self):
+        return {feed['name']: feed.get('outlet', feed['name']) for feed in self.feeds}
+
     def _topic_plan(self, packet, groups=None):
         items = packet['body']['items']
         if groups is None:
             groups = {dedup_key(i['link']): {'event': i['event']} for i in items}
-        return topic_plan(items, groups, self.topic_cache, [f['name'] for f in self.feeds], self.last_topic_seeds)
+        return topic_plan(items, groups, self.topic_cache, [f['name'] for f in self.feeds], self.last_topic_seeds,
+                          outlets=self._outlets())
 
     def _decorate_topics(self, packet, groups):
         body = packet['body']
@@ -513,7 +517,8 @@ class Scheduler:
             topics, pending = [], []
             for topic in previous.get('topics', {}).get('list', []):
                 members = [item for item in body['items'] if previous_members.get(dedup_key(item['link'])) == topic['id']]
-                sources = len({item['source'] for item in members})
+                outlets = self._outlets()
+                sources = len({outlets.get(item['source'], item['source']) for item in members})
                 if sources >= 3:
                     topics.append({'id': topic['id'], 'title': topic['title'], 'sources': sources,
                                    'count': len(members), 'keys': [dedup_key(item['link']) for item in members]})

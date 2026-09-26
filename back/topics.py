@@ -36,8 +36,9 @@ def words(title):
     return result
 
 
-def plan(items, groups, cache, feed_order, previous=()):
+def plan(items, groups, cache, feed_order, previous=(), *, outlets=None):
     """Reuse previous seed identities, then rank built topics for display."""
+    outlets = outlets or {}
     records = {dedup_key(item['link']): item for item in items}
     dates = {key: datetime.fromisoformat(item['published']) for key, item in records.items()}
     sources = {name: i for i, name in enumerate(feed_order)}
@@ -50,7 +51,7 @@ def plan(items, groups, cache, feed_order, previous=()):
         events[groups[key]['event']].add(key)
     event_of = {key: event for event, keys in events.items() for key in keys}
     def source_count(keys):
-        return len({records[key]['source'] for key in keys})
+        return len({outlets.get(records[key]['source'], records[key]['source']) for key in keys})
     seeds = [event for event, keys in events.items() if source_count(keys) >= 3]
     seeds.sort(key=lambda event: (-source_count(events[event]), -max(dates[k].timestamp() for k in events[event]), event))
     seed_candidates = [seed for seed in previous if seed in records]
