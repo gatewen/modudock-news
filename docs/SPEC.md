@@ -1429,7 +1429,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 
 ### 19.2 前半
 
-- **結構與樣式**：`front.js` 管 mount／狀態／DOM，`style.js` 匯出 scoped CSS，`labels.js` 放固定名稱與無狀態驗證，`scope.js` 放範圍選取／群組與計數純函式（§22.4）。style 放模組根 section.nw，CSS 不操作殼或 document.head；根 `.nw` 設 position:relative，讓 `.nw-sr` 與窄版快捷鍵隱藏名稱的 absolute 定位留在模組內；隱藏文字使用 1px、clip／clip-path、overflow:hidden、white-space:nowrap，不用 display:none（§20.17）。吃 --md-* token、light-dark 深淺色、ResizeObserver 驅動的窄版／排行 class，含 20px 遲滯（§20.27）。工具列、篩選與列文字同左緣；財經紅漲綠跌，國際升級用 danger、緩和用 accent。基調負面用深墨色／深色亮灰，不借用財經紅綠。（出處：§14、§15、§17.3、§18.22、§18.27、§18.35）
+- **結構與樣式**：`front.js` 管 mount／狀態／DOM，`style.js` 匯出 scoped CSS，`labels.js` 放固定名稱與無狀態驗證，`scope.js` 放範圍選取／群組與計數純函式（§22.4），`panel.js` 放三種面板及24小時聚合，contributes由scope再匯出共用（§22.7）。style 放模組根 section.nw，CSS 不操作殼或 document.head；根 `.nw` 設 position:relative，讓 `.nw-sr` 與窄版快捷鍵隱藏名稱的 absolute 定位留在模組內；隱藏文字使用 1px、clip／clip-path、overflow:hidden、white-space:nowrap，不用 display:none（§20.17）。吃 --md-* token、light-dark 深淺色、ResizeObserver 驅動的窄版／排行 class，含 20px 遲滯（§20.27）。工具列、篩選與列文字同左緣；財經紅漲綠跌，國際升級用 danger、緩和用 accent。基調負面用深墨色／深色亮灰，不借用財經紅綠。（出處：§14、§15、§17.3、§18.22、§18.27、§18.35）
 - **工具列**：重新整理、來源、固定十選項的類別、追蹤關鍵字、有關鍵字才顯示的「只看追蹤 N」、可收合搜尋、狀態及快捷鍵入口。來源選項依目前類別範圍計事件數，不使用 body.sources 的報導 count（§20.9）；失敗且有有效 last_success 時附「（HH:mm 資料）」（非本地今天則為「（M/D HH:mm 資料）」），option.title 與來源 select 的 aria-describedby 提供最後成功確認完整本地年月日時分秒與錯誤。從未成功者仍附「（失敗）」，成功（含 304）清除舊資料短註；不按報導日期判失效。（出處：§20.3）採分面計數：來源選項依目前類別、類別選項依目前來源計事件數；全部來源為目前類別的事件總數，全部類別為目前來源的事件總數。不受題材／話題／數字／搜尋／追蹤／新進展限制（§20.9、§20.11）；零值仍可選；同事件可落在多個來源／類別選項，選項數字不能直接相加推算總數。補送保留選值與 select 節點，文字相同不重寫。（出處：§18.19、§18.26、§18.41）
 - **重新整理回饋**：up 後可按，點下立即「↻ 更新中…」、aria-disabled=true、清單 aria-busy=true，重複點擊忽略而仍可聚焦。新 at 到來或 30 秒逾時恢復；逾時顯示「更新未完成，稍後自動重試」，同 at 補送不清除，直到不同 at 才清。unmount 清計時器。（出處：§18.28、§18.41）
 - **狀態列**：更新時間、逾時提示、整理文字、新增 N 個事件、失敗來源名稱、分類資訊依適用條件組合。失敗且有 last_success 者按來源數顯示「N 個來源沿用舊資料」；從未成功者沿用單一來源名稱／多個首名與總數的失敗文字。部分失敗時兩種可同時顯示。全部來源 ok=false 且至少一個有效 last_success 時，主文字改「更新失敗，沿用 HH:mm 的資料」，採最新一次任何來源成功時間，跨本地日加 M/D；不再以本次 at 顯示「更新」。全未成功則為「尚未取得新聞：所有來源連線失敗；請按「重新整理」重試」。title 列所有失敗來源、各自最後成功確認時間與截短錯誤；恢復任一來源（含 304）後回原狀態（§20.20）。（出處：§20.3）working 隱藏未分類數；其他狀態有 pending 才列。off＋classify.enabled=false 按 reason 顯示金鑰原因，title 提示設定／確認後重新載入；原因缺失或不認得保留「分類：關閉」。（出處：§18.10、§18.20、§18.23、§18.41、§18.43、§18.44）
@@ -1485,7 +1485,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **離線回歸**：在 news repo 執行 `/usr/local/bin/python3 -m unittest` 與 `npm test`；後者為 Node＋happy-dom，另含 grep 級安全／樣式檢查。後半用假 http.server、注入 clock／sleep、thread gate 驗預算、滴流、退避、三條並行、准入優先序、在途去重及退出；不需要真 key。目前收件基準為後半384（§20.42）、前半513（§20.40），數量是收件快照，不是永遠固定的驗收條件。（出處：§18.2、§18.18、§18.31～§18.33、§18.41、§18.46）
 - **真實端到端工具**：`/usr/local/bin/python3 scripts/real_run.py --timeout 120 --topic-min 20 --save /tmp/news-last.json`。繼承環境 TYPESAFE_API_KEY、有 key 會真的呼叫 API，應依當輪授權執行；無 key 仍可驗 RSS 與協定。工具清除 NEWS_TEST_* 環境覆寫，`--root` 可指定 news repo。hello／up／bye 同 seq；讀到 model done／off 或達總逾時後送 bye，必要時強制結束子程序。done／off 且子程序成功退出才回 0。（出處：§18.34）
 - **端到端觀測**：時間線包含各類 pending、model.state、話題摘要；結束列首份列表、完成、首次≥topic-min 的話題時間，以及分類／分析完成數、事件數、話題／基調與 model round 統計；另保留每輪 sources round 摘要（§20.41）。另列 model_usage 的 requests／http／retries，僅加總已完成輪的統計行，不重複加總 total_http；舊行缺 http／retries 則列 unknown，逾時未收尾的在途輪不包含在此摘要（§20.20）。--save 保存最後 envelope，逾時也可留下部分結果；不要把單次真資料秒數當固定性能保證。腳本變更至少實際跑過無 key 路徑，避免假 backend 掩蓋協定錯誤。（出處：§18.30、§18.32、§18.34）
-- **畫面驗收**：真殼 Chromium 深／淺、寬／窄皆看；開 DevTools 停用快取後重載，避免 front.js／style.js／labels.js／scope.js 舊檔混用。happy-dom 不驗真實 light-dark 顏色、捲動與完整排版；實機驗 Enter 更新焦點、話題返回捲動、窄版換行、Lighthouse label-in-name。基調負面與財經漲跌須可分辨。（出處：§18.17、§18.22、§18.27、§18.35、§18.41）
+- **畫面驗收**：真殼 Chromium 深／淺、寬／窄皆看；開 DevTools 停用快取後重載，避免 front.js／style.js／labels.js／scope.js／panel.js 舊檔混用。happy-dom 不驗真實 light-dark 顏色、捲動與完整排版；實機驗 Enter 更新焦點、話題返回捲動、窄版換行、Lighthouse label-in-name。基調負面與財經漲跌須可分辨。（出處：§18.17、§18.22、§18.27、§18.35、§18.41）
 - **chaos 的確定覆蓋**：固定 seed 仍注入多輪重疊、HTTP 失敗、認證關閉及退避，原有所有不變條件與 lane／結果覆蓋斷言保留。乾淨輪加全新 key 的話題候選（共用低頻詞，bigram 低於配對門檻）與無關填充資料，避免候選被舊配對快取或 10% 特徵詞門檻消掉；非 auth 情境逐一要求 topics 已呼叫且候選確實加入話題。不新增 sleep。驗收以預設 60 組、6 份 process 並行×5 批（共 30 次）全部通過，並以故意讓 topics 回 false 的變異驗證會失敗。（出處：§20.3）
 - **回歸強度與耐久**：針對門檻、待問排序、優先序、預留、共用開關、焦點與保存規則做變異驗證；不要為了通過而移除舊行為斷言，先確認是否被後續規格取代。既有耐久結果包含一小時七次更新 RSS 33～56MB 無上升、22 分鐘三輪正常。另有 tests/test_model_endurance.py 的200輪假 client 回歸；§20.38 的長版3000次操作／3009抓取輪中，末500輪 tracemalloc current 為4.713～4.726 MiB、末端較起點+3.4 KiB，閒置工作容器歸零、執行緒數固定。這不是每輪滿300則、所有快取滿額或任意網路永久無故障的保證。（出處：§18.18、§18.24、§18.32、§18.34、§18.38、§18.39）
 
@@ -2254,3 +2254,26 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - 計時沿用R3的Outbox接受列表時間、對齊real_run first_list，不是瀏覽器繪製時間。原始封包與過濾trace在 `/private/tmp/news-r6/guard-live/`，比較腳本 `/private/tmp/news-r6/compare-guard.py`；不納入repo。
 - **測試**：後半全套434 tests／OK（40.319s），前半542／542（20.787s，含200×100漫步）。慢速守衛變異把門檻改為600秒後，分類0批、原測試斷言1批而變紅；finally還原後通過。既有每批20秒的topic／tone預算測試及真快照每事件批10秒測試，精確次序改為符合15秒守衛，維持截止准入、在途接受與次輪續做斷言；沒有改chaos資料或斷言。空批與前半分類中字樣測試維持通過。
 - chaos固定seed47000、每次60情境，6並行×5＝30／30通過（1800情境、28.04s）；日志在 `/private/tmp/news-r6/guard-chaos/`。`git diff --check`通過，未commit。
+
+
+### 22.7 R7：答案落盤評估與面板聚合純函式
+
+#### R7-1：調查及候選設計（未實作，待 cc 決定）
+
+- **殼現況**：只讀 `/Users/gatewenlee/Code/modudock`。`docs/MANIFEST.md:44` 定義後半cwd為模組資料夾；`shell/hub/runner.go:333` 實際傳入模組Dir，未傳Env；`shell/proc/proc.go:150–152` 以 `os.Environ()` 繼承殼環境。`docs/RUNTIME-PROTOCOL.md` §3／§4 沒有資料目錄、儲存API或控制訊息；`shell/settings/settings.go:17–19` 只有Theme，並非模組儲存。`docs/ARCHITECTURE-v1.md:85` 允許模組使用外部檔案；不可依賴別的模組寫入來互通（同文件§4）。因此沒有殼供應的專用資料目錄，但自行快取不違反現行協議；這不是殼保證持久性的服務。
+- **路徑建議**：優先採使用者cache目錄（macOS `~/Library/Caches/modudock/news/<模組realpath雜湊>/`；Linux `$XDG_CACHE_HOME` 或 `~/.cache` 下同namespace），可另由模組自訂環境變數指定絕對路徑／停用，須再定名。不同checkout隔離，避免測試副本和正在跑的模組互相覆蓋。次選模組根 `.cache/`：協議容許，需新增gitignore、不可放進 `front/`（news宣告只公開front）；read-only安裝無法寫時退回記憶體，不能阻止閱讀。此輪不新增路徑、gitignore、環境變數或任何落盤程式。
+- **存什麼**：只存成功驗證／解碼的分類、各kind分析、模型配對、話題配對、報導語氣；配對與話題的false也必須存，否則丟掉主要省費來源。低信心的既有other／neutral回退是成功解碼答案，保持當前語意。自動配對邊、event分群、最終話題／家數／排序都以當次資料重算，不直接還原舊群組；不存RSS原文、first_seen、HTTP validators、in-flight、輪次、失敗、401／403或退避狀態。
+- **键與失效**：文章指紋為canonical JSON `[dedup_key(link), title, summary]`的SHA-256，欄位邊界明確；不存原link/title/summary。命名空間另含lane、MODEL、分析kind、題目模板＋criteria的雜湊、解碼schema／門檻版本（含0.35、same／same_topic採納門檻）；不能只用一個手填模型版號。單則以namespace＋文章指紋；事件配對以兩端指紋排序後組合；話題配對必須保留「種子→成員」方向，不能用無向集合。語氣問法只看該報導，不含話題title，所以語氣鍵無須話題id；分析finance／world／politics必須分開。模型／criteria／解碼變更即miss，原記憶體答案亦應與內容指紋一起驗證，不能由dedup_key舊答案繞過失效。
+- **讀取接線**：磁碟只提供有界雜湊索引。新RSS正規化後，以當次指紋查回目前dedup_key；配對／話題仍先走當前候選、24h防串連及成員規則，再查相應兩端答案，不還原持久化queue。新舊標題不同但link相同時，要按請求時擷取的指紋寫回，不能把晚到的舊答案記在新內容上。停用仍不發請求、analysis沿用目前停用時null的呈現；不持久化認證失敗開關。
+- **容量／時間**：建議TTL72小時（自成功寫入，不因命中延壽），分類／分析／語氣各4000、事件／話題各20000，上限合計52000；總檔案另限16MiB，超限按最早記錄淘汰，兩種上限同時成立。讀檔先查byte上限，JSON解析後驗schema、固定id、bool／數值範圍、時間與筆數；損毀、版本不合、過期都視為miss，禁pickle／eval。壞檔或I/O失敗只記一次固定原因，不帶內容／URL。
+- **寫入及退出**：協調者在cv下接收成功結果並標dirty，背景單writer在cv外編碼／寫檔；debounce約5秒、每輪完成也要求快照，佇列最多1份以最新取代。相同目錄唯一temp、檔案flush/fsync後os.replace，目錄0700／檔案0600；寫壞保留上一份。多process同namespace用nonblocking檔案鎖，鎖內重讀／合併同版本最新記錄並重新套上限，鎖忙就略過，不阻擋cv。bye不靠同步落盤、不join writer，仍維持1秒退出；剛完成但未落盤的答案可以漏存，不能影響正確性。
+- **黏著與隱私**：為接近warm round，可另存最多5個sticky種子指紋作選用規劃提示；只在當次新聞仍存在且符合種子資格時採用，否則丟棄。這是待決定的少量metadata，非舊話題成員表。只落雜湊、答案與必要schema／時間，不落key、原文、明文URL；雜湊仍可能用公開新聞反查，不能聲稱匿名。提供刪cache與停用方式，OS清掉cache後正常冷啟動。
+- **請求估計與驗收**：完整已落盤、同一份新聞及種子／候選時，重載目標0～3 HTTP；相隔約10分鐘可先以cc長跑warm 7～9推估7～12（相較約90省約87～92%），不是本輪已測量結果。種子改變、內容修訂、TTL淘汰、未完成輪或版本變更均可能更多，最壞回到85～100冷啟動。需要固定快照＋答案trace做冷／重載回放，驗前五與逐則結果一致、HTTP實際miss數；另驗一則內容變動使相關兩端答案失效、false復用、重啟／壞檔／半寫入／並行writer／read-only／容量／bye。不能只靠檔案存在宣稱等同warm輪。本輪jev 0。
+
+#### R7-2：面板聚合抽取（已實作）
+
+- 新增 `front/panel.js`，原生ES module、只依賴labels，不讀DOM／storage／時鐘、不改輸入；`aggregatePanel(groups, category)` 回傳事件／報導／來源數、已分析／待判定、四段計數與寬度、大盤方向及其餘數、固定順序排行與比例。傳入已由scope選取及按時間排列的事件群組，不改來源／類別／話題／搜尋／新進展交集。
+- `contributes`由scope搬入panel，scope再匯出同一函式供數字篩選／速覽／各家反事實計數共用；保留最早有效分析、缺分析不計無關、方向0.6門檻與其餘原規則。
+- `aggregateHistory(groups, category, at)` 注入終點，回傳4個6小時bucket、起訖、有效樣本、四段值、分母、長條比例、insufficient/empty/count/percent呈現模式及整數百分比；時間取群內最早報導，分析取最早有效者。左含右不含、最後含at；有效樣本<5不畫條，≥3段不足收合；方向分母排除無關，<5用計數。front只保留當地時間／文字格式、DOM、ARIA與顯示狀態；history仍在展開時才計算。
+- 首次抽取原542測試全綠；新增13條panel單元測試，無新聞原文fixture／網路。12個有意義變異首輪全殺（代表、pending、長條分母、大盤餘數、macro排除、同數順序、最大值、跌向、時間終點、分桶、收合門檻、歷史分母）；逐個及整輪finally還原，語法錯誤不算殺變異，腳本與輸出在 `/private/tmp/news-r7/mutate_panel.py`、`mutations.json`。
+- 驗證：`npm test` 555／555（20.974s，含200×100漫步）；另跑 `NEWS_WALK_SEEDS=200 NEWS_WALK_STEPS=100 node --test tests/front.walk.test.mjs`，201 tests／20000步全綠（16.097s）。無後半或殼改動、無真API呼叫，不宣稱真Chromium排版已驗；純呈現的數字／文字與DOM既有斷言未更改。

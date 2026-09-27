@@ -1,6 +1,7 @@
 // Native ES module; untrusted feed fields are only assigned as text.
 import { css } from "./style.js";
-import {selectScope, facetCounts, groupItems as scopeGroups, isNew as scopeIsNew, contributes as scopeContributes} from "./scope.js";
+import {aggregatePanel, aggregateHistory} from "./panel.js";
+import {selectScope, facetCounts, groupItems as scopeGroups, isNew as scopeIsNew} from "./scope.js";
 import {
   categoryNames, themeNames, regionNames, regionTopics, issueNames, issueTopics, topicNames,
   financial, validAnalysis, topicOf, arrow, eventId, searchText,
@@ -846,37 +847,20 @@ export default function mount(ctx) {
     historyContent.hidden = !historyOpen;
     historyContent.replaceChildren();
     if (!historyOpen) return;
-    const step = 6 * 60 * 60 * 1000, start = historyAt - 4 * step;
-    const buckets = Array.from({length: 4}, () => ({values: [0, 0, 0, 0], valid: 0}));
-    for (const group of groups) {
-      const stamp = Date.parse(text(group.reports[0].published));
-      if (!Number.isFinite(stamp) || stamp < start || stamp > historyAt) continue;
-      const bucket = buckets[Math.min(3, Math.floor((stamp - start) / step))];
-      const analysis = group.reports.map(validAnalysis).find(Boolean);
-      if (!analysis) continue;
-      bucket.valid++;
-      const signal = world ? analysis?.trend : analysis?.market;
-      const index = world ? {escalation: 0, stalemate: 1, deescalation: 2}[signal]
-        : {positive: 0, mixed: 1, negative: 3}[signal];
-      bucket.values[index ?? (world ? 3 : 2)]++;
-    }
-    const collapsed = buckets.filter(bucket => bucket.valid < 5).length >= 3;
+    const {buckets, collapsed} = aggregateHistory(groups, categories.value, historyAt);
     historyContent.replaceChildren(make("span", "nw-hint", collapsed ? "樣本不足，無法比較 24 小時內的變化"
         : "每 6 小時一段，同一事件只算一次"));
     if (collapsed) return;
     buckets.forEach((bucket, i) => {
-      const from = localTime(new Date(start + i * step).toISOString());
-      const to = localTime(new Date(start + (i + 1) * step).toISOString());
+      const from = localTime(new Date(bucket.from).toISOString());
+      const to = localTime(new Date(bucket.to).toISOString());
       const label = `${from}–${i === 3 ? "現在" : to}`;
       const short = `${from.slice(0, 2)}–${i === 3 ? "現在" : to.slice(0, 2)}`;
-      const values = bucket.values, total = values.reduce((sum, n) => sum + n, 0);
-      const denominator = total - values[world ? 3 : 2];
-      const insufficient = bucket.valid < 5;
-      // A percentage over a tiny denominator overstates certainty; show the count instead.
+      const {values, denominator, insufficient, mode} = bucket;
       const name = world ? "升級" : "偏多";
-      const result = insufficient ? "樣本不足" : !denominator ? "—"
-        : denominator < 5 ? `${name} ${values[0]}/${denominator}`
-        : `${name} ${Math.round(values[0] / denominator * 100)}%`;
+      const result = mode === "insufficient" ? "樣本不足" : mode === "empty" ? "—"
+        : mode === "count" ? `${name} ${values[0]}/${denominator}`
+        : `${name} ${bucket.percent}%`;
       const row = make("div", "nw-history-row");
       row.setAttribute("role", "group");
       row.setAttribute("aria-label", `${from}–${to}，${result}，樣本 ${bucket.valid} 個事件`);
@@ -888,15 +872,12 @@ export default function mount(ctx) {
       bar.dataset.empty = String(insufficient);
       if (!insufficient) parts.forEach(([id], j) => {
         const segment = make("span", `nw-segment nw-${id}`);
-        segment.style.width = `${values[j] / total * 100}%`;
+        segment.style.width = `${bucket.widths[j]}%`;
         bar.append(segment);
       });
       row.append(time, bar, make("span", "nw-history-value", result));
       historyContent.append(row);
     });
-  }
-  function contributes(group, id, category = categories.value) {
-    return scopeContributes(group, id, category);
   }
   function drawOverview(counts) {
     overview.hidden = !received || Boolean(categories.value || selectedTopic || selectedCount?.topic
@@ -989,33 +970,16 @@ export default function mount(ctx) {
       part.segment.className = `nw-segment nw-${parts[i][0]}`;
       part.dot.className = `nw-dot nw-${parts[i][0]}`;
     });
-    const counts = {escalation: 0, stalemate: 0, deescalation: 0, not_conflict: 0, positive: 0, negative: 0, mixed: 0, not_market: 0, other: 0};
-    const themes = new Map([...names.keys()].map(id => [id, {count: 0, bull: 0, bear: 0}]));
-    let pending = 0;
     const groups = groupItems(scoped);
+    const data = aggregatePanel(groups, categories.value);
+    const {counts, pending, sourceCount, analyzed, values, ranked, macro: total} = data;
     if (!politics) drawHistory(groups, world, parts);
-    for (const group of groups) {
-      const analysis = group.reports.map(validAnalysis).find(Boolean);
-      if (!analysis) {
-        pending++;
-        continue;
-      }
-      if (!politics) counts[world ? analysis.trend : analysis.market]++;
-      const theme = themes.get(topicOf(analysis));
-      theme.count++;
-      const direction = politics ? "" : arrow(analysis);
-      if (world ? analysis.trend === "escalation" : direction === "▲") theme.bull++;
-      if (world ? analysis.trend === "deescalation" : direction === "▼") theme.bear++;
-    }
-    const sourceCount = new Set(scoped.map(item => text(item.source)).filter(Boolean)).size;
-    const analyzed = groups.length - pending;
-    sampleCount.textContent = `${onlyNew ? "上次離開後的新進展：" : ""}${groups.length} 個事件（${scoped.length} 則報導），${sourceCount} 個來源${analyzed < groups.length ? `・已分析 ${analyzed}／${groups.length}` : ""}`;
+    sampleCount.textContent = `${onlyNew ? "上次離開後的新進展：" : ""}${groups.length} 個事件（${data.reports} 則報導），${sourceCount} 個來源${analyzed < groups.length ? `・已分析 ${analyzed}／${groups.length}` : ""}`;
     pendingCount.textContent = `待判定 ${pending}`;
     pendingCount.hidden = pending === 0 || !analysisEnabled || modelState === "paused";
     merging.hidden = eventsPending === 0;
     merging.textContent = eventsPending > 0 ? `・待合併 ${eventsPending}` : "";
     warning.hidden = groups.length >= 10;
-    const values = marketParts.map((_, i) => groups.filter(group => contributes(group, `signal:${i}`)).length);
     panelToggle.textContent = `${politics ? `議題分布：${groups.length} 個事件` : world
       ? `局勢走向：升級 ${values[0]}・緩和 ${values[2]}`
       : `股市訊號：偏多 ${values[0]}・偏空 ${values[3]}`}${analyzed < groups.length ? `・已分析 ${analyzed}／${groups.length}` : ""}`;
@@ -1025,14 +989,11 @@ export default function mount(ctx) {
     marketBar.setAttribute("aria-label", marketParts.map((part, i) => `${part.name} ${values[i]}`).join("、"));
     market.title = `${world ? "無關" : "與股市無關"} ${world ? counts.not_conflict : counts.not_market}、未明 ${counts.other}`;
     marketParts.forEach((part, i) => {
-      part.segment.style.width = `${analyzed ? values[i] / analyzed * 100 : 0}%`;
+      part.segment.style.width = `${data.widths[i]}%`;
       part.value.textContent = String(values[i]);
       part.entry.dataset.count = `signal:${i}`;
       part.entry.setAttribute("aria-pressed", String(selectedCount?.id === `signal:${i}`));
     });
-    const total = {count: groups.filter(group => contributes(group, "macro:all")).length,
-      bull: groups.filter(group => contributes(group, "macro:bull")).length,
-      bear: groups.filter(group => contributes(group, "macro:bear")).length};
     macro.replaceChildren(document.createTextNode("大盤方向："));
     for (const [id, label, value, className] of [["macro:all", "大盤／總經", total.count, ""],
       ["macro:bull", "利多", total.bull, "nw-up"], ["macro:bear", "利空", total.bear, "nw-down"]]) {
@@ -1042,13 +1003,8 @@ export default function mount(ctx) {
       button.setAttribute("aria-pressed", String(selectedCount?.id === id));
       macro.append(button);
     }
-    const remainder = total.count - total.bull - total.bear;
+    const remainder = total.remainder;
     if (remainder > 0) macro.append(make("span", "nw-hint nw-macro-rest", `其餘 ${remainder} 件無明確方向`));
-    // Stable sorting preserves the fixed table order for equal counts.
-    const ranked = [...themes].filter(([id, count]) => id !== "macro" && id !== "other" && count.count)
-      // Region/issue "other" stays visible but always ranks last.
-      .sort((a, b) => a[0].endsWith(":other") - b[0].endsWith(":other") || b[1].count - a[1].count).slice(0, 10);
-    const largestCount = Math.max(0, ...ranked.map(([, count]) => count.count));
     const existing = new Map([...ranking.querySelectorAll("button")].map(button => [button.dataset.topic, button]));
     const rankedIds = new Set(ranked.map(([id]) => id));
     for (const child of [...ranking.children]) {
@@ -1074,9 +1030,9 @@ export default function mount(ctx) {
       button.title = `${names.get(id)} ${count.count}${description ? `（${description}）` : ""}`;
       button.querySelector(".nw-theme-count").textContent = String(count.count);
       const bar = button.querySelector(".nw-theme-bar");
-      bar.style.width = `${count.count / largestCount * 100}%`;
-      (politics ? [count.count] : [count.bull, count.bear, count.count - count.bull - count.bear]).forEach((value, i) => {
-        bar.children[i].style.width = `${value / count.count * 100}%`;
+      bar.style.width = `${count.width}%`;
+      count.widths.forEach((width, i) => {
+        bar.children[i].style.width = `${width}%`;
       });
       ranking.append(button);
     }

@@ -1,6 +1,9 @@
 // Pure selection/counting. No DOM, storage, timers, or mutation of input reports.
 import {categoryNames, themeNames, regionTopics, issueTopics, financial,
-  validAnalysis, topicOf, arrow, eventId, searchText} from './labels.js';
+  validAnalysis, topicOf, eventId, searchText} from './labels.js';
+
+import {contributes} from './panel.js';
+export {contributes} from './panel.js';
 
 const text = value => typeof value === 'string' ? value : '';
 export const reportTime = item => {
@@ -19,20 +22,6 @@ export function groupItems(items, sourceOrder = new Map()) {
   for (const group of groups.values()) group.reports.sort((a, b) => reportTime(a) - reportTime(b)
     || ((sourceOrder.get(text(a.source)) ?? Infinity) - (sourceOrder.get(text(b.source)) ?? Infinity)) || 0);
   return [...groups.values()];
-}
-
-export function contributes(group, id, category) {
-  const analysis = group.reports.map(validAnalysis).find(Boolean);
-  if (!analysis) return false;
-  if (id.startsWith('signal:')) {
-    const signal = category === 'world' ? analysis.trend : analysis.market;
-    const index = category === 'world'
-      ? {escalation: 0, stalemate: 1, deescalation: 2}[signal]
-      : {positive: 0, mixed: 1, negative: 3}[signal];
-    return Number(id.slice(7)) === (index ?? (category === 'world' ? 3 : 2));
-  }
-  return analysis.theme === 'macro' && (id === 'macro:all'
-    || arrow(analysis) === (id === 'macro:bull' ? '▲' : '▼'));
 }
 
 export function facetCounts(items, {source = '', category = ''} = {}) {

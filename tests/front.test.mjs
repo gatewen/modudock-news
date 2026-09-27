@@ -5323,3 +5323,5 @@ test('R6 classification label requires positive pending and an absent category',
   h.message({...listing([article({category:''})]),model:{state:'working'},classify:{enabled:true,pending:1}});
   assert.equal(h.container.querySelector('.nw-category').textContent,'分類中');
 });
+
+import "./panel.test.mjs";
