@@ -23,6 +23,7 @@ MAX_PENDING = 60
 # R18 blind review: 7/10 removed members were off-topic. Gate new questions
 # only: cached true answers survive snapshot-dependent feature df changes.
 MIN_COMMON_FEATURES = 2
+MAX_FEATURE_DF = .1
 WINDOW = timedelta(hours=48)
 CRITERIA = {
     "same_topic": "同一個話題：同一件大事的報導、後續發展、各方反應、評論或影響",
@@ -52,7 +53,7 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None, admissi
     order = {key: (dates[key], sources.get(item['source'], len(sources)), key) for key, item in records.items()}
     tokens = {key: words(item['title']) for key, item in records.items()}
     df = Counter(word for terms in tokens.values() for word in terms)
-    features = {key: {word for word in terms if df[word] <= len(records) * .1} for key, terms in tokens.items()}
+    features = {key: {word for word in terms if df[word] <= len(records) * MAX_FEATURE_DF} for key, terms in tokens.items()}
     events = defaultdict(set)
     for key in records:
         events[groups[key]['event']].add(key)

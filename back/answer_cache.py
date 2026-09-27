@@ -58,7 +58,8 @@ def namespace(lane, kind=''):
     if lane == 'topics':
         # Cached true may bypass the feature gate only within this gate version.
         # Append only here so all other lanes keep their existing namespaces.
-        version.append(['MIN_COMMON_FEATURES', topics.MIN_COMMON_FEATURES])
+        version.append(['MIN_COMMON_FEATURES', topics.MIN_COMMON_FEATURES,
+                        'MAX_FEATURE_DF', topics.MAX_FEATURE_DF, inspect.getsource(topics.words)])
     return digest(version)
 
 

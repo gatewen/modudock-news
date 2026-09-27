@@ -120,6 +120,19 @@ class AnswerCacheTests(unittest.TestCase):
                     self.assertEqual(current, namespaces[lane])
                     self.assertEqual(len(cache), 1, lane)
 
+    def test_topic_df_and_tokenizer_versions_only_change_topic_namespace(self):
+        original = {lane: ac.namespace(lane) for lane in ('classify', 'events', 'topics', 'tone')}
+        original['analysis'] = ac.namespace('analysis', 'world')
+        for change in (patch.object(ac.topics, 'MAX_FEATURE_DF', .2, create=True),
+                       patch.object(ac.topics, 'words', lambda title: set())):
+            with change:
+                for lane, before in original.items():
+                    current = ac.namespace(lane, 'world' if lane == 'analysis' else '')
+                    if lane == 'topics':
+                        self.assertNotEqual(current, before)
+                    else:
+                        self.assertEqual(current, before)
+
     def test_pairs_unordered_topics_directed_and_content_boundaries(self):
         a, b = map(ac.fingerprint, (self.a, self.b))
         for lane in ('events', 'topics'):

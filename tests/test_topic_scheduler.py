@@ -1,3 +1,4 @@
+from hashlib import sha1
 from copy import deepcopy
 import threading
 from types import SimpleNamespace
@@ -224,6 +225,57 @@ class TopicSchedulerTests(unittest.TestCase):
             s.refresh()
             eventually(lambda:s.completed==2 and not s.topic_in_flight and len(received)==8, timeout=5)
             self.assertFalse(s.topic_cache)
+
+    def test_sent_topic_ranking_does_not_reorder_sticky_seeds(self):
+        items, _ = snapshot(size=60)
+        s, _ = self.make('http://unused', items)
+        packet = s._emit(s.caches, [])
+        a, b, c = [i['link'] for i in items[:3]]
+        s.last_topic_seeds = (b, a, 'removed')
+        packet['body']['topics']['list'] = [dict(id=sha1(k.encode()).hexdigest()[:12]) for k in (a, b, c)]
+        with patch.object(s, '_decorate_events', side_effect=lambda p:p):
+            s._send_list(packet, fitted=True)
+        self.assertEqual(s.last_topic_seeds, (b, a, c))
+
+    def test_idle_topic_refill_uses_current_plan_and_preserves_admission_guards(self):
+        items, _ = snapshot([story('extra', 'ALPHA ALPHAX unrelated report followup', 'D')])
+        s, _ = self.make('http://unused', items)
+        s._emit(s.caches, [])
+        with s.cv:
+            with s.topic_jobs.mutex:
+                s.topic_jobs.queue.clear()
+            s.topic_in_flight.clear()
+            for blocked in ('active', 'failed', 'deadline', 'logged'):
+                with self.subTest(blocked=blocked):
+                    target, attr, value = ((s, 'active', True) if blocked == 'active' else
+                        (s.model_work, 'failed', True) if blocked == 'failed' else
+                        (s.model_work, 'deadline', s.model_clock()-1) if blocked == 'deadline' else
+                        (s.model_work, 'logged', True))
+                    with patch.object(target, attr, value):
+                        s._refill_idle_topics()
+                    self.assertTrue(s.topic_jobs.empty())
+            s._refill_idle_topics()
+            self.assertEqual(s.topic_jobs.qsize(), 1)
+            self.assertEqual(len(s.topic_in_flight), 1)
+            s._refill_idle_topics()
+            self.assertEqual(s.topic_jobs.qsize(), 1)
+
+    def test_coordinator_refills_orphan_topic_before_logging_round(self):
+        items, _ = snapshot([story('extra', 'ALPHA ALPHAX unrelated report followup', 'D')])
+        s, _ = self.make('http://unused', items)
+        s._emit(s.caches, [])
+        with s.cv:
+            with s.topic_jobs.mutex:
+                s.topic_jobs.queue.clear()
+            s.topic_in_flight.clear()
+            s.pending_refresh = False
+            s.next_round = s.clock() + 600
+        # Run only the coordinator: no future result or refresh can rescue it.
+        s.coordinator.start()
+        eventually(lambda: s.topic_jobs.qsize() == 1)
+        with s.cv:
+            self.assertFalse(s.model_work.logged)
+            self.assertEqual(len(s.topic_in_flight), 1)
 
     def test_seed_state_tracks_only_successfully_sent_lists_and_survives_round_stop(self):
         # Keep the older replacement seed visible under the per-source ceiling.

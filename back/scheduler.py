@@ -577,7 +577,8 @@ class Scheduler:
         waiting_types = tuple(lane.result_type for lane in self.lanes if lane.wait_results)
         while True:
             with self.cv:
-                self._finish_model_rounds()
+                # The coordinator refills orphan topics before finalizing rounds.
+                self.cv.notify_all()
                 while not self.stopping and (
                     (self._next_lane() is None and self._next_requeue() is None)
                     or any(isinstance(result, waiting_types) for result in self.results)
@@ -865,6 +866,20 @@ class Scheduler:
             self.topic_in_flight.add((seed, key))
         self.cv.notify_all()
 
+    def _refill_idle_topics(self):
+        # Coordinator, cv held, before round finalization. A changed plan must
+        # not wait for another TopicResult to make progress.
+        work = self.model_work
+        if (self.active or self.last_list is None or work is None or not work.admitted
+                or work.logged or work.failed or self.stopping or self.topic_matcher is None
+                or not self._classify_enabled() or not self.topic_jobs.empty() or self.topic_in_flight
+                or (work.deadline is not None and self.model_clock() >= work.deadline)
+                or self.event_in_flight or self._unresolved_events()):
+            return
+        packet = self._decorate(self.last_list)
+        if packet['body']['topics']['pending']:
+            self._enqueue_topics(packet)
+
     def _enqueue_tones(self, packet):
         work = self.model_work
         if (self.tone_client is None or work is None or self.stopping or work.failed
@@ -1062,8 +1077,12 @@ class Scheduler:
                     # seeds until event completion validates their eligibility.
                     if self.answer_cache is None or not self.answer_cache.validate_loaded_seeds:
                         # A seed trimmed by fit simply stops being sticky.
-                        self.last_topic_seeds = tuple(seeds[topic['id']] for topic in packet['body'].get('topics', {}).get('list', [])
-                                                      if topic.get('id') in seeds)
+                        visible = tuple(seeds[topic['id']] for topic in packet['body'].get('topics', {}).get('list', [])
+                                        if topic.get('id') in seeds)
+                        # Display rank is not planning priority: keep surviving
+                        # sticky seeds in their previous order, append newcomers.
+                        self.last_topic_seeds = tuple(dict.fromkeys(
+                            [key for key in self.last_topic_seeds if key in visible] + list(visible)))
                     if self.answer_cache is not None:
                         self.answer_cache.remember_seeds(self, packet['body'])
                 if publish:
@@ -1150,6 +1169,7 @@ class Scheduler:
                     packet = self._accept(self.results.popleft())
                     if packet is not None:
                         resends[:] = [packet]
+                self._refill_idle_topics()
                 self._finish_model_rounds()
                 if not resends:
                     changed = self._model_resend(set())
