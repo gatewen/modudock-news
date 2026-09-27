@@ -16,18 +16,20 @@ import threading
 import time
 
 if __package__:
+    from .model_batches import plan_batch
     from .answer_cache import CacheBridge
     from .feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round, _retryable_failure
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
-    from .events import candidate_pairs, group_events, _fits as pairs_fit, pack_batch as pack_event_batch
+    from .events import candidate_pairs, group_events, _fits as pairs_fit
     from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
+    from model_batches import plan_batch
     from answer_cache import CacheBridge
     from feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round, _retryable_failure
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
-    from events import candidate_pairs, group_events, _fits as pairs_fit, pack_batch as pack_event_batch
+    from events import candidate_pairs, group_events, _fits as pairs_fit
     from topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 
 
@@ -492,65 +494,24 @@ class Scheduler:
         return kept
 
     def _take_batch(self, lane, work, first):
-        # Called under cv. Capture analysis kind here, before releasing cv for HTTP.
-        jobs, batch = lane.jobs, [first]
-        kind = None
-        if lane.name == 'events':
-            with jobs.mutex:
-                queued = [first]
-                while jobs.queue and jobs.queue[0][0] is work:
-                    queued.append(jobs.queue.popleft()[1])
-                batch, remaining = pack_event_batch(queued)
-                jobs.queue.extendleft((work, pair) for pair in reversed(remaining))
-                jobs.not_full.notify_all()
-        elif lane.name == 'topics':
-            eligible = self._topic_admission()
-            dropped = []
-            if first.right[0] not in eligible.get(first.left[0], ()):
-                dropped.append(first)
-                batch = []
-            with jobs.mutex:
-                index = 0
-                while index < len(jobs.queue):
-                    next_work, pair = jobs.queue[index]
-                    if next_work is not work:
-                        break
-                    if pair.right[0] not in eligible.get(pair.left[0], ()):
-                        dropped.append(pair)
-                        del jobs.queue[index]
-                    elif lane.fits(batch + [pair]):
-                        batch.append(pair)
-                        del jobs.queue[index]
-                    else:
-                        index += 1
-                jobs.not_full.notify_all()
-            self._prune_topic_batch(work, dropped, eligible)
-        elif lane.name == 'analysis':
-            kind = analysis_kind(self.classify_cache.get(first[0], ""))
-            # Leave other kinds in their original positions/order.
-            # cv owns admission; the queue mutex protects its storage.
-            with jobs.mutex:
-                index = 0
-                while index < len(jobs.queue) and len(batch) < MAX_ITEMS:
-                    next_work, next_item = jobs.queue[index]
-                    if next_work is not work:
-                        break
-                    if analysis_kind(self.classify_cache.get(next_item[0], "")) != kind:
-                        index += 1
-                        continue
-                    if not lane.fits(batch + [next_item]):
-                        break
-                    batch.append(next_item)
-                    del jobs.queue[index]
-                jobs.not_full.notify_all()
-        else:
-            while not jobs.empty() and (lane.pair or len(batch) < MAX_ITEMS):
-                with jobs.mutex:
-                    next_work, next_item = jobs.queue[0]
-                if next_work is not work or not lane.fits(batch + [next_item]):
+        # cv held. Only this work's contiguous prefix may enter the planner.
+        eligible = self._topic_admission() if lane.name == 'topics' else None
+        jobs = lane.jobs
+        with jobs.mutex:
+            pending = []
+            for next_work, item in jobs.queue:
+                if next_work is not work:
                     break
-                batch.append(jobs.get_nowait()[1])
-        return batch, kind
+                pending.append(item)
+            plan = plan_batch(lane.name, first, pending, fits=lane.fits,
+                              categories=self.classify_cache, eligible=eligible)
+            for _ in pending:
+                jobs.queue.popleft()
+            jobs.queue.extendleft((work, item) for item in reversed(plan.remaining))
+            jobs.not_full.notify_all()
+        if lane.name == 'topics':
+            self._prune_topic_batch(work, plan.dropped, eligible)
+        return plan.batch, plan.kind
 
     def _record_http(self, work, retry):
         # Count just before opener.open, including attempts that fail to connect.
