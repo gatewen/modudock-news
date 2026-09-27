@@ -1011,9 +1011,12 @@ class Scheduler:
                     self._remember_pairs(self.last_list, pairs)
                     keys = [dedup_key(item['link']) for item in packet['body']['items']]
                     seeds = {sha1(key.encode('utf-8')).hexdigest()[:12]: key for key in keys}
-                    # A seed trimmed by fit simply stops being sticky.
-                    self.last_topic_seeds = tuple(seeds[topic['id']] for topic in packet['body'].get('topics', {}).get('list', [])
-                                                  if topic.get('id') in seeds)
+                    # A pending first list has no topics yet: preserve loaded
+                    # seeds until event completion validates their eligibility.
+                    if self.answer_cache is None or not self.answer_cache.validate_loaded_seeds:
+                        # A seed trimmed by fit simply stops being sticky.
+                        self.last_topic_seeds = tuple(seeds[topic['id']] for topic in packet['body'].get('topics', {}).get('list', [])
+                                                      if topic.get('id') in seeds)
                     if self.answer_cache is not None:
                         self.answer_cache.remember_seeds(self, packet['body'])
                 if publish:

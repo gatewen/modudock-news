@@ -2301,3 +2301,14 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **離線差異回放**：以重構前原始碼抽出的_take_batch作oracle（非手寫模擬），固定seed229009、五lane各600組，共3000組。包括混合kind／種子、失效候選、超長first、字數邊界、空批及不同輪次插入；逐項比較batch、kind、remaining的順序與work.round_id、淘汰finished、accounted、awaiting及requests，零差異。腳本及原始碼在 `/private/tmp/news-r9/replay.py`、`scheduler_before.py`，重構後／變異還原後皆通過；不加入正常repo測試的重複舊實作。
 - **測試**：新增13條純函式／薄adapter測試；既有測試斷言未改。後半全套468／OK（43.310s），前半555／555（23.440s，含200×100漫步）。chaos 6並行×5＝30／30（30.47s）；另注入R8答案快取，保持原Scenario資料／斷言，再30／30（30.38s），各1800情境。獨立200輪耐久3.073s，429／529／壞回應／逾時／預算與重疊更新都涵蓋；結束model_rounds、results、requeues、全部in-flight與工作queue皆0，owned threads維持8（RSS4＋model3＋coordinator1），快取未突破原上限，停止後逐一確認thread退出。
 - **變異**：12個首輪全殺、0存活：分類／語氣筆數、字數、分析kind／字數停止／筆數、話題first重驗／queued重驗／跳過裝不下的題目、remaining順序、事件共用裝箱、跨輪邊界、空批確認。只計斷言FAIL，不計語法或執行ERROR；每個及整輪finally還原並清對應pyc，還原後13條新測試與3000組回放再通過。脚本及逐案log在 `/private/tmp/news-r9/mutate.py`、`mutations.json`。`git diff --check`通過。本輪jev 0、不commit。
+
+### 22.10 R10：答案快取的種子、時鐘與寫檔收尾
+
+- **M1 還原種子生命週期**：首份列表若events.pending>0，話題尚未真正規劃，送出空話題不再把last_topic_seeds覆寫為空。`_send_list` 在CacheBridge.validate_loaded_seeds仍為true時保留還原種子；配對完成、validate_seeds按當次事件與≥3家資格驗證後，才恢復從已送出話題更新種子的原行為。未啟用落盤cache及完成首次驗證後的流程不變；種子被裁切／失去資格仍由既有驗證剔除。
+- **M2 時鐘倒退**：把「可命中」與「可保留於檔案」分開。未來時間戳一律不提供snapshot／seed命中；相對目前牆鐘未來≤24小時的有效答案與種子metadata仍讀入有界索引、合併寫回保留，時鐘恢復即可使用，不因一次NTP倒退清空檔案。超過24小時、已過72h TTL或格式不合才排除；既有每lane筆數／16MiB容量限制仍適用。命中不續期，TTL仍以原成功時間計算。
+- **L1 中斷暫存檔**：取得跨process flock之後、建立新temp之前清理：只刪 `answers-[a-z0-9_]{8}.tmp` 格式的普通檔案，mtime必須嚴格早於現在10分鐘；不跟隨symlink、不刪目錄／其他名稱／新tmp。拿不到鎖便不清、不等待；持鎖中的其他writer受同一把鎖保護。bye仍不join、不同步落盤；中止留下的新temp可暫存，後續寫入取得鎖且足夠舊時才清除。
+- **L2 更新後FIFO**：過期key重新取得答案時，覆寫後move_to_end，視為新取得；未過期命中仍不改順序或時間。後續容量淘汰不會優先刪剛更新的舊key。
+- **L3 訊息分離**：JSON／解碼壞檔記 `answer cache: corrupt file ignored; will rebuild`，不因此停用writer；下一次成功flush重建。真正I/O不可用仍記 `answer cache: unavailable; using memory`，寫入失敗停用writer、退回記憶體。兩類各有獨立的一次提示旗標，壞檔提示不吃掉之後不可寫的警告；不含路徑、URL、原文或例外內文。
+- **先紅後綠**：在 `tests/test_answer_cache.py` 新增6條回歸，修前6個assertion failures，修後27條快取測試全綠。覆蓋兩次冷scheduler＋第二次新增未決配對、倒退前後重啟／flush、24h邊界與seed恢復、flock／mtime／精確名稱／symlink保護、expired key更新後淘汰，以及壞檔修復後再遇replace失敗的兩種提示。
+- **重現前後**：種子原本restore時為非空、validate時為空，修後兩處一致；100筆答案倒退60秒再寫1筆，原本磁碟／恢復後只有1筆，修後保留101筆（倒退期間snapshot只有新取得的1筆）。過期a更新後再新增d，原本a被淘汰，修後a、d皆在。三次daemon於fsync前中止留下的tmp，未滿10分鐘先保留；以mtime模擬超過10分鐘後下一次flush全清，只剩answers.json及writer.lock。52,000筆滿載腳本修後flush約0.23s、啟動0.37s、restore約0.20s，未宣稱性能改善。
+- **驗證**：`/usr/local/bin/python3 -m unittest` 474／OK（42.109s）；npm555／555（24.243s）。一般chaos6並行×5＝30／30（28.69s）；R8快取注入同樣30／30（31.24s），各1800情境。原始重現使用runpy由本repo啟動，避免rev3b目錄內舊back副本遮蔽修後程式；log及先紅後綠紀錄在 `/private/tmp/news-r10/`。`git diff --check`通過。本輪jev 0、未commit。

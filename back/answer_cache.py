@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 import threading
 import time
@@ -21,6 +22,9 @@ else:
     from feedparse import dedup_key
 
 TTL = 72 * 3600
+MAX_FUTURE = 24 * 3600
+TEMP_MAX_AGE = 10 * 60
+TEMP_NAME = re.compile(r'^answers-[a-z0-9_]{8}\.tmp$')
 MAX_BYTES = 16 * 1024 * 1024
 LIMITS = dict(classify=4000, analysis=4000, events=20000, topics=20000, tone=4000)
 SCHEMA = 1
@@ -78,6 +82,7 @@ class AnswerCache:
         self.urgent = threading.Event()
         self.disabled = False
         self.warned = False
+        self.corrupt_warned = False
         self.revision = 0
         self.saved = 0
         self.seed_hint = None
@@ -93,7 +98,12 @@ class AnswerCache:
             self.warned = True
             self.log('answer cache: unavailable; using memory')
 
-    def _valid(self, row):
+    def _warn_corrupt(self):
+        if not self.corrupt_warned:
+            self.corrupt_warned = True
+            self.log('answer cache: corrupt file ignored; will rebuild')
+
+    def _valid(self, row, *, retain_future=False):
         if not isinstance(row, list) or len(row) != 6:
             return False
         lane, ns, kind, ends, stamp, value = row
@@ -104,7 +114,7 @@ class AnswerCache:
                 and isinstance(ends, list) and len(ends) == (2 if lane in ('events', 'topics') else 1)
                 and all(isinstance(x, str) and HEX.fullmatch(x) for x in ends)
                 and type(stamp) in (int, float) and math.isfinite(stamp)
-                and 0 <= self.clock() - stamp < TTL
+                and (-MAX_FUTURE if retain_future else 0) <= self.clock() - stamp < TTL
                 and valid_value(lane, value)
                 and (lane != 'analysis' or value['kind'] == kind))
 
@@ -125,12 +135,17 @@ class AnswerCache:
                 return OrderedDict()
             hint = obj.get('seeds')
             with self.lock:
-                if self._valid_seeds(hint) and (self.seed_hint is None or hint['at'] > self.seed_hint['at']):
+                if self._valid_seeds(hint, retain_future=True) and (
+                        not self._valid_seeds(self.seed_hint, retain_future=True)
+                        or hint['at'] > self.seed_hint['at']):
                     self.seed_hint = hint
-            return self._prune({self._key(row): row for row in obj['records'] if self._valid(row)})
+            return self._prune({self._key(row): row for row in obj['records'] if self._valid(row, retain_future=True)})
         except FileNotFoundError:
             return OrderedDict()
-        except (OSError, ValueError, RecursionError):
+        except (ValueError, RecursionError):
+            self._warn_corrupt()
+            return OrderedDict()
+        except OSError:
             self._warn()
             return OrderedDict()
 
@@ -140,7 +155,7 @@ class AnswerCache:
         # Reserve the maximum five-fingerprint hint while producers may update it.
         size = len(encoded({'schema': SCHEMA, 'records': [], 'seeds': None})) + 512
         for key, row in sorted(records.items(), key=lambda entry: entry[1][4], reverse=True):
-            if not self._valid(row) or counts[row[0]] >= self.limits[row[0]]:
+            if not self._valid(row, retain_future=True) or counts[row[0]] >= self.limits[row[0]]:
                 continue
             cost = len(encoded(row)) + 1
             if size + cost > self.max_bytes:
@@ -162,6 +177,7 @@ class AnswerCache:
             if key not in self.records:
                 self.counts[lane] += 1
             self.records[key] = row
+            self.records.move_to_end(key)  # A refreshed expired answer is newly acquired.
             # Bound memory immediately; encoding/filesystem remain off coordinator.
             if self.counts[lane] > self.limits[lane]:
                 victim = next(k for k, r in self.records.items() if r[0] == lane)
@@ -170,10 +186,11 @@ class AnswerCache:
             self.revision += 1
         self.wake.set()
 
-    def _valid_seeds(self, hint):
+    def _valid_seeds(self, hint, *, retain_future=False):
         return (isinstance(hint, dict) and set(hint) == {'namespace', 'at', 'items'}
                 and isinstance(hint['namespace'], str) and HEX.fullmatch(hint['namespace'])
-                and type(hint['at']) in (int, float) and 0 <= self.clock() - hint['at'] < TTL
+                and type(hint['at']) in (int, float)
+                and (-MAX_FUTURE if retain_future else 0) <= self.clock() - hint['at'] < TTL
                 and isinstance(hint['items'], list) and len(hint['items']) <= 5
                 and all(isinstance(fp, str) and HEX.fullmatch(fp) for fp in hint['items']))
 
@@ -198,6 +215,21 @@ class AnswerCache:
         with self.lock:
             return [deepcopy(row) for row in self.records.values() if self._valid(row)]
 
+    def _clean_temps(self):
+        # Caller holds the process flock. Never remove a peer's current temp,
+        # another filename, symlink or directory; bye may leave old regular files.
+        cutoff = self.clock() - TEMP_MAX_AGE
+        with os.scandir(self.directory) as entries:
+            for entry in entries:
+                if not TEMP_NAME.fullmatch(entry.name):
+                    continue
+                try:
+                    info = entry.stat(follow_symlinks=False)
+                    if stat.S_ISREG(info.st_mode) and info.st_mtime < cutoff:
+                        os.unlink(entry.path)
+                except FileNotFoundError:
+                    pass
+
     def flush(self):
         """Writer only (public for deterministic tests); never block on a peer."""
         if self.disabled or not self.writing.acquire(blocking=False):
@@ -211,6 +243,7 @@ class AnswerCache:
                     fcntl.flock(lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 except BlockingIOError:
                     return False
+                self._clean_temps()
                 disk = self._read()
                 with self.lock:
                     revision = self.revision
@@ -220,7 +253,7 @@ class AnswerCache:
                         disk[key] = row
                 merged = self._prune(disk)
                 with self.lock:
-                    hint = deepcopy(self.seed_hint)
+                    hint = deepcopy(self.seed_hint) if self._valid_seeds(self.seed_hint, retain_future=True) else None
                 data = encoded({'schema': SCHEMA, 'records': list(merged.values()), 'seeds': hint})
                 if len(data) > self.max_bytes:
                     raise OSError('cache capacity')

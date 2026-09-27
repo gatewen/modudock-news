@@ -285,6 +285,131 @@ class AnswerCacheTests(unittest.TestCase):
                   {'kind': 'world', 'trend': 'other', 'region': 'other', 'url': self.a[0]})
         self.assertEqual(len(store.snapshot()), 10)
 
+    def test_restart_pending_events_preserves_restored_seeds_until_validation(self):
+        def run(store, extra=()):
+            scenario = Scenario(47002, 0)
+            scenario.clean = True
+            scenario.current = list(scenario.snapshots[3]) + list(extra)
+            scheduler = scenario.scheduler
+            bridge = scheduler.answer_cache = ac.CacheBridge(store)
+            seen = {}
+            restore, validate = bridge.restore, bridge.validate_seeds
+            def restoring(sc, items):
+                restore(sc, items)
+                seen.setdefault('restored', sc.last_topic_seeds)
+            def validating(sc, items, groups):
+                if bridge.validate_loaded_seeds:
+                    seen.setdefault('validating', sc.last_topic_seeds)
+                validate(sc, items, groups)
+            bridge.restore, bridge.validate_seeds = restoring, validating
+            try:
+                scheduler.start()
+                eventually(lambda: scenario.settled() and scheduler.last_list['body']['model']['state'] == 'done', timeout=5)
+                packets = list(scheduler.outbox.packets.queue)
+                first = next(p['body'] for p in packets if p.get('body', {}).get('op') == 'list')
+                return seen, scheduler.last_topic_seeds, first
+            finally:
+                scheduler.stop()
+                for worker in scheduler.workers + scheduler.classify_workers + [scheduler.coordinator]:
+                    worker.join(2)
+                    self.assertFalse(worker.is_alive())
+        _, seeds, _ = run(self.cache)
+        self.assertTrue(seeds)
+        self.assertTrue(self.cache.flush())
+        seen, _, first = run(self.new(), [(99, '跨海和平峰會合作協議進展今日續談', '丙')])
+        self.assertGreater(first['events']['pending'], 0)
+        self.assertEqual(seen['restored'], seeds)
+        self.assertEqual(seen['validating'], seeds)
+
+    def test_clock_rollback_misses_but_flush_preserves_recoverable_answers(self):
+        for n in range(100):
+            self.put((str(n), '', ''))
+        self.cache.flush()
+        self.now -= 60
+        # Exercise both the existing process and a restarted one.
+        restarted = self.new()
+        self.assertEqual(restarted.snapshot(), [])
+        self.assertEqual(self.cache.snapshot(), [])
+        self.put(('new', '', ''))
+        self.cache.flush()
+        restarted.flush()
+        self.assertEqual(len(json.loads(self.cache.path.read_text())['records']), 101)
+        self.now += 120
+        self.assertEqual(len(self.new().snapshot()), 101)
+
+    def test_clock_future_bound_and_seed_hint_recovery(self):
+        self.put()
+        ns = ac.namespace('topics')
+        self.cache.remember_seeds(ns, [ac.fingerprint(self.a)])
+        self.cache.flush()
+        stamp = self.now
+        self.now -= 86400
+        restarted = self.new()
+        self.assertEqual(restarted.snapshot(), [])
+        self.assertEqual(restarted.seeds(ns), [])
+        restarted.flush()
+        self.now = stamp
+        self.assertEqual(len(self.new().snapshot()), 1)
+        self.assertEqual(self.new().seeds(ns), [ac.fingerprint(self.a)])
+        self.now -= 86401
+        self.new().flush()
+        self.now = stamp
+        self.assertEqual(self.new().snapshot(), [])
+        self.assertEqual(self.new().seeds(ns), [])
+
+    def test_old_writer_temp_cleanup_requires_lock_age_and_exact_regular_name(self):
+        root = Path(self.temp.name)
+        old = root / 'answers-abcdefgh.tmp'
+        fresh = root / 'answers-12345678.tmp'
+        foreign = root / 'answers-not-ours.tmp'
+        target = root / 'other-data'
+        folder = root / 'answers-abcdefgh.tmp.dir'
+        link = root / 'answers-87654321.tmp'
+        for path in (old, fresh, foreign, target):
+            path.write_text('keep unless abandoned writer temp')
+            os.utime(path, (self.now - 601, self.now - 601))
+        os.utime(fresh, (self.now - 599, self.now - 599))
+        folder.mkdir()
+        link.symlink_to(target)
+        with (root / 'writer.lock').open('wb') as peer:
+            fcntl.flock(peer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertFalse(self.cache.flush())
+            self.assertTrue(old.exists())
+        self.assertTrue(self.cache.flush())
+        self.assertFalse(old.exists())
+        for path in (fresh, foreign, target, folder, link):
+            self.assertTrue(path.exists(), path.name)
+
+    def test_expired_key_refreshed_moves_to_fifo_tail(self):
+        self.cache = self.new(limits=dict(ac.LIMITS, classify=3))
+        for key in 'abc':
+            self.put((key, '', ''))
+            self.now += 1
+        self.now += ac.TTL
+        self.put(('a', '', ''))
+        self.put(('d', '', ''))
+        fingerprints = [row[3][0] for row in self.cache.snapshot()]
+        self.assertIn(ac.fingerprint(('a', '', '')), fingerprints)
+        self.assertIn(ac.fingerprint(('d', '', '')), fingerprints)
+        self.assertEqual(len(self.cache.records), 3)
+
+    def test_corrupt_read_repaired_does_not_consume_unwritable_warning(self):
+        self.put()
+        self.cache.path.write_text('{broken')
+        self.assertTrue(self.cache.flush())
+        self.assertFalse(self.cache.disabled)
+        self.assertEqual(self.logs, ['answer cache: corrupt file ignored; will rebuild'])
+        self.assertEqual(len(self.new().snapshot()), 1)
+        self.cache.path.write_text('{broken again')
+        self.assertTrue(self.cache.flush())
+        self.assertEqual(len(self.logs), 1)
+        with patch.object(ac.os, 'replace', side_effect=OSError('secret URL')):
+            self.put(self.b)
+            self.assertFalse(self.cache.flush())
+        self.assertTrue(self.cache.disabled)
+        self.assertEqual(self.logs, ['answer cache: corrupt file ignored; will rebuild',
+                                    'answer cache: unavailable; using memory'])
+
     def test_two_cold_schedulers_same_snapshot_zero_http_and_identical_topics(self):
         def run(store):
             scenario = Scenario(47001 + 1, 0)  # clean classify path, deterministic answers
