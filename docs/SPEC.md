@@ -1427,6 +1427,8 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 | paused | budget | 沒有上述工作，本 work 已過 deadline，且未以 failed 優先判定 | 整理暫停，下次更新繼續 |
 | paused | waiting | 尚有 pending，但沒有工作、失敗或逾時可解釋 | 整理暫停，等待下次更新 |
 
+- **模型答案落盤（§22.8）**：模組根 `.cache/answers.json`，不寫家目錄、不在公開front內；單背景daemon合併寫，bye不等待。只保存五lane成功解碼答案（包括false），以dedup key／標題／摘要SHA-256與lane、MODEL、題目／criteria／解碼門檻版本、analysis kind隔離；事件兩端無向，話題有向。TTL72h，單則lane各4000、配對lane各20000，總檔≤16MiB；0600、原子replace、跨process非阻塞鎖。每輪新列表重建當次答案，改稿及晚到舊答案不套到新內容；最多五個種子指紋須仍有三家資格。群組／話題每次重算，不存原文、URL、key、失敗狀態。壞檔／過期／版本變更為miss，不可寫退回記憶體、一行安全log；清除方式為停止模組後刪.cache。最近尚未寫入答案可以漏存。
+
 ### 19.2 前半
 
 - **結構與樣式**：`front.js` 管 mount／狀態／DOM，`style.js` 匯出 scoped CSS，`labels.js` 放固定名稱與無狀態驗證，`scope.js` 放範圍選取／群組與計數純函式（§22.4），`panel.js` 放三種面板及24小時聚合，contributes由scope再匯出共用（§22.7）。style 放模組根 section.nw，CSS 不操作殼或 document.head；根 `.nw` 設 position:relative，讓 `.nw-sr` 與窄版快捷鍵隱藏名稱的 absolute 定位留在模組內；隱藏文字使用 1px、clip／clip-path、overflow:hidden、white-space:nowrap，不用 display:none（§20.17）。吃 --md-* token、light-dark 深淺色、ResizeObserver 驅動的窄版／排行 class，含 20px 遲滯（§20.27）。工具列、篩選與列文字同左緣；財經紅漲綠跌，國際升級用 danger、緩和用 accent。基調負面用深墨色／深色亮灰，不借用財經紅綠。（出處：§14、§15、§17.3、§18.22、§18.27、§18.35）
@@ -1496,7 +1498,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **分析材料與解讀**：只送標題＋摘要，不抓全文；熱度是目前收錄報導／事件數，不是民意或市場調查，來源保底只避免被擠光，不代表樣本均衡。基調不判斷真假或政黨立場，事件與話題仍可能誤合併／漏合併。首次啟動、深夜與篩選後的小樣本尤其不能過度解讀。（出處：§13.8、§16、§18.1、§18.8、§18.11、§18.16、§18.36）
 - **不做藍綠傾向、民生負擔、政策階段、多題材**：政治只做中立議題分類。既有真樣本民生負擔 20 則有 18 則不適用、政策階段 20 則有 14 則不適用；次要題材 20 則只有 2 則過 0.6 且一則牽強，沒有足夠收益支持增加面板與模型題目。（出處：§17 實驗紀錄、§18.16；多題材不再列為待實作功能）
 - **不新增題材、不降話題種子到兩家、不做題材升溫**：題材是人維護的固定表；新種子至少三家有明確測試，previous 黏著例外依 §19.1。近六小時樣本太少，升溫容易被一兩則放大；這也是歷史分段不足時只顯示提示的原因。不把「基調移出首頁」當瘦身方案，首頁可見就是用戶需要的風向價值。（出處：§18.18、§18.36、§18.43；不新增題材為本次審核既定範圍）
-- **不做跨輪累積新聞與內容指紋**：目前每輪以各來源最新成功快取組列表，失敗可 stale 沿用，但不維護累積歷史資料庫；模型 key 仍跟 dedup key，不用內容指紋偵測同 URL 改稿。localStorage 只存上述四項偏好／基準，新聞與模型快取不持久化。（出處：§9、§18.4、§18.24、§18.43、§18.45；跨輪累積／內容指紋為本次審核既定不做事項，§18 未另立提案）
+- **不維護新聞歷史資料庫**：每輪以來源快取組列表，失敗可 stale 沿用，自由時報另有 §21 的短期記憶體保留；不落盤新聞原文。§22.8 新增模型答案的內容指紋，用於快取失效，不改新聞去重／事件身分，也不提供歷史版本。localStorage 仍只存上述四項偏好／基準；模型成功答案改存模組根 `.cache/`（72h、16MiB）。（出處：§9、§18.4、§18.24、§18.43、§18.45；跨輪累積／內容指紋為本次審核既定不做事項，§18 未另立提案）
 - **網路與預算界線**：Python thread 不能終止卡住的 DNS／慢 header；read_deadline 不是所有底層網路階段的硬牆鐘上限。RSS worker 被占滿時後續輪可能全 deadline、顯示 stale；模型工作有准入預算而非整輪保證 60 秒結束，paused 需後續更新接手。bye 靠 daemon／process 退出，不假稱已取消遠端請求。（出處：§5、§18.2、§18.32、§18.37）
 - **暫不擴大並行／批次或重寫前半**：分析按 kind 分批曾讓分類後補送 34→10、總耗時 40.5→28.1 秒；焦點優先在兩次對照中由約 32 秒提早到約 20 秒，總時間相近；三條並行後實測整輪約 41→15 秒、焦點 24→9 秒。雖曾測同 key 十二並行可用，仍只開三條、不放大二十則批次以免準確率風險。完整前半重畫約 10ms、CPU 四倍降速約 42ms；一輪後半 CPU 3.8s（單核約 24%），目前沒有數據支持額外重構。（出處：§18.1、§18.2、§18.30～§18.33、§18.43）
 
@@ -2258,7 +2260,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 
 ### 22.7 R7：答案落盤評估與面板聚合純函式
 
-#### R7-1：調查及候選設計（未實作，待 cc 決定）
+#### R7-1：調查及候選設計（路徑與實作已由 §22.8 取代）
 
 - **殼現況**：只讀 `/Users/gatewenlee/Code/modudock`。`docs/MANIFEST.md:44` 定義後半cwd為模組資料夾；`shell/hub/runner.go:333` 實際傳入模組Dir，未傳Env；`shell/proc/proc.go:150–152` 以 `os.Environ()` 繼承殼環境。`docs/RUNTIME-PROTOCOL.md` §3／§4 沒有資料目錄、儲存API或控制訊息；`shell/settings/settings.go:17–19` 只有Theme，並非模組儲存。`docs/ARCHITECTURE-v1.md:85` 允許模組使用外部檔案；不可依賴別的模組寫入來互通（同文件§4）。因此沒有殼供應的專用資料目錄，但自行快取不違反現行協議；這不是殼保證持久性的服務。
 - **路徑建議**：優先採使用者cache目錄（macOS `~/Library/Caches/modudock/news/<模組realpath雜湊>/`；Linux `$XDG_CACHE_HOME` 或 `~/.cache` 下同namespace），可另由模組自訂環境變數指定絕對路徑／停用，須再定名。不同checkout隔離，避免測試副本和正在跑的模組互相覆蓋。次選模組根 `.cache/`：協議容許，需新增gitignore、不可放進 `front/`（news宣告只公開front）；read-only安裝無法寫時退回記憶體，不能阻止閱讀。此輪不新增路徑、gitignore、環境變數或任何落盤程式。
@@ -2277,3 +2279,16 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - `aggregateHistory(groups, category, at)` 注入終點，回傳4個6小時bucket、起訖、有效樣本、四段值、分母、長條比例、insufficient/empty/count/percent呈現模式及整數百分比；時間取群內最早報導，分析取最早有效者。左含右不含、最後含at；有效樣本<5不畫條，≥3段不足收合；方向分母排除無關，<5用計數。front只保留當地時間／文字格式、DOM、ARIA與顯示狀態；history仍在展開時才計算。
 - 首次抽取原542測試全綠；新增13條panel單元測試，無新聞原文fixture／網路。12個有意義變異首輪全殺（代表、pending、長條分母、大盤餘數、macro排除、同數順序、最大值、跌向、時間終點、分桶、收合門檻、歷史分母）；逐個及整輪finally還原，語法錯誤不算殺變異，腳本與輸出在 `/private/tmp/news-r7/mutate_panel.py`、`mutations.json`。
 - 驗證：`npm test` 555／555（20.974s，含200×100漫步）；另跑 `NEWS_WALK_SEEDS=200 NEWS_WALK_STEPS=100 node --test tests/front.walk.test.mjs`，201 tests／20000步全綠（16.097s）。無後半或殼改動、無真API呼叫，不宣稱真Chromium排版已驗；純呈現的數字／文字與DOM既有斷言未更改。
+
+
+### 22.8 R8：模型成功答案快取落盤
+
+- **位置／範圍**：cc確認殼只公開 `frontend.public=front`，採模組根 `.cache/`、加入gitignore；不採§22.7的使用者cache目錄建議，不寫家目錄。正式 `news.main` 建立 `AnswerCache`，scheduler用可注入store；一般單元測試與protocol測試hooks預設無磁碟cache，專用測試使用TemporaryDirectory。沒有新增對外環境變數或前半封包欄位。
+- **資料及鍵**：五lane只存成功驗證／解碼答案，包括events／topics false與既有低信心回退。文章以canonical JSON `[dedup_key, title, summary]` SHA-256；namespace含lane、analysis kind、MODEL、實際題目／criteria、解碼與choice實作雜湊、schema／門檻。事件兩端指紋排序，話題保留seed→member；語氣按單篇，並無話題上下文。model／criteria／題目／門檻變動皆miss。檔案不含原文、明文URL或API key，只有雜湊、固定答案id／bool／分析物件、時間與版本；雜湊不宣稱匿名。
+- **協調者接線**：結果帶請求時的內容tuple provenance，在cv下驗證並提交store記憶體索引；寫磁碟不在cv下。每次_emit先按當次正規化資料重建五個記憶體答案表；TTL／版本／同link改稿不能被舊dedup-only cache繞過。晚到舊內容的成功答案仍存其舊指紋，但不套用當前新聞；finished仍釋放in-flight，既有跨輪續排不變。還原false不重問；自動配對、24h防串連、候選與話題門檻／排序照舊，不還原最終群組。分析只還原相符kind；停用時analysis仍null。
+- **黏著**：另存最多五個seed指紋、topic namespace與時間；只在第一次列表還原，等事件配對完畢後檢查種子仍在當次資料且其事件≥3家outlet，不合格移除。只有配對／話題pending皆零的已送出列表更新提示，不用暫時空話題蓋掉完成的種子。提示亦72h，不保存舊成員。
+- **上限／失效**：TTL72h，自成功取得起算、命中不延壽；分類／分析／語氣各4000，events／topics各20000。記憶體store逐lane有界，磁碟另≤16MiB（含seed metadata預留）；超限按時間淘汰最舊，過期先剔除。讀取先限byte，再驗schema、列形狀、64hex、時間、kind、固定id、bool／機率及欄位集合；損毀／半寫／過期／版本不合均miss。不用pickle。
+- **寫入／退出**：一條 `news-cache` daemon，約5秒合併dirty更新；模型round統計收尾通知可提早寫。沒有每答案磁碟操作／快照佇列；writer從有界索引取一份快照。使用同目錄0600 temp、flush＋fsync＋os.replace；cache目錄新建0700。跨process用writer.lock的LOCK_NB，鎖忙跳過且保留dirty，下次再試；鎖內讀取合併另一process有效答案並重新裁容量。I/O不能寫時單行 `answer cache: unavailable; using memory`，不輸出例外內文。stop不join writer，bye退出政策不變；尚未寫入的答案可漏存，不能假設bye保證durability。已存在壞檔可由下次成功背景寫入修復。
+- **真實雙冷啟動**：2026-09-27，同一scratch模組副本、兩次重新抓16來源。事前預估90～110 HTTP，共用硬上限120；實際84＋3＝87 HTTP，無重試／補試。第一次480則，classify24／analysis18／events9／topics28／tone5，first_list1.96s、all_done12.76s；第二次480則，classify1／analysis1／topics1，其餘0，first_list2.02s、all_done2.61s。RSS新增1則、移出1則、共同link無改稿；前五話題順序、家數、則數、語氣分布與完整成員集合完全相同。HTTP減少96.4%，all_done減少79.5%；不是固定快照的0請求宣稱。第二次20則以上話題在首份列表2.02s出現（第一次5.13s）。
+- **驗證方法限制**：scratch driver沿用real_run協定，量到done後額外保持process存活6秒才bye，以明確跨過背景落盤周期；6秒不計入all_done。這是測持久快取命中，不是聲稱立即關閉也存齊。副本／原始log／envelope在 `/private/tmp/news-r8/`；不更動殼上實例。第二次完成檔335819 bytes、0600，記錄classify481／analysis335／events166／topics469／tone85；沒有把外部新聞fixture加入repo。
+- **測試**：新增 `tests/test_answer_cache.py` 21條，涵蓋五lane含false、TTL／future時間、壞檔／schema／超限、MODEL／criteria／問法／門檻／kind隔離、無向與有向鍵、改稿／舊結果、各lane FIFO／檔案總上限、並行producer與writer合併、非阻塞鎖、replace失敗不毀舊檔、0600／無原文、不可寫單行降級、背景寫入／bye不等待、種子上限／版本／TTL／三家資格、固定快照兩個冷scheduler第二次0請求且逐項與話題相等。後半全套455／OK（41.505s）；npm555／555（21.643s）；原chaos6並行×5＝30／30（29.12s），另以完全相同Scenario資料注入新快取層再6並行×5＝30／30（29.21s），兩組各1800情境。`git diff --check`通過；未commit。

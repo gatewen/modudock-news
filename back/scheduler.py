@@ -16,12 +16,14 @@ import threading
 import time
 
 if __package__:
+    from .answer_cache import CacheBridge
     from .feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round, _retryable_failure
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
     from .events import candidate_pairs, group_events, _fits as pairs_fit, pack_batch as pack_event_batch
     from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
+    from answer_cache import CacheBridge
     from feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round, _retryable_failure
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
@@ -133,13 +135,14 @@ def _items_fit(batch):
 class Scheduler:
     def __init__(self, feeds, fetcher, outbox, seq, *, interval=600,
                  source_timeout=30, round_timeout=60, clock=time.monotonic,
-                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None, topic_matcher=None, tone_client=None):
+                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None, topic_matcher=None, tone_client=None, answer_cache=None):
         if not 1 <= len(feeds) <= 32 or min(interval, source_timeout, round_timeout) <= 0:
             raise ValueError("invalid scheduler limits")
         self.feeds, self.fetcher, self.outbox, self.seq = deepcopy(feeds), fetcher, outbox, seq
         self.interval, self.source_timeout, self.round_timeout = interval, source_timeout, round_timeout
         self.clock, self.now, self.fit = clock, now, fit
         self.log = log or (lambda message: print(message, file=sys.stderr, flush=True))
+        self.answer_cache = CacheBridge(answer_cache) if answer_cache is not None else None
         self.cv = threading.Condition()
         self.jobs = queue.Queue(maxsize=32)
         self.classifier = classifier
@@ -401,6 +404,8 @@ class Scheduler:
                      f"elapsed={elapsed:.1f}s " + ' '.join(f'{kind}={count}' for kind, count in counts.items())
                      + f" http={work.http} retries={work.retries} total_http={self.total_http} total_retries={self.total_retries} requeued={work.requeued}")
             work.logged = True
+            if self.answer_cache is not None:
+                self.answer_cache.store.request_flush()
             del self.model_rounds[round_id]
 
     def _next_lane(self):
@@ -660,6 +665,12 @@ class Scheduler:
                 # Publish completion under the same cv acquisition: another
                 # worker must see dependency results before taking new work.
                 candidate = self._to_result(lane, work, batch, result)
+                if self.answer_cache is not None:
+                    attribute = dict(classify='categories', analysis='analyses', events='matches',
+                                     topics='matches', tone='tones')[lane.name]
+                    entries = ({pair.key: (pair.left, pair.right) for pair in batch} if lane.pair
+                               else {item[0]: (item,) for item in batch})
+                    candidate.cache_provenance = (lane.name, kind if lane.name == 'analysis' else '', entries, attribute)
                 candidate.accounted = accounted
                 if not self._submit_classification(candidate):
                     return
@@ -749,6 +760,8 @@ class Scheduler:
             item.update(groups[dedup_key(item["link"])])
         body["events"] = {"pending": sum(not pair.automatic and pair.key not in self.event_cache for pair in pairs)
                           if self._classify_enabled() and self.matcher is not None else 0}
+        if self.answer_cache is not None and body['events']['pending'] == 0:
+            self.answer_cache.validate_seeds(self, body['items'], groups)
         return self._decorate_topics(packet, groups)
 
     def _outlets(self):
@@ -890,6 +903,8 @@ class Scheduler:
         # Called only under cv by the coordinator. A worker produces exactly
         # one candidate per job; the generation check is the ownership guard.
         self.processed_results += 1
+        if self.answer_cache is not None:
+            self.answer_cache.accept(candidate)
         if isinstance(candidate, (ClassifyResult, AnalysisResult, EventResult, TopicResult, ToneResult)):
             work = self.model_rounds.get(candidate.round_id)
             if candidate.accounted and work is not None:
@@ -1038,6 +1053,8 @@ class Scheduler:
                     # A seed trimmed by fit simply stops being sticky.
                     self.last_topic_seeds = tuple(seeds[topic['id']] for topic in packet['body'].get('topics', {}).get('list', [])
                                                   if topic.get('id') in seeds)
+                    if self.answer_cache is not None:
+                        self.answer_cache.remember_seeds(self, packet['body'])
                 if publish:
                     self.outbox.put({"t": "publish", "seq": self.seq, "topic": "news.fetched",
                                      "body": {"count": len(packet["body"]["items"]),
@@ -1053,6 +1070,8 @@ class Scheduler:
             "sources": statuses, "at": self.now().isoformat()}}
         with self.cv:
             self.model_work = ModelRound(self.round_id)
+            if self.answer_cache is not None:
+                self.answer_cache.restore(self, packet["body"]["items"])
             self._cache_events({pair.key: True for pair in self._pairs_for(packet, fresh=True)
                                 if pair.automatic and pair.key not in self.event_cache})
             packet = self._decorate(packet)
