@@ -71,7 +71,8 @@ def valid_value(lane, value):
 
 class AnswerCache:
     def __init__(self, directory, *, clock=time.time, log=lambda message: None,
-                 interval=5, limits=None, max_bytes=MAX_BYTES, start_writer=True):
+                 interval=5, limits=None, max_bytes=MAX_BYTES, start_writer=True, trace=None):
+        self.trace = trace
         self.directory = Path(directory)
         self.path = self.directory / 'answers.json'
         self.clock, self.log, self.interval = clock, log, interval
@@ -139,6 +140,15 @@ class AnswerCache:
                         not self._valid_seeds(self.seed_hint, retain_future=True)
                         or hint['at'] > self.seed_hint['at']):
                     self.seed_hint = hint
+            if self.trace is not None:
+                for row in obj['records']:
+                    # Validate shape/value while allowing an expired timestamp
+                    # solely for diagnostic evidence, never for cache reuse.
+                    if isinstance(row, list) and len(row) == 6:
+                        probe = list(row)
+                        probe[4] = self.clock()
+                        if self._valid(probe) and type(row[4]) in (int, float) and math.isfinite(row[4]):
+                            self.trace.cache_row(row)
             return self._prune({self._key(row): row for row in obj['records'] if self._valid(row, retain_future=True)})
         except FileNotFoundError:
             return OrderedDict()
@@ -156,9 +166,13 @@ class AnswerCache:
         size = len(encoded({'schema': SCHEMA, 'records': [], 'seeds': None})) + 512
         for key, row in sorted(records.items(), key=lambda entry: entry[1][4], reverse=True):
             if not self._valid(row, retain_future=True) or counts[row[0]] >= self.limits[row[0]]:
+                if self.trace is not None:
+                    self.trace.cache_row(row, evicted=True)
                 continue
             cost = len(encoded(row)) + 1
             if size + cost > self.max_bytes:
+                if self.trace is not None:
+                    self.trace.cache_row(row, evicted=True)
                 continue
             counts[row[0]] += 1
             size += cost
@@ -176,11 +190,15 @@ class AnswerCache:
                 return  # Hits never extend TTL.
             if key not in self.records:
                 self.counts[lane] += 1
+            if self.trace is not None:
+                self.trace.cache_row(row, acquired=True)
             self.records[key] = row
             self.records.move_to_end(key)  # A refreshed expired answer is newly acquired.
             # Bound memory immediately; encoding/filesystem remain off coordinator.
             if self.counts[lane] > self.limits[lane]:
                 victim = next(k for k, r in self.records.items() if r[0] == lane)
+                if self.trace is not None:
+                    self.trace.cache_row(self.records[victim], evicted=True)
                 del self.records[victim]
                 self.counts[lane] -= 1
             self.revision += 1

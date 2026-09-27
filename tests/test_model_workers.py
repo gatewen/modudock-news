@@ -36,6 +36,8 @@ class ModelWorkerTests(unittest.TestCase):
             tone_client=SimpleNamespace(enabled=True, tone=lambda batch:call('tone',batch)), log=self.logs.append)
         # Synthetic lane tests have no topic-bearing list; test eligibility separately.
         self.s._topic_admission = lambda: {'s': {'t'}, 'a': {'b'}}
+        self.tone_eligible = set()
+        self.s._tone_admission = lambda: self.tone_eligible
         self.work = ModelRound(1)
 
     def tearDown(self):
@@ -62,6 +64,8 @@ class ModelWorkerTests(unittest.TestCase):
         selected = next(l for l in self.s.lanes if l.name==lane)
         with self.s.cv:
             for entry in entries:
+                if lane == 'tone':
+                    self.tone_eligible.add(entry)
                 selected.jobs.put((self.work, entry))
             self.s.cv.notify_all()
 
@@ -230,6 +234,7 @@ class ModelWorkerTests(unittest.TestCase):
         self.s.model_work=self.work
         records=[{'link':f'https://e.com/{i}','title':str(i),'summary':'','category':'society','topic':'seed'} for i in range(80)]
         packet={'body':{'items':records,'events':{'pending':0}}}
+        self.tone_eligible.update((i['link'], i['title'], i['summary']) for i in records)
         pairs=disjoint(40)
         pending=[(records[0]['link'],item['link']) for item in records[1:]]
         self.s._topic_plan=lambda packet:([],pending)

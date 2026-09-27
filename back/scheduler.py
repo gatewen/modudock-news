@@ -138,7 +138,7 @@ def _items_fit(batch):
 class Scheduler:
     def __init__(self, feeds, fetcher, outbox, seq, *, interval=600,
                  source_timeout=30, round_timeout=60, clock=time.monotonic,
-                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None, topic_matcher=None, tone_client=None, answer_cache=None):
+                 now=lambda: datetime.now(timezone.utc), fit=fit_packet, log=None, classifier=None, analyzer=None, matcher=None, topic_matcher=None, tone_client=None, answer_cache=None, model_trace=None):
         if not 1 <= len(feeds) <= 32 or min(interval, source_timeout, round_timeout) <= 0:
             raise ValueError("invalid scheduler limits")
         self.feeds, self.fetcher, self.outbox, self.seq = deepcopy(feeds), fetcher, outbox, seq
@@ -146,6 +146,7 @@ class Scheduler:
         self.clock, self.now, self.fit = clock, now, fit
         self.log = log or (lambda message: print(message, file=sys.stderr, flush=True))
         self.answer_cache = CacheBridge(answer_cache) if answer_cache is not None else None
+        self.model_trace = model_trace
         self.cv = threading.Condition()
         self.jobs = queue.Queue(maxsize=32)
         self.classifier = classifier
@@ -502,9 +503,35 @@ class Scheduler:
                                                     work.round_id, accounted))
         return kept
 
+    def _tone_admission(self):
+        # Recompute top-five membership from accepted answers, not stale item
+        # decorations. During unresolved pairing preserve visible topics as usual.
+        if self.last_list is None:
+            return set()
+        packet = deepcopy(self.last_list)
+        pairs = self._pairs_for(self.last_list)
+        matches = {p.key: True for p in pairs if p.automatic}
+        matches.update(self.event_cache)
+        groups = group_events(packet['body']['items'], matches, [f['name'] for f in self.feeds])
+        packet['body']['events'] = {'pending': int(self._unresolved_events())}
+        self._decorate_topics(packet, groups)
+        return {(dedup_key(i['link']), i['title'], i['summary'])
+                for i in packet['body']['items'] if i.get('topic') and dedup_key(i['link']) not in self.tone_cache}
+
+    def _prune_tone_batch(self, work, batch, eligible):
+        kept = [item for item in batch if item in eligible]
+        dropped = tuple(item[0] for item in batch if item not in eligible)
+        if dropped:
+            accounted = self.model_rounds.get(work.round_id) is work and not work.logged
+            if accounted:
+                work.awaiting += 1
+            self._submit_classification(ToneResult({}, dropped, work.round_id, accounted))
+        return kept
+
     def _take_batch(self, lane, work, first):
         # cv held. Only this work's contiguous prefix may enter the planner.
-        eligible = self._topic_admission() if lane.name == 'topics' else None
+        eligible = (self._topic_admission() if lane.name == 'topics' else
+                    self._tone_admission() if lane.name == 'tone' else None)
         jobs = lane.jobs
         with jobs.mutex:
             pending = []
@@ -520,6 +547,8 @@ class Scheduler:
             jobs.not_full.notify_all()
         if lane.name == 'topics':
             self._prune_topic_batch(work, plan.dropped, eligible)
+        if lane.name == 'tone':
+            self._prune_tone_batch(work, plan.dropped, eligible)
         return plan.batch, plan.kind
 
     def _record_http(self, work, retry):
@@ -564,6 +593,8 @@ class Scheduler:
                     del self.model_requeues[index]
                     if lane.name == 'topics':
                         batch = self._prune_topic_batch(work, batch, self._topic_admission())
+                    elif lane.name == 'tone':
+                        batch = self._prune_tone_batch(work, batch, self._tone_admission())
                 else:
                     work, item = lane.jobs.get_nowait()
                     batch, kind = self._take_batch(lane, work, item)
@@ -593,7 +624,14 @@ class Scheduler:
             failure_detail = "other"
             retryable = False
             if allowed:
-                token = _http_observer.set(lambda retry: self._record_http(work, retry))
+                trace_questions = (self.model_trace.prepare(lane.name, batch, kind, requeued,
+                                        getattr(work, 'trace_items', {}))
+                                   if self.model_trace is not None else None)
+                def attempted(retry):
+                    self._record_http(work, retry)
+                    if self.model_trace is not None:
+                        self.model_trace.http(work.round_id, lane.name, trace_questions, retry, requeued)
+                token = _http_observer.set(attempted)
                 failure_token = _failure_detail.set("other")
                 retry_token = _retryable_failure.set(False)
                 service_token = _service_round.set(work.round_id)
@@ -1055,6 +1093,8 @@ class Scheduler:
             "sources": statuses, "at": self.now().isoformat()}}
         with self.cv:
             self.model_work = ModelRound(self.round_id)
+            if self.model_trace is not None:
+                self.model_work.trace_items = self.model_trace.items(packet["body"]["items"])
             if self.answer_cache is not None:
                 self.answer_cache.restore(self, packet["body"]["items"])
             self._cache_events({pair.key: True for pair in self._pairs_for(packet, fresh=True)

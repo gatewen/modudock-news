@@ -55,6 +55,14 @@ def plan_batch(lane_name, first, pending, *, fits, categories=None, eligible=Non
             if not fits(batch + [item]):
                 break
             batch.append(remaining.pop(index))
+    elif lane_name == 'tone' and eligible is not None:
+        candidates = [first, *remaining]
+        dropped = [item for item in candidates if item not in eligible]
+        candidates = [item for item in candidates if item in eligible]
+        if not candidates:
+            return BatchPlan([], [], dropped)
+        packed = plan_batch('tone', candidates[0], candidates[1:], fits=fits)
+        return BatchPlan(packed.batch, packed.remaining, dropped)
     elif lane_name in ('classify', 'tone'):
         while remaining and len(batch) < MAX_ITEMS:
             if not fits(batch + [remaining[0]]):

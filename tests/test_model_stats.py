@@ -60,6 +60,7 @@ class ModelStatsTests(unittest.TestCase):
                               analyzer=client('analysis','analyze'), matcher=client('events','match'),
                               topic_matcher=client('topics','match'), tone_client=client('tone','tone'), log=logs.append)
                 s._topic_admission = lambda: {'seed': {'t'}}
+                s._tone_admission = lambda: {('tone', 'SECRET', '')}
                 work = ModelRound(7)
                 queues = [s.classify_jobs, s.analysis_jobs, s.event_jobs, s.topic_jobs, s.tone_jobs]
                 s.classify_cache['a'] = 'finance'
@@ -197,6 +198,7 @@ class ModelStatsTests(unittest.TestCase):
                         s.model_rounds[1]=work
                     pair=TopicPair(('a','seed',''),('b','candidate',''))
                     s.topic_in_flight.add(pair.key);s.topic_jobs.put((work,pair))
+                    s._tone_admission = lambda: {('x', 'tone', '')}
                     s.tone_in_flight.add('x');s.tone_jobs.put((work,('x','tone','')))
                     s.classify_workers[0].start()
                     def drain():

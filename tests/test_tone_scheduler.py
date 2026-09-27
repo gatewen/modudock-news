@@ -146,6 +146,7 @@ class ToneSchedulerTests(unittest.TestCase):
             s.analysis_jobs.put((work,('a','a','')))
             s.event_jobs.put((work,Pair(('l','l',''),('r','r',''),.5)))
             s.topic_jobs.put((work,TopicPair(('seed','seed',''),('t','t',''))))
+            s._tone_admission = lambda: {('tone', 'tone', '')}
             s.tone_jobs.put((work,('tone','tone','')))
             results=[]
             def submit(result):

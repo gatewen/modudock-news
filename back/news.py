@@ -13,6 +13,7 @@ from xml.parsers import expat
 
 if __package__:
     from .answer_cache import AnswerCache
+    from .model_trace import optional_trace
     from .events import EventMatcher
     from .topics import TopicMatcher, ToneClient
     from .analyze import Analyzer
@@ -22,6 +23,7 @@ if __package__:
     from .scheduler import Scheduler
 else:
     from answer_cache import AnswerCache
+    from model_trace import optional_trace
     from events import EventMatcher
     from topics import TopicMatcher, ToneClient
     from analyze import Analyzer
@@ -310,8 +312,11 @@ def main(argv=None, scheduler_factory=Scheduler):
                 if hooks.directory:
                     options = json.loads(os.environ.get("NEWS_TEST_SCHEDULER", "{}"))
                 if not hooks.directory:
-                    options['answer_cache'] = AnswerCache(Path(__file__).resolve().parent.parent / '.cache',
-                        log=lambda message: print(message, file=sys.stderr, flush=True))
+                    directory = Path(__file__).resolve().parent.parent / '.cache'
+                    log = lambda message: print(message, file=sys.stderr, flush=True)
+                    trace = optional_trace(directory, log=log)
+                    options['model_trace'] = trace
+                    options['answer_cache'] = AnswerCache(directory, log=log, trace=trace)
                 scheduler = scheduler_factory(feeds, fetcher, outbox, seq, classifier=classifier, analyzer=analyzer, matcher=matcher, topic_matcher=topic_matcher, tone_client=tone_client, **options)
                 scheduler.start()
             hooks.on_up(outbox, seq)

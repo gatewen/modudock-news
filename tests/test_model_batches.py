@@ -115,6 +115,7 @@ class ModelBatchTests(unittest.TestCase):
             if name == 'events':
                 a, b, c, d = [Pair(p.left, p.right, .5) for p in (a, b, c, d)]
             scheduler._topic_admission = lambda: {'s': set('abcd')}
+            scheduler._tone_admission = lambda: {item(k) for k in 'abcd'}
             for entry in ((work, b), (later, c), (work, d)):
                 lane.jobs.put_nowait(entry)
             with scheduler.cv:

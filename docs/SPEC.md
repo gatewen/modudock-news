@@ -1415,6 +1415,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **大小守衛**：model 額外預留 failed 的 failure 固定代碼最長形狀（§20.21）。完整 JSON envelope（ensure_ascii、含換行）限 900 KiB，從 items 尾端裁切。未分類預留最長 category；尚未分析且類別為空或可分析者預留三種 analysis 中最長形狀；event_size 預留三位數，另預留 topic、tone、最多五個話題與 model 狀態。裁切後重算來源 count、classify／analysis pending、event_size，協調者再裝飾事件／話題進度。補送理應不減少首次已送 items；若仍裁切，stderr 記一行後照送，不 raise。空 items 的 envelope 仍超限則拒送。（出處：§12.3、§13.4、§16.5、§18.5、§18.14、§18.16、§18.20）
 - **來源摘要**：每個抓取輪收尾另印一次 `sources round=`：2xx 成功解析／有效 304／失敗分開計；失敗為 timeout、http_4xx、http_5xx、parse、other；實際抓取加解析超過 10 秒為 slow，不計排隊。連敗歸零於成功或有效 304，最多列五個名稱（各20字），整行最多1024 UTF-8 bytes，不含 URL 或錯誤內文。僅 stderr，不增加 sources 封包欄位；real_run 摘要保留此行（§20.41）。
 - **stderr 統計**：有模型准入的 work 在 queued／running／awaiting 與延後補試均清空後，僅寫一次 `model round={id} requests={n} failed={m} elapsed={s:.1f}s classify={a} analysis={b} events={c} topics={d} tone={e}`。requests 是准入批次數（含延後補試），429／529 的 HTTP 重試不另加；行尾另附 http（實際 HTTP 嘗試）、retries（其中重試次數）、total_http／total_retries（本 process 已發起的累計嘗試與重試，跨輪可能包含其他在途 work）。另列 requeued（實際准入的延後批次補試，不含因期限／停用而釋放者），補試 HTTP 照常計入 http；成功補試不增加 failed（§20.46）。三 worker 以每次呼叫的 context 綁定原 work，重試不改歸到新輪。§22.11起，首份列表已送出的零請求輪次也寫一行（requests/http=0、elapsed=0.0s），並在既有欄位後附cached與各lane可用答案筆數；取代§20.20的零請求不寫規則。內容不含新聞、URL 或 key。（出處：§18.15、§18.31、§18.32、§18.37、§18.38）
+- **可選診斷trace**：模組根 `.cache/trace.enable` 存在、重載模組後，每次實際模型HTTP嘗試寫 `.cache/model-trace.jsonl`（含重試／補試）；只存原輪次、lane、題數、雜湊題key及有證據的原因代碼。初始未知與無法歸因者為other；兩檔輪替合計20MiB、0600，關閉時無額外trace I/O／索引。語氣一般／補試出隊重驗最新前五話題成員與內容，空批僅完成in-flight確認，不送HTTP。（§22.12）
 
 `body.model` 的現行判斷順序如下；pending 指 classify／analysis／events／topics.pending 與 topics.tone_pending 的任一正值。（出處：§18.20、§18.37、§18.44）
 
@@ -2322,3 +2323,23 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **測試**：更新既有cache-only silent斷言為requests=0單行，保留其他欄位的精確值及順序驗證；新增無key空列表／拒收、舊輪在途與未收結果、被新輪取代不累積，以及可見範圍／kind／false／排除auto的庫存計數。R8兩個冷scheduler測試追加第二次0 HTTP且僅一條正cached統計斷言。
 - **R11-2 變異**：20個有意義變異，包含文章內容鍵、MODEL、criteria、事件無向／話題有向、TTL、未來不可命中／合併保留、FIFO、多writer合併、tmp清理、0600、topic first與queued重驗、防餓死、空批round_id與awaiting、事件共用裝箱、analysis kind、一般批次上限。首輪19殺／1存活；唯一存活為TTL72→73小時，原測試以ac.TTL推進假clock而隨實作改變。補固定72h−1秒可用／72h整過期的外部契約測試後重跑20／20全殺、0存活；沒有改程式來配合變異。
 - **還原與紀錄**：逐個及整輪finally還原四個目標程式檔，清對應pyc，語法錯誤或ERROR不算殺變異，只有assertion FAIL才算。首輪／末輪JSON與逐案log在 `/private/tmp/news-r11/`。還原後後半全套479／OK（42.152s，含200輪耐久）；一般chaos6並行×5＝30／30（28.70s），另R8快取注入同樣6並行×5＝30／30（31.20s）。git diff --check通過。jev 0，無真API／殼修改，不commit。
+
+### 22.12 R12：可選模型原因 trace 與語氣出隊重驗
+
+#### R12-1：量測工具（不改模型決策）
+
+- **開關**：模組根 `.cache/trace.enable` 存在時啟用；建立或刪除後重載news模組生效，不必重啟殼、不用環境變數。未啟用不建立trace物件、檔案、雜湊索引或執行緒；正常路徑僅保留None檢查，不做逐批trace I/O。協定測試hooks不自動讀正式目錄；測試可注入trace。
+- **記錄單位**：每次即將呼叫HTTP opener時追加一行JSONL，與既有http計數同入口，包括429／529的呼叫內重試、連線嘗試失敗、延後補試；空批與HTTP前就被拒絕者不記。欄位為UTC `time`、原work的 `round`、`lane`、`count`、`questions:[{key,reason}]`、`retry`、`requeue`。count是實際題數，不是新聞數：finance每篇3題、world2題、politics1題，其餘每篇或每對1題。重試沿用同一批的原因，retry=true；延後補試每題原因為requeue。零請求輪看原model round行，本檔不造假HTTP。
+- **識別與隱私**：key為SHA-256，含答案namespace（lane／MODEL／criteria與問法／門檻／kind）、新聞內容指紋與題欄位；配對兩端排序、話題保留方向。只寫雜湊、固定代碼、時間／計數，不寫原文、明文URL、API key、答案或錯誤內文。記憶體中的報導身分亦雜湊；公開新聞仍可能被反查，不宣稱匿名。
+- **原因優先序及證據**：每題只取一個原因，依序為requeue → cache_expired → cache_evicted → content_changed → topics的seed_new/topic_expand → new_item → other。cache_expired需看過相同namespace／兩端的答案時間且已滿72h；cache_evicted需實際觀測答案庫筆數／byte裁切或put淘汰，不能只因查無答案就推定淘汰。content_changed需本process看過同dedup key的不同標題／摘要指紋；new_item是在初始列表建立基準後首次觀測到的身分，且無已知舊內容指紋。topics未見過該種子指紋時為seed_new，既有種子的新候選為topic_expand（含已讀答案檔中的種子）。第一份列表未知者、版本不符、跨重載無法辨識改稿或淘汰者保守記other；不是新聞歷史的全知歸因。每輪保存自己的內容原因快照，晚到舊輪不誤取新輪改稿狀態；429／529重試不改原因。
+- **診斷知識有界**：各雜湊索引最多52000筆，舊觀測可丟；不額外保存跨重載歷史，也不把trace當答案cache使用。載入答案檔時可讀取形狀合法但過期的metadata作TTL證據，仍不能命中模型快取；flush讀到舊檔不抹掉同時間戳的已知淘汰，新取得答案才清除該證據。知識不足記other，因此原因占比是可觀測範圍，不可宣稱精確追蹤所有歷史miss。
+- **檔案／降級**：`.cache/model-trace.jsonl`，最多10MiB，滿後取代單一`.cache/model-trace.jsonl.1`，兩檔合計最多20MiB；每行完整JSON。trace檔、備份與trace.lock皆0600，新建目錄0700；不跟隨輸出路徑symlink。thread lock＋獨立flock串行追加及輪替，I/O在model worker的cv外，不新增writer佇列／執行緒，bye不等待。不可寫只記固定 `model trace: unavailable; tracing disabled` 並停trace，HTTP及模型語意照舊；異常中止最後一行可能不完整，離線工具應略過壞尾行。可刪兩個trace檔清紀錄，刪trace.enable再重載停記錄；不影響answers.json。
+
+#### R12-2：tone出隊重驗
+
+- 每次一般出隊及延後補試，都以最新已接收的event／topic答案重建前五話題成員；配對尚未完成時仍沿用既有「保留可見話題」規則，不能提前消掉其語氣工作。剔除已不屬於前五話題、已快取語氣、或同key內容已變的tuple；同一work連續隊列前段中的合格者依原序裝箱，不等待新題、不跨輪裝箱。未改話題納入／排名或語氣問法。
+- 剔除工作包成原work.round_id的ToneResult，只有協調者釋放in-flight；已登錄且未結算的round持有awaiting直到收件，不增加requests/http/failed。全空批不送HTTP、不啟動deadline；部分空缺以後仍可由正常enqueue補排，不把失效工作當成功快取。
+- **先量再收**：`/private/tmp/news-r12/replay_tone.py` 用r1trace的batch／result時間序列回放，依當時答案重建成員，沒有發網路請求或假造未知答案。原5批84題（20/20/20/20/4），重驗後仍5批84題，淘汰0題／0批；最終前五id／排序／家數／則數與逐篇成員一致。保留防護，但這份實測沒有證據支持省錢，不宣稱減少HTTP。
+- **測試**：新增trace的開關、初始未知／新增／改稿／重疊輪次、seed與候選、分析題數、鍵方向及kind、TTL／淘汰證據、三worker原輪歸屬、429→529→200三行、500補試、輪替／0600／無原文、symlink不可寫降級、有界索引與啟用trace的五lane故障情境。tone涵蓋即時前五、消失／改稿／命中、first與queued剔除、空批確認、補試重驗與跨輪邊界。既有手工排tone而沒有話題列表的統計／優先序測試補明合格tuple，原斷言不改。
+
+- **驗證結果**：後半全套 `/usr/local/bin/python3 -m unittest` 499／OK（42.965s，較R11新增20條）；前半npm555／555（25.170s）；原chaos6並行×5＝30／30（30.53s、1800情境），另單元測試注入trace與答案快取跑完整五lane故障情境，JSONL行數與total_http／retries一致。紀錄位於 `/private/tmp/news-r12/`；git diff --check通過。jev 0，未建立正式trace.enable、不改殼、不commit。

@@ -62,6 +62,7 @@ class ModelRequeueTests(unittest.TestCase):
             s,w,logs=self.make(url,41)
             # An independent lower lane must finish before the deferred classification.
             s.tone_client=SimpleNamespace(enabled=True,tone=lambda batch:order.append(('tone',)) or {'tone':'neutral'})
+            s._tone_admission = lambda: {('tone', 'tone', '')}
             s.tone_jobs.put((w,('tone','tone','')))
             s.tone_in_flight.add('tone')
             self.run_to_idle(s)
@@ -152,6 +153,7 @@ class ModelRequeueTests(unittest.TestCase):
                 now[0]=60
                 return {'tone':'neutral'}
             s.tone_client=SimpleNamespace(enabled=True,tone=tone)
+            s._tone_admission = lambda: {('tone', 'tone', '')}
             s.tone_jobs.put((w,('tone','tone','')))
             self.run_to_idle(s)
             self.assertEqual(len(received),1)
