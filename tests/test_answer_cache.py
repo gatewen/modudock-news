@@ -133,6 +133,18 @@ class AnswerCacheTests(unittest.TestCase):
                     else:
                         self.assertEqual(current, before)
 
+    def test_topic_namespace_tracks_token_outputs_not_source_comments(self):
+        from back import feedparse
+        before = ac.namespace('topics')
+        original = ac.topics.words
+        with patch.object(ac.topics, 'words', lambda title: original(title)):
+            self.assertEqual(ac.namespace('topics'), before)
+        other = {lane: ac.namespace(lane) for lane in ('classify', 'events', 'tone')}
+        with patch.object(feedparse, '_MATCH_IGNORED', {}):
+            self.assertNotEqual(ac.namespace('topics'), before)
+            for lane, ns in other.items():
+                self.assertEqual(ac.namespace(lane), ns)
+
     def test_pairs_unordered_topics_directed_and_content_boundaries(self):
         a, b = map(ac.fingerprint, (self.a, self.b))
         for lane in ('events', 'topics'):

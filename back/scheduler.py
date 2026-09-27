@@ -757,7 +757,7 @@ class Scheduler:
             self._remember_pairs(fitted, pairs)
         return fitted
 
-    def _decorate_events(self, packet, pairs=None):
+    def _decorate_events(self, packet, pairs=None, *, with_seeds=False):
         body = packet["body"]
         pairs = self._pairs_for(packet) if pairs is None else self._remember_pairs(packet, pairs)
         # Automatic edges may outnumber the FIFO capacity; derive evicted ones
@@ -771,20 +771,21 @@ class Scheduler:
                           if self._classify_enabled() and self.matcher is not None else 0}
         if self.answer_cache is not None and body['events']['pending'] == 0:
             self.answer_cache.validate_seeds(self, body['items'], groups)
-        return self._decorate_topics(packet, groups)
+        return self._decorate_topics(packet, groups, with_seeds=with_seeds)
 
     def _outlets(self):
         return {feed['name']: feed.get('outlet', feed['name']) for feed in self.feeds}
 
-    def _topic_plan(self, packet, groups=None):
+    def _topic_plan(self, packet, groups=None, *, with_seeds=False):
         items = packet['body']['items']
         if groups is None:
             groups = {dedup_key(i['link']): {'event': i['event']} for i in items}
         return topic_plan(items, groups, self.topic_cache, [f['name'] for f in self.feeds], self.last_topic_seeds,
-                          outlets=self._outlets())
+                          outlets=self._outlets(), with_seeds=with_seeds)
 
-    def _decorate_topics(self, packet, groups):
+    def _decorate_topics(self, packet, groups, *, with_seeds=False):
         body = packet['body']
+        planned_seeds = self.last_topic_seeds
         if body['events']['pending'] > 0:
             # Unsettled event groups must not replace the visible topics.
             # Recount only surviving members, using the last admitted list.
@@ -799,7 +800,7 @@ class Scheduler:
                     topics.append({'id': topic['id'], 'title': topic['title'], 'sources': sources,
                                    'count': len(members), 'keys': [dedup_key(item['link']) for item in members]})
         else:
-            topics, pending = self._topic_plan(packet, groups)
+            topics, pending, planned_seeds = self._topic_plan(packet, groups, with_seeds=True)
         membership = {key: topic['id'] for topic in topics for key in topic['keys']}
         for item in body['items']:
             item.pop('topic', None)
@@ -818,7 +819,7 @@ class Scheduler:
                           and self.topic_matcher is not None and body['events']['pending'] == 0 else 0,
                           'list': [{k: v for k, v in topic.items() if k != 'keys'} for topic in topics]}
         body['model'] = self._model_state(body)
-        return packet
+        return (packet, planned_seeds) if with_seeds else packet
 
     def _can_admit(self, work):
         return (work is not None and not work.failed
@@ -1063,7 +1064,7 @@ class Scheduler:
                 # Fit can remove a representative or whole pair; recount only
                 # the actually emitted items. IDs have fixed length and sizes
                 # were reserved to three digits during fitting.
-                packet = self._decorate_events(packet)
+                packet, planned_seeds = self._decorate_events(packet, with_seeds=True)
                 pairs = self._pairs_for(packet)
             if not publish and len(packet["body"]["items"]) < item_count:
                 self.log("classify: resend unexpectedly trimmed items")
@@ -1080,9 +1081,11 @@ class Scheduler:
                         visible = tuple(seeds[topic['id']] for topic in packet['body'].get('topics', {}).get('list', [])
                                         if topic.get('id') in seeds)
                         # Display rank is not planning priority: keep surviving
-                        # sticky seeds in their previous order, append newcomers.
+                        # sticky seeds in their previous order; newcomers follow
+                        # this exact plan's construction order, never display rank.
                         self.last_topic_seeds = tuple(dict.fromkeys(
-                            [key for key in self.last_topic_seeds if key in visible] + list(visible)))
+                            [key for key in self.last_topic_seeds if key in visible]
+                            + [key for key in planned_seeds if key in visible]))
                     if self.answer_cache is not None:
                         self.answer_cache.remember_seeds(self, packet['body'])
                 if publish:
@@ -1170,7 +1173,10 @@ class Scheduler:
                     if packet is not None:
                         resends[:] = [packet]
                 self._refill_idle_topics()
-                self._finish_model_rounds()
+                # Sending may introduce sticky seeds. Commit that planning
+                # state before finalizing; the next pass checks for more work.
+                if not resends:
+                    self._finish_model_rounds()
                 if not resends:
                     changed = self._model_resend(set())
                     if changed is not None:

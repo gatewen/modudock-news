@@ -79,7 +79,9 @@ class RecoveryTests(unittest.TestCase):
                 seed, target = (i['link'] for i in items)
                 topic = {'id':'a'*12,'title':'topic','sources':3,'count':2,'keys':[seed,target]}
                 s._topic_admission = lambda: {seed: {target} if (seed,target) not in s.topic_cache else set()}
-                plan = lambda *_: ([topic], [] if (seed,target) in s.topic_cache else [(seed,target)])
+                def plan(*_, with_seeds=False):
+                    result = ([topic], [] if (seed,target) in s.topic_cache else [(seed,target)])
+                    return (*result, (seed,)) if with_seeds else result
                 with patch.object(s, '_topic_plan', side_effect=plan):
                     s.last_list = s._decorate(packet)
                     s._enqueue_classification(s.last_list)

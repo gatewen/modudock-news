@@ -43,6 +43,16 @@ def fingerprint(item):
     return digest(list(item))
 
 
+# Fixed semantic probes: Chinese lengths/ranges, aliases, Latin/digits,
+# punctuation, invisible separators and preserved ZWJ. No source-code hash.
+TOPIC_TOKEN_PROBES = (
+    '', '甲', '甲乙丙丁戊', '特朗普特習川普川習', 'a A ab Ab AI123 123 １２３ ＡＢ',
+    '峰會，合作！A-B foo_bar', '\u3400\u3401\u4dbf\u4e00\u9fff\U00020000\U0003134f',
+    *(f'峰{separator}會 AB{separator}CD' for separator in
+      ('\u200b', '\u200c', '\u2060', '\ufeff', '\u200d')),
+)
+
+
 def namespace(lane, kind=''):
     client_type = dict(classify=classify.Classifier, analysis=analyze.Analyzer,
                        events=events.EventMatcher, topics=topics.TopicMatcher, tone=topics.ToneClient)[lane]
@@ -59,7 +69,8 @@ def namespace(lane, kind=''):
         # Cached true may bypass the feature gate only within this gate version.
         # Append only here so all other lanes keep their existing namespaces.
         version.append(['MIN_COMMON_FEATURES', topics.MIN_COMMON_FEATURES,
-                        'MAX_FEATURE_DF', topics.MAX_FEATURE_DF, inspect.getsource(topics.words)])
+                        'MAX_FEATURE_DF', topics.MAX_FEATURE_DF,
+                        [(title, sorted(topics.words(title))) for title in TOPIC_TOKEN_PROBES]])
     return digest(version)
 
 

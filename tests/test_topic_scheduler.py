@@ -226,6 +226,38 @@ class TopicSchedulerTests(unittest.TestCase):
             eventually(lambda:s.completed==2 and not s.topic_in_flight and len(received)==8, timeout=5)
             self.assertFalse(s.topic_cache)
 
+    def test_newcomers_keep_construction_order_even_after_final_logged_send(self):
+        items = [story(k, title, src) for k, title, src in [
+            ('c1', '跨海峰會甲', 'A'), ('c2', '跨海峰會乙', 'B'), ('c3', '跨海峰會丙', 'C'),
+            ('d1', '颱風災情甲', 'A'), ('d2', '颱風災情乙', 'B'), ('d3', '颱風災情丙', 'C'),
+            ('k', '共用候選報導', 'A'), ('x1', '颱風後續一', 'B'), ('x2', '颱風後續二', 'C')]]
+        items, _ = snapshot(items, seeds=[], size=49)
+        key = lambda k: 'https://example.com/' + k
+        groups = {i['link']: dict(event=i['link'], event_size=1) for i in items}
+        for prefix, event in [('c', 'A_c'), ('d', 'B_d')]:
+            for i in range(1, 4):
+                groups[key(prefix+str(i))] = dict(event=event, event_size=3)
+        s, _ = self.make('http://unused', items)
+        for seed in ('c1', 'd1'):
+            s.topic_cache.update({(key(seed), i['link']): False for i in items})
+        s.topic_cache.update({(key(a), key(b)): True for a,b in
+                              [('c1','k'), ('d1','k'), ('d1','x1'), ('d1','x2')]})
+        with patch('back.scheduler.group_events', return_value=groups):
+            sent = s._emit(s.caches, [])
+            self.assertEqual([t['count'] for t in sent['body']['topics']['list']], [5, 4])
+            self.assertEqual(s.last_topic_seeds, (key('c1'), key('d1')))
+            s.model_work.logged = True
+            s.last_topic_seeds = ()  # Newcomers are committed only by the final send.
+            # Even a final resend after logging must not change ownership or
+            # introduce unanswered pairs on the next plan.
+            for _ in range(2):
+                fresh = s._decorate(s.last_list)
+                self.assertEqual(fresh['body']['topics'], sent['body']['topics'])
+                self.assertEqual([i.get('topic') for i in fresh['body']['items']],
+                                 [i.get('topic') for i in sent['body']['items']])
+                s._send_list(fresh)
+            self.assertEqual(s.model_work.http, 0)
+
     def test_sent_topic_ranking_does_not_reorder_sticky_seeds(self):
         items, _ = snapshot(size=60)
         s, _ = self.make('http://unused', items)
@@ -233,7 +265,7 @@ class TopicSchedulerTests(unittest.TestCase):
         a, b, c = [i['link'] for i in items[:3]]
         s.last_topic_seeds = (b, a, 'removed')
         packet['body']['topics']['list'] = [dict(id=sha1(k.encode()).hexdigest()[:12]) for k in (a, b, c)]
-        with patch.object(s, '_decorate_events', side_effect=lambda p:p):
+        with patch.object(s, '_decorate_events', side_effect=lambda p, **kw:(p, (b, a, c))):
             s._send_list(packet, fitted=True)
         self.assertEqual(s.last_topic_seeds, (b, a, c))
 

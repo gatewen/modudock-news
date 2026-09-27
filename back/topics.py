@@ -40,11 +40,12 @@ def words(title):
     return result
 
 
-def plan(items, groups, cache, feed_order, previous=(), *, outlets=None, admission=False):
+def plan(items, groups, cache, feed_order, previous=(), *, outlets=None, admission=False, with_seeds=False):
     """Reuse previous seed identities, then rank built topics for display.
 
     admission=True returns seed -> eligible keys for all built topics, before
     the display/pending caps. It shares membership decisions with normal plan.
+    with_seeds=True also returns selected seeds in construction (not display) order.
     """
     outlets = outlets or {}
     records = {dedup_key(item['link']): item for item in items}
@@ -66,6 +67,7 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None, admissi
     seed_candidates = [seed for seed in previous if seed in records]
     seed_candidates.extend(min(events[event], key=order.get) for event in seeds)
     claimed, topics, pending = set(), [], []
+    built_seeds = []
     eligible = {}
     for seed in seed_candidates:
         event = event_of[seed]
@@ -106,6 +108,7 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None, admissi
         eligible[seed] = frozenset(candidates)
         pending.extend(unanswered)
         claimed.update(members)
+        built_seeds.append(seed)
         topics.append({'id': sha1(seed.encode('utf-8')).hexdigest()[:12], 'title': records[seed]['title'],
                        'sources': source_count(members), 'count': len(members),
                        'keys': sorted(members, key=order.get)})
@@ -116,6 +119,9 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None, admissi
     selected_ids = {topic['id'] for topic in topics}
     pending = [(seed, key) for seed, key in pending
                if sha1(seed.encode('utf-8')).hexdigest()[:12] in selected_ids]
+    if with_seeds:
+        return topics, pending, tuple(seed for seed in built_seeds
+                                      if sha1(seed.encode('utf-8')).hexdigest()[:12] in selected_ids)
     return topics, pending
 
 
