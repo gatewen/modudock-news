@@ -48,6 +48,32 @@ class CacheEvictionTests(unittest.TestCase):
             self.assertTrue(all(key in self.cache.records for key in keys[lane][1:]))
             self.assertEqual(self.cache.counts[lane], 3)
 
+    def test_unusable_fifo_head_is_evicted_without_lane_scan(self):
+        class NoLaneScan(OrderedDict):
+            def items(self):
+                raise AssertionError('unusable head must not scan lane')
+        for rollback in (False, True):
+            with self.subTest(rollback=rollback):
+                self.setUp()
+                keys = []
+                for i in range(3):
+                    keys.append(self.put('topics', i))
+                    self.now += 10
+                self.now += -100 if rollback else ac.TTL
+                self.cache.lane_fifo['topics'] = NoLaneScan(self.cache.lane_fifo['topics'])
+                for i, oldest in enumerate(keys):
+                    fresh = self.put('topics', 10 + i)
+                    self.assertNotIn(oldest, self.cache.records)
+                    self.assertIn(fresh, self.cache.records)
+                    self.assertEqual(self.cache.counts['topics'], 3)
+                # Removed timestamps leave conservative bounds: once the head
+                # is usable, one lane-local scan may tighten them, never evict
+                # a newer usable answer before the FIFO head.
+                self.cache.lane_fifo['topics'] = OrderedDict(self.cache.lane_fifo['topics'])
+                oldest = next(iter(self.cache.lane_fifo['topics']))
+                self.put('topics', 20)
+                self.assertNotIn(oldest, self.cache.records)
+
     def test_rollback_scan_is_lane_local_and_future_tail_loses_before_usable_head(self):
         head = self.put('tone', 0)
         self.now += 60

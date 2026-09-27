@@ -94,6 +94,32 @@ class AnswerCacheTests(unittest.TestCase):
         with patch.object(ac.classify.Classifier, '_questions', lambda self, size, context: {'new': 'question'}):
             self.assertNotEqual(original, ac.namespace('classify'))
 
+    def test_topic_feature_threshold_invalidates_only_topic_disk_answers(self):
+        items = [dict(link=i[0], title=i[1], summary=i[2]) for i in (self.a, self.b)]
+        a, b = map(ac.fingerprint, (self.a, self.b))
+        with patch.object(ac.topics, 'MIN_COMMON_FEATURES', 1):
+            namespaces = {lane: ac.namespace(lane, 'world' if lane == 'analysis' else '') for lane in ac.LIMITS}
+            for lane, value in [('classify', 'world'), ('analysis', {'kind': 'world', 'trend': 'other', 'region': 'other'}),
+                                ('events', False), ('topics', True), ('tone', 'neutral')]:
+                self.cache.put(lane, namespaces[lane], 'world' if lane == 'analysis' else '',
+                               [a, b] if lane in ('events', 'topics') else [a], value)
+            self.cache.put('topics', namespaces['topics'], '', [b, a], False)
+            self.cache.remember_seeds(namespaces['topics'], [a])
+        self.assertTrue(self.cache.flush())
+        self.cache = self.new()
+        with patch.object(ac.topics, 'MIN_COMMON_FEATURES', 2):
+            scheduler = self.scheduler()
+            scheduler.answer_cache.restore(scheduler, items)
+            self.assertFalse(scheduler.topic_cache)
+            self.assertEqual(scheduler.last_topic_seeds, ())
+            for lane, cache in ac.CacheBridge.caches(scheduler).items():
+                current = ac.namespace(lane, 'world' if lane == 'analysis' else '')
+                if lane == 'topics':
+                    self.assertNotEqual(current, namespaces[lane])
+                else:
+                    self.assertEqual(current, namespaces[lane])
+                    self.assertEqual(len(cache), 1, lane)
+
     def test_pairs_unordered_topics_directed_and_content_boundaries(self):
         a, b = map(ac.fingerprint, (self.a, self.b))
         for lane in ('events', 'topics'):

@@ -52,9 +52,14 @@ def namespace(lane, kind=''):
         context = [events.Pair(('a', '', ''), ('b', '', ''), .5)]
     questions = client._questions(2 if lane in ('events', 'topics') else 1, context)
     # Exact prompts/criteria and decoder implementation, including thresholds.
-    return digest([SCHEMA, lane, kind, classify.MODEL, questions,
+    version = [SCHEMA, lane, kind, classify.MODEL, questions,
                    inspect.getsource(client_type._decode), inspect.getsource(classify._choice),
-                   classify.THRESHOLD, events.SAME_THRESHOLD])
+                   classify.THRESHOLD, events.SAME_THRESHOLD]
+    if lane == 'topics':
+        # Cached true may bypass the feature gate only within this gate version.
+        # Append only here so all other lanes keep their existing namespaces.
+        version.append(['MIN_COMMON_FEATURES', topics.MIN_COMMON_FEATURES])
+    return digest(version)
 
 
 def valid_value(lane, value):
@@ -230,9 +235,12 @@ class AnswerCache:
 
     def _victim(self, lane, now):
         fifo = self.lane_fifo[lane]
+        head = next(iter(fifo))
+        if not now - TTL < fifo[head] <= now:
+            return head  # Normal ageing (or future head): O(1), even at capacity.
         low, high = self.time_bounds[lane]
         if now - TTL < low and high <= now:
-            return next(iter(fifo))  # Common path: no scan, including other lanes.
+            return head  # Common path: no scan, including other lanes.
         # Conservative bounds may include a removed timestamp. Only a possible
         # expiry/rollback takes this slow path, bounded by this lane's capacity.
         victim = None

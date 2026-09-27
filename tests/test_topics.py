@@ -30,7 +30,7 @@ def response(payload, *_):
 
 
 class PlanTests(unittest.TestCase):
-    def test_two_distinct_features_required_in_pending_and_admission_even_for_cached_true(self):
+    def test_two_distinct_features_required_only_for_unanswered_candidates(self):
         seeds = [story(f's{i}', title, source) for i, (title, source) in
                  enumerate(zip(('ORBIT', 'SIGNAL', 'UNIQUE'), 'ABC'))]
         single = story('lone', 'ORBIT ORBIT')
@@ -39,10 +39,36 @@ class PlanTests(unittest.TestCase):
         seed = seeds[0]['link']
         for cache in ({}, {(seed, single['link']): True}):
             out, pending = plan(items, groups, cache, list('ABC'))
-            self.assertEqual(out[0]['count'], 3)
+            self.assertEqual(out[0]['count'], 4 if cache else 3)
             self.assertEqual(pending, [(seed, enough['link'])])
             self.assertEqual(plan(items, groups, cache, list('ABC'), admission=True),
                              {seed: frozenset([enough['link']])})
+
+    def test_cached_true_survives_df_drift_but_new_candidates_still_need_two_features(self):
+        seeds = [story(f's{i}', 'ORBIT SIGNAL', source, i) for i, source in enumerate('ABC')]
+        member = story('member', 'ORBIT SIGNAL EXTRA')
+        unknown = story('unknown', 'ORBIT SIGNAL')
+        rejected = story('rejected', 'ORBIT SIGNAL EXTRA')
+        expired = story('expired', 'ORBIT SIGNAL EXTRA', hour=60)
+        seed = seeds[0]['link']
+        cache = {(seed, member['link']): True, (seed, rejected['link']): False,
+                 (seed, expired['link']): True}
+        baseline = None
+        for noisy in (False, True, False):
+            noise = [story(f'n{i}', f'ORBIT OTHER N{i:03d}') for i in range(8)] if noisy else []
+            items, groups = snapshot([member, unknown, rejected, expired] + noise, seeds)
+            out, pending = plan(items, groups, cache, list('ABC'), previous=[seed])
+            identity = (out[0]['id'], out[0]['keys'], out[0]['sources'])
+            if baseline is None:
+                baseline = identity
+            self.assertEqual(identity, baseline)
+            self.assertIn(member['link'], out[0]['keys'])
+            self.assertNotIn(rejected['link'], out[0]['keys'])
+            self.assertNotIn(expired['link'], out[0]['keys'])
+            expected = [] if noisy else [(seed, unknown['link'])]
+            self.assertEqual(pending, expected)
+            self.assertEqual(plan(items, groups, cache, list('ABC'), previous=[seed], admission=True),
+                             {seed: frozenset(k for _, k in expected)})
 
     def test_dynamic_feature_union_expands_after_answer_and_sibling_without_features_still_asked(self):
         seeds = [story(f's{i}', 'ORBIT SIGNAL', source) for i, source in enumerate('ABC')]
