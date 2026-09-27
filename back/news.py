@@ -142,7 +142,8 @@ class Outbox:
 
     @staticmethod
     def encode(packet):
-        data = (json.dumps(packet, ensure_ascii=True, allow_nan=False) + "\n").encode("ascii")
+        options = {'separators': (',', ':')} if packet.get('t') == 'publish' and packet.get('topic') == 'news.market_digest' else {}
+        data = (json.dumps(packet, ensure_ascii=True, allow_nan=False, **options) + "\n").encode("ascii")
         if len(data) > MAX_PACKET:
             raise ValueError("protocol packet exceeds 900 KiB")
         return data

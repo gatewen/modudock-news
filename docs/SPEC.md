@@ -1414,7 +1414,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **HTTP 與驗證**：五種 client 共用設定與 enabled 狀態，每次請求的 context 分開，不把批次狀態留在實例。SSL 驗證保持開啟，沿用 Fetcher 的 CA 做法、不跟隨模型 redirect；單次 socket timeout 15 秒，body 讀取總時限預設 30 秒（送出前起算），回應上限 1 MiB。所需每題都要通過驗證，任一題失敗整批不採納；choice 須在 criteria 中，probabilities 須為非空物件，值須是非 bool 的有限 0～1 數值。現行不要求機率總和為 1，也不要求 choice 等於機率最大者。（出處：§12.5、§18.2、§18.31）
 - **關閉與退避**：只從 TYPESAFE_API_KEY 啟用，無 key 只記一次 disabled。任一 client 收 401，整個 process 的模型工作永久關閉；model.reason 為 auth，啟動無 key 為 no_key。關閉後 `_decorate` 將 item.analysis 設為 null，即使分析快取仍存在，清單分析標籤與面板分析結果也不再顯示；已快取分類、依現存資料成立的話題與已取得基調仍顯示。403 為暫時服務不可用：本輪 paused/failed、failure=service，enabled 保持 true、下輪重試；自上次有效成功後累計三個不同輪的 403 即共用熔斷冷卻 30 分鐘（其他種類失敗不清零），期間不送 HTTP。到期於下一次有工作時只准一次探測，探測不做 429／529 重試；成功清零並恢復並行。探測閘門使用全域 model_running，包含已 logged 的 work；比最後成功輪序更舊的晚到 403 不計數、不延後冷卻，同輪或更新輪仍計（§20.40、§20.42）。429／529 在同一 read_deadline 內最多重試兩次，分別等 0.5／1 秒；無 Retry-After 可用，耗盡或其他失敗停止本輪新准入。模型錯誤只記固定字串，不把 key、HTTP body 或例外原文寫入 log。（出處：§18.31、§18.44）
 - **停止**：bye 不等待卡住的網路 worker，不 join RSS 或模型執行緒；維持後半一秒內退出的協定政策。這不代表能在 process 存活時強制回收卡住的 DNS／header 請求。（出處：§5、§18.2、§18.32）
-- **列表與補送**：每 item 永遠有 category、analysis（null 或物件）、event、event_size；topic／tone 只在適用時出現。body 有 classify、analysis、events、topics、model 的進度。初始 list 後 publish `news.fetched`；補送不改 at、不另 publish。配對結果只有可見 event／event_size 改變、pending 歸零或模型狀態需更新時補送；一般成功結果只影響可見項目時才需補內容。Outbox 對尚未開始寫出的 list 原位取代，同步更新其後對應 publish 的 count／at；put 拒收不更新 last_list。（出處：§12.6、§16.5、§18.9、§18.20、§18.24、§18.37）
+- **列表與補送**：每 item 永遠有 category、analysis（null 或物件）、event、event_size；topic／tone 只在適用時出現。body 有 classify、analysis、events、topics、model 的進度。初始 list 後 publish `news.fetched`；補送不改 at、不另發news.fetched。§23另定每輪分析完成後一次的news.market_digest，可在補送完成分析後廣播。配對結果只有可見 event／event_size 改變、pending 歸零或模型狀態需更新時補送；一般成功結果只影響可見項目時才需補內容。Outbox 對尚未開始寫出的 list 原位取代，同步更新其後對應 publish 的 count／at；put 拒收不更新 last_list。（出處：§12.6、§16.5、§18.9、§18.20、§18.24、§18.37）
 - **大小守衛**：model 額外預留 failed 的 failure 固定代碼最長形狀（§20.21）。完整 JSON envelope（ensure_ascii、含換行）限 900 KiB，從 items 尾端裁切。未分類預留最長 category；尚未分析且類別為空或可分析者預留三種 analysis 中最長形狀；event_size 預留三位數，另預留 topic、tone、最多五個話題與 model 狀態。裁切後重算來源 count、classify／analysis pending、event_size，協調者再裝飾事件／話題進度。補送理應不減少首次已送 items；若仍裁切，stderr 記一行後照送，不 raise。空 items 的 envelope 仍超限則拒送。（出處：§12.3、§13.4、§16.5、§18.5、§18.14、§18.16、§18.20）
 - **來源摘要**：每個抓取輪收尾另印一次 `sources round=`：2xx 成功解析／有效 304／失敗分開計；失敗為 timeout、http_4xx、http_5xx、parse、other；實際抓取加解析超過 10 秒為 slow，不計排隊。連敗歸零於成功或有效 304，最多列五個名稱（各20字），整行最多1024 UTF-8 bytes，不含 URL 或錯誤內文。僅 stderr，不增加 sources 封包欄位；real_run 摘要保留此行（§20.41）。
 - **stderr 統計**：有模型准入的 work 在 queued／running／awaiting 與延後補試均清空後，僅寫一次 `model round={id} requests={n} failed={m} elapsed={s:.1f}s classify={a} analysis={b} events={c} topics={d} tone={e}`。requests 是准入批次數（含延後補試），429／529 的 HTTP 重試不另加；行尾另附 http（實際 HTTP 嘗試）、retries（其中重試次數）、total_http／total_retries（本 process 已發起的累計嘗試與重試，跨輪可能包含其他在途 work）。另列 requeued（實際准入的延後批次補試，不含因期限／停用而釋放者），補試 HTTP 照常計入 http；成功補試不增加 failed（§20.46）。三 worker 以每次呼叫的 context 綁定原 work，重試不改歸到新輪。§22.11起，首份列表已送出的零請求輪次也寫一行（requests/http=0、elapsed=0.0s），並在既有欄位後附cached與cached_classify／analysis／events／topics／tone。這是首份fit後列表的既有答案庫存，不是lookup命中率或省下的題數：分類／語氣計可見key，分析須類別合格且kind相容，events只計非自動候選的快取答案，topics計兩端可見的有向答案（不要求已入選話題）；false照計，磁碟與記憶體不分開，後續補送不增計。是否花錢看http；取代§20.20的零請求不寫規則。內容不含新聞、URL 或 key。（出處：§18.15、§18.31、§18.32、§18.37、§18.38）
@@ -2520,3 +2520,49 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **先紅後綠與介面測試**：共用候選的新種子fixture在舊_send_list下順序斷言失敗，修後畫面5／4及成員不變；版本測試原本等價包裝即失效，修後不變，正常化修改則改版。舊R23排序mock與五lane recovery的plan mock僅補with_seeds內部回傳，原斷言保留。初始fixture超過每來源60則、種子被裁掉，已減為49則才驗排序，未將錯誤fixture當有效紅測。
 - **重現與fuzz**：原排程PoC冷、暖皆5／4，暖HTTP由2→0，shown與fresh完全一致；註解probe不再改namespace，_MATCH_IGNORED改動會改。restart_fuzz seed0～119，另於每次連續／暖／冷結束比較已送view與_decorate重算view及pending：120組0卡、0漂移，連續與暖重啟全相同且暖HTTP全0。腳本bad=7僅表示冷啟動與既有sticky歷史的差異，不是stall或重新規劃漂移。chaos 6並行×5＝30／30（1800情境，36.74s）。腳本與log存`/private/tmp/news-r24/`，jev 0，未commit。
 - **全套結果**：`/usr/local/bin/python3 -m unittest` 531 tests／OK（43.630s）；最後補送已logged的加強回歸另跑通過。git diff --check通過；只改三個後半檔、三個測試檔及SPEC，未commit。
+
+## 23. v0.10 增補：news.market_digest 財經事件摘要廣播
+
+### 23.1 協議與範圍
+
+依trend-cast的`docs/PROPOSAL-news-market-digest.md` schema 1，manifest保留news.fetched並追加news.market_digest，版本0.10.0；不新增requires或任何jev請求。殼協議`RUNTIME-PROTOCOL.md`線B／§9與`shell/hub/runner.go:publish`確認後半格式為`{"t":"publish","seq":目前session seq,"topic":"news.market_digest","body":...}`，與news.fetched相同，不帶發送者／指定收件人。殼只扇給運作中訂閱者，不持久化、不補發，Outbox／接收端飽和亦可能丟棄，發送成功不等於接收成功。
+
+### 23.2 發送時機
+
+- 協調者每輪抓取完成並成功送出列表後，或模型結果補送成功後檢查；同一ModelRound最多成功入Outbox一次。全答案快取的零HTTP輪也可廣播。
+- 必須是目前輪、已有接受的last_list、非抓取中／停止中、work已准入且未failed／failures、共用模型enabled、有Analyzer；已送列表的classify.pending、analysis.pending、events.pending皆為0。除了題目要求的analysis歸零，也等分類及配對完成，避免分類前的暫時analysis=0與尚未穩定的事件分母。
+- 沒有任何24小時窗口內有效財經分析事件不發。金鑰缺失／401關閉／本輪終局失敗不發；可補試的暫時失敗若最終成功、未留下failed則可發。廣播不必等語氣完成，也不承諾發送後的其他lane不再失敗；條件以當次發布為準。組摘要期間再有關閉／失敗，送出前重查。分析關閉不以舊磁碟答案偽造可用分析。
+- 舊輪被新抓取取代時不再單獨補發舊摘要；晚到答案由現輪列表採用，現輪符合條件才發。初始list未獲Outbox接受不發；摘要入列拒絕不消耗once旗標，之後若有列表活動可再試，不新增重試計時器或阻塞等待。
+- news.fetched仍只在初始list後發一次。market_digest另取發布當下本機aware datetime（含秒與六位小數），不沿用list.at或新聞時間、不為了單調性推造未來時間；同機時鐘需同步。接收端重複／較舊時間可丟棄，殼未運行期間不會有歷史補發。
+
+### 23.3 統計定義與body
+
+只用**已成功送出的列表**，所以受550則／每來源上限／900KiB裁切與來源供給限制，不是全市場或完整24小時新聞庫。保留category=finance，科技tech即使使用finance分析kind仍不算；不套前半來源、題材、話題、搜尋或追蹤篩選。
+
+先按有效event分組（12位hex、正整數event_size；異常身分每則獨立），事件最新**財經報導**published在發布時刻的閉區間`[at-24h, at]`內才納入。未來容差內報導尚未到其published時刻亦不納入該事件。窗口按最新報導判斷，不先刪掉組內較舊報導；分析代表依發布時間由早到晚、時間排序沿用前半Date.parse的毫秒精度，同毫秒按feeds順序與原列表順序，取第一則有效finance分析，與財經面板一致。沒有有效分析的事件不加signal或theme，但仍屬窗口內事件的來源口徑。
+
+| 欄位 | 現行產生規則 |
+|---|---|
+| schema | 整數1，非bool。 |
+| at | 本機發布時間ISO 8601，明確本機時區offset、秒與最多6位小數。 |
+| window_hours | 整數24。 |
+| signal_counts | 四鍵皆有：positive→bullish、mixed→mixed、not_market及other→unrelated、negative→bearish；每個已分析事件只加一，非機率。 |
+| top_themes | 最多10筆；`name/events/direction`三欄，中文名與順序同front/labels.js；按事件數降冪、同數依固定表順序。macro大盤／總經及other不列題材，但仍計入signal_counts。 |
+| theme direction | 沿用面板箭頭：dir_p≥0.6且dir=bull／bear才算利多／利空；只有利多bullish、只有利空bearish、都有mixed、皆無unrelated。單則dir=mixed本來就不畫▲▼，不自行分攤。 |
+| source_count | 窗口內財經事件所有財經報導的去重outlet數（含組內較舊報導）；未填outlet用來源名，中央社三feed等算同一家。這與面板樣本列按feed計「來源」刻意不同，符合本提案。 |
+
+所有輸出物件只含列出的鍵；計數是非bool整數、0～1,000,000，theme.events至少1；實際上限受列表550則控制。名稱僅用固定中文表，1～80字、無控制字元／URL／首尾空白、不重複，不傳link、標題、摘要、價格、代號或來源名。不新增自由生成文字。
+
+### 23.4 大小與實作
+
+`back/market_digest.py`為純聚合模組，使用既有analysis驗證，題材名由與前半一致的固定表提供，跨語言測試防止漂移。`fit_digest`以ensure_ascii=True、allow_nan=False、緊湊separators量body，超過8192 bytes從top_themes尾端刪；基本body仍過大則不發。不改signal或source計數以湊大小。
+
+Outbox只對news.market_digest使用同樣緊湊編碼，其餘封包格式不變。以ASCII跳脫後byte數守上限，比接收端ensure_ascii=False的UTF-8標準化大小保守；殼envelope不計這8KiB，但仍受既有900KiB守衛。550則／10題材測試body861 bytes；固定名稱與有限計數正常不需裁切，測試以較小預算驗證尾端裁切與基礎body拒送路徑。
+
+### 23.5 驗證
+
+- 新增tests/test_market_digest.py：精確欄位／型別／範圍、JSON重複key與非有限數檢查、名稱與隱私、24h雙邊界／未来、代表與缺分析、outlet去重、.59／.6方向、macro／other、tie順序／前10、550則大小與尾端裁切。
+- 同一fixture直接呼叫Node的front/scope.js groupItems及front/panel.js aggregatePanel，四段、排行、方向與中文表逐項一致；窗口不同於一般未限24h面板，測試先取同一窗口，不假稱畫面所有數字皆等於廣播。
+- 排程驗初始全快取0請求、analysis補送後發、同輪不重發／新輪可發、失敗／關閉／抓取／尚未分類配對完成／無有效財經事件不發、聚合期間關閉、Outbox拒收。既有分析排程測試只把「任何第二個publish都禁止」改為允許並精確驗一個market_digest，仍禁止重發news.fetched。
+- 讀取提案全文及殼協議／實作，另以trend-cast實際back/news_digest.py.validate驗證產生body（286 bytes），通過；未修改接收端、殼或呼叫真API。
+- 最終驗證：`/usr/local/bin/python3 -m unittest` 542 tests／OK（43.300s）；`npm test` 567／567通過；git diff --check通過。jev 0，未commit。

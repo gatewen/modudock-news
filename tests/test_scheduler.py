@@ -848,6 +848,13 @@ class AnalysisSchedulerTests(unittest.TestCase):
         with scheduler.cv:
             return not scheduler.in_flight and not scheduler.analysis_in_flight
 
+    def next_digest(self, sink):
+        packet = sink.packets.get(timeout=2)
+        self.assertEqual(packet['t'], 'publish')
+        self.assertEqual(packet['topic'], 'news.market_digest')
+        self.assertEqual(packet['body']['schema'], 1)
+        return packet['body']
+
     def next_analysis(self, sink):
         packet = sink.packets.get(timeout=2)
         self.assertEqual(packet["t"], "msg")
@@ -876,6 +883,7 @@ class AnalysisSchedulerTests(unittest.TestCase):
             self.assertEqual([model_kind(p) for _, _, p in received], ['classification', 'analysis'])
             self.assertEqual(len(received[1][2]["state"]), 2)
             eventually(lambda: self.idle(scheduler))
+            self.assertEqual(self.next_digest(sink)['signal_counts']['bullish'], 1)
             with self.assertRaises(queue.Empty):
                 sink.packets.get(timeout=0.05)
             self.assertTrue(all('analysis' not in i for i in scheduler.snapshot()[0].items))
@@ -906,9 +914,11 @@ class AnalysisSchedulerTests(unittest.TestCase):
             self.assertEqual(self.round(sink)['analysis']['pending'], 1)
             self.assertEqual(self.next_analysis(sink)['analysis']['pending'], 0)
             self.assertEqual([model_kind(p) for _, _, p in received], ['analysis'])
+            self.next_digest(sink)
             scheduler.refresh()
             body = self.round(sink)
             self.assertIsNotNone(body['items'][0]['analysis'])
+            self.next_digest(sink)
             eventually(lambda: scheduler.completed == 2)
             self.assertEqual(len(received), 1)
 
@@ -1308,8 +1318,17 @@ class AnalysisSchedulerTests(unittest.TestCase):
             for kind, expected in [('classification', 0 if cached_categories else MAX_ITEMS_LIST),
                                    ('analysis', MAX_ITEMS_LIST)]:
                 self.assertEqual(sum(len(p['state']) for _, _, p in received if model_kind(p) == kind), expected)
+            eventually(lambda: scheduler.model_work.digest_sent)
+            digests = []
             while not sink.packets.empty():
-                self.assertEqual(sink.packets.get_nowait()['t'], 'msg')  # No second publish.
+                packet = sink.packets.get_nowait()
+                if packet['t'] == 'publish':
+                    self.assertEqual(packet['topic'], 'news.market_digest')
+                    digests.append(packet['body'])
+                else:
+                    self.assertEqual(packet['t'], 'msg')
+            self.assertEqual(len(digests), 1)  # Still no second news.fetched.
+            self.assertEqual(sum(digests[0]['signal_counts'].values()), len({i['event'] for i in final['items']}))
 
     def test_three_analysis_kinds_request_separately_other_categories_never_analyzed(self):
         from tests.test_classify import server
@@ -1345,12 +1364,19 @@ class AnalysisSchedulerTests(unittest.TestCase):
                 analyzed.extend(titles)
                 self.assertFalse('trend_0' in payload['questions'] and 'market_0' in payload['questions'])
             self.assertCountEqual(analyzed, labels[:5])
+            eventually(lambda: scheduler.model_work.digest_sent)
+            digest_count = 0
             updates = []
             while not sink.packets.empty():
                 packet = sink.packets.get_nowait()
+                if packet['t'] == 'publish':
+                    self.assertEqual(packet['topic'], 'news.market_digest')
+                    digest_count += 1
+                    continue
                 self.assertEqual(packet['t'], 'msg')
                 self.assertEqual(packet['body']['at'], initial['at'])
                 updates.append(packet['body'])
+            self.assertEqual(digest_count, 1)
             self.assertTrue(any(body['analysis']['pending'] == 5 for body in updates))
             self.assertTrue(any(any(i['category'] == 'world' and i['analysis'] for i in body['items']) for body in updates))
 

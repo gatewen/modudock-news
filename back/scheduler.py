@@ -16,6 +16,7 @@ import threading
 import time
 
 if __package__:
+    from .market_digest import build_digest, TOPIC as MARKET_DIGEST_TOPIC
     from .model_batches import plan_batch
     from .answer_cache import CacheBridge
     from .feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
@@ -24,6 +25,7 @@ if __package__:
     from .events import candidate_pairs, group_events, _fits as pairs_fit
     from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
+    from market_digest import build_digest, TOPIC as MARKET_DIGEST_TOPIC
     from model_batches import plan_batch
     from answer_cache import CacheBridge
     from feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
@@ -74,6 +76,7 @@ class ModelRound:
     running: int = 0
     awaiting: int = 0
     logged: bool = False
+    digest_sent: bool = False  # Once per fetch/model round, not per list resend.
     admitted: bool = True  # Initial list must reach Outbox before HTTP starts.
     cached: dict = field(default_factory=lambda: dict.fromkeys(('classify', 'analysis', 'events', 'topics', 'tone'), 0))
 
@@ -1097,6 +1100,29 @@ class Scheduler:
             self.log("list packet rejected: " + str(exc)[:200])
         return None
 
+    def _publish_market_digest(self):
+        # Only the coordinator calls this, after an accepted list and outside
+        # fetching. A zero analysis pending count alone can precede classification.
+        with self.cv:
+            work = self.model_work
+            if (self.stopping or self.active or self.last_list is None or work is None
+                    or work.round_id != self.round_id or not work.admitted or work.digest_sent
+                    or work.failed or work.failures or self.analyzer is None or not self._classify_enabled()):
+                return
+            body = self.last_list['body']
+            if any(body.get(lane, {}).get('pending', 0) != 0 for lane in ('classify', 'analysis', 'events')):
+                return
+            items = deepcopy(body['items'])
+        digest = build_digest(items, self.feeds, self.now().astimezone())
+        if digest is None:
+            return
+        # Workers may report a failure while the detached aggregate is built.
+        with self.cv:
+            if self.stopping or work.failed or work.failures or not self._classify_enabled():
+                return
+        if self.outbox.put({'t': 'publish', 'seq': self.seq, 'topic': MARKET_DIGEST_TOPIC, 'body': digest}):
+            work.digest_sent = True
+
     def _cached_counts(self, packet):
         # Inventory at initial emission, not lookup counts: resends cannot inflate it.
         keys = {dedup_key(item['link']) for item in packet['body']['items']}
@@ -1221,3 +1247,4 @@ class Scheduler:
                     self.completed += 1
                     self.next_round = self.clock() + self.interval
                     self.cv.notify_all()
+            self._publish_market_digest()
