@@ -84,6 +84,7 @@ class AnswerCache:
         self.disabled = False
         self.warned = False
         self.corrupt_warned = False
+        self.read_warned = False
         self.revision = 0
         self.saved = 0
         self.seed_hint = None
@@ -103,6 +104,17 @@ class AnswerCache:
         if not self.corrupt_warned:
             self.corrupt_warned = True
             self.log('answer cache: corrupt file ignored; will rebuild')
+
+    def _warn_read(self):
+        if not self.read_warned:
+            self.read_warned = True
+            self.log('answer cache: read failed; using available memory')
+
+    @staticmethod
+    def _time_rank(stamp, now):
+        # Future entries are recoverable metadata, never preferred to an answer
+        # obtained under the current clock. Compare timestamps within each group.
+        return (stamp <= now, stamp)
 
     def _valid(self, row, *, retain_future=False):
         if not isinstance(row, list) or len(row) != 6:
@@ -136,9 +148,10 @@ class AnswerCache:
                 return OrderedDict()
             hint = obj.get('seeds')
             with self.lock:
+                now = self.clock()
                 if self._valid_seeds(hint, retain_future=True) and (
                         not self._valid_seeds(self.seed_hint, retain_future=True)
-                        or hint['at'] > self.seed_hint['at']):
+                        or self._time_rank(hint['at'], now) > self._time_rank(self.seed_hint['at'], now)):
                     self.seed_hint = hint
             if self.trace is not None:
                 for row in obj['records']:
@@ -156,7 +169,7 @@ class AnswerCache:
             self._warn_corrupt()
             return OrderedDict()
         except OSError:
-            self._warn()
+            self._warn_read()
             return OrderedDict()
 
     def _prune(self, records):
@@ -164,7 +177,8 @@ class AnswerCache:
         counts = Counter()
         # Reserve the maximum five-fingerprint hint while producers may update it.
         size = len(encoded({'schema': SCHEMA, 'records': [], 'seeds': None})) + 512
-        for key, row in sorted(records.items(), key=lambda entry: entry[1][4], reverse=True):
+        now = self.clock()
+        for key, row in sorted(records.items(), key=lambda entry: self._time_rank(entry[1][4], now), reverse=True):
             if not self._valid(row, retain_future=True) or counts[row[0]] >= self.limits[row[0]]:
                 if self.trace is not None:
                     self.trace.cache_row(row, evicted=True)
@@ -196,7 +210,13 @@ class AnswerCache:
             self.records.move_to_end(key)  # A refreshed expired answer is newly acquired.
             # Bound memory immediately; encoding/filesystem remain off coordinator.
             if self.counts[lane] > self.limits[lane]:
-                victim = next(k for k, r in self.records.items() if r[0] == lane)
+                # An NTP rollback can make an existing FIFO tail future-dated.
+                # Prefer evicting unusable rows even before the next disk prune.
+                now = self.clock()
+                victim = next((k for k, r in self.records.items()
+                               if r[0] == lane and not now - TTL < r[4] <= now), None)
+                if victim is None:
+                    victim = next(k for k, r in self.records.items() if r[0] == lane)
                 if self.trace is not None:
                     self.trace.cache_row(self.records[victim], evicted=True)
                 del self.records[victim]
@@ -266,8 +286,11 @@ class AnswerCache:
                 with self.lock:
                     revision = self.revision
                     local = dict(self.records)
+                now = self.clock()
                 for key, row in local.items():
-                    if key not in disk or disk[key][4] < row[4]:
+                    if not self._valid(row, retain_future=True):
+                        continue
+                    if key not in disk or self._time_rank(disk[key][4], now) < self._time_rank(row[4], now):
                         disk[key] = row
                 merged = self._prune(disk)
                 with self.lock:

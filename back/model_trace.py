@@ -57,13 +57,15 @@ class ModelTrace:
         lane, ns, kind, ends, stamp, _ = row
         if ns != self.namespaces.get((lane, kind)):
             return
-        age = self.clock() - stamp
+        now = self.clock()
+        age = now - stamp
         if age < -MAX_FUTURE:
             return
         key = digest([lane, ns, kind, ends])
         with self.lock:
             previous = self.answers.get(key)
-            if previous and (previous[0] > stamp or (previous[0] == stamp
+            if previous and (((previous[0] <= now, previous[0]) > (stamp <= now, stamp)
+                    and not acquired) or (previous[0] == stamp
                     and previous[1] == 'cache_evicted' and not evicted and not acquired)):
                 return  # A flush reading an older disk snapshot is not a new acquisition.
             reason = 'cache_expired' if age >= TTL else 'cache_evicted' if evicted else 'other'

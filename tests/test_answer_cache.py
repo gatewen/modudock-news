@@ -158,7 +158,8 @@ class AnswerCacheTests(unittest.TestCase):
         cache.put('classify', self.ns, '', [ac.fingerprint(self.a)], 'tech')
         self.assertFalse(cache.flush())
         self.assertEqual(len(cache.snapshot()), 1)
-        self.assertEqual(len(self.logs), 1)
+        self.assertEqual(self.logs, ['answer cache: read failed; using available memory',
+                                    'answer cache: unavailable; using memory'])
 
     def test_background_debounce_and_daemon_no_stop_join(self):
         cache = ac.AnswerCache(self.temp.name, interval=.02)
@@ -417,6 +418,90 @@ class AnswerCacheTests(unittest.TestCase):
             self.assertFalse(self.cache.flush())
         self.assertTrue(self.cache.disabled)
         self.assertEqual(self.logs, ['answer cache: corrupt file ignored; will rebuild',
+                                    'answer cache: unavailable; using memory'])
+
+    def test_rollback_current_seed_beats_future_disk_and_future_peer(self):
+        ns = ac.namespace('topics')
+        self.cache.remember_seeds(ns, ['1' * 64])
+        self.assertTrue(self.cache.flush())
+        self.now -= 60
+        current, stale_peer = self.new(), self.new()
+        current.remember_seeds(ns, ['2' * 64])
+        self.assertTrue(current.flush())
+        self.assertEqual(self.new().seeds(ns), ['2' * 64])
+        # A peer retaining the future hint must adopt the usable disk hint.
+        self.assertTrue(stale_peer.flush())
+        self.assertEqual(stale_peer.seeds(ns), ['2' * 64])
+        self.now += 120
+        self.assertEqual(self.new().seeds(ns), ['2' * 64])
+
+    def test_rollback_new_answer_beats_future_disk_and_future_peer(self):
+        self.put(value='tech')
+        self.assertTrue(self.cache.flush())
+        self.now -= 60
+        current, stale_peer = self.new(), self.new()
+        self.assertEqual(current.snapshot(), [])
+        current.put('classify', self.ns, '', [ac.fingerprint(self.a)], 'world')
+        self.assertTrue(current.flush())
+        self.assertEqual([r[5] for r in self.new().snapshot()], ['world'])
+        # Opposite merge direction: future memory cannot overwrite usable disk.
+        self.assertTrue(stale_peer.flush())
+        self.now += 120
+        self.assertEqual([r[5] for r in self.new().snapshot()], ['world'])
+
+    def test_future_rows_lose_capacity_priority_by_count_and_bytes(self):
+        current = ['classify', self.ns, '', [ac.fingerprint(self.a)], self.now, 'world']
+        future = ['classify', self.ns, '', [ac.fingerprint(self.b)], self.now + 60, 'tech']
+        records = {ac.AnswerCache._key(r): r for r in (current, future)}
+        for byte_limit in (False, True):
+            with self.subTest(byte_limit=byte_limit):
+                options = ({'max_bytes': len(ac.encoded({'schema': ac.SCHEMA, 'records': [], 'seeds': None}))
+                            + 512 + max(len(ac.encoded(r)) + 1 for r in records.values())}
+                           if byte_limit else {'limits': dict(ac.LIMITS, classify=1)})
+                cache = self.new(**options)
+                kept = cache._prune(records)
+                self.assertEqual(list(kept.values()), [current])
+        # With spare capacity preserve the future row, still unavailable until recovery.
+        kept = self.cache._prune(records)
+        self.assertEqual(list(kept.values()), [future, current])
+
+    def test_future_rows_evicted_before_usable_rows_in_memory(self):
+        self.cache = self.new(limits=dict(ac.LIMITS, classify=2))
+        self.put(self.a)
+        self.now += 120
+        self.put(self.b)
+        self.now -= 60  # a is usable, b is in the future but later in FIFO.
+        self.put(('c', '', ''))
+        self.assertEqual({r[3][0] for r in self.cache.records.values()},
+                         {ac.fingerprint(self.a), ac.fingerprint(('c', '', ''))})
+
+    def test_expired_local_row_cannot_displace_recoverable_future_disk_row(self):
+        self.put(value='tech')
+        stale = self.cache
+        self.now += ac.TTL + 60
+        peer = self.new()
+        peer.put('classify', self.ns, '', [ac.fingerprint(self.a)], 'world')
+        self.assertTrue(peer.flush())
+        self.now -= 30
+        self.assertTrue(stale.flush())
+        self.now += 60
+        self.assertEqual([r[5] for r in self.new().snapshot()], ['world'])
+
+    def test_read_oserror_warning_does_not_consume_unwritable_warning(self):
+        self.put()
+        self.assertTrue(self.cache.flush())
+        # Mock the read boundary rather than chmod: deterministic even as root.
+        with patch.object(Path, 'open', side_effect=PermissionError('SECRET https://private.invalid')):
+            self.assertTrue(self.cache.flush())
+            self.assertTrue(self.cache.flush())
+        self.assertFalse(self.cache.disabled)
+        self.assertEqual(self.logs, ['answer cache: read failed; using available memory'])
+        self.assertEqual(len(self.new().snapshot()), 1)
+        with patch.object(ac.os, 'replace', side_effect=OSError('SECRET URL')):
+            self.assertFalse(self.cache.flush())
+            self.assertFalse(self.cache.flush())
+        self.assertTrue(self.cache.disabled)
+        self.assertEqual(self.logs, ['answer cache: read failed; using available memory',
                                     'answer cache: unavailable; using memory'])
 
     def test_two_cold_schedulers_same_snapshot_zero_http_and_identical_topics(self):

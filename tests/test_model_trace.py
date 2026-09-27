@@ -208,3 +208,16 @@ class ModelTraceTests(unittest.TestCase):
         self.assertTrue(all(r['count'] == len(r['questions']) for r in rows))
         self.assertTrue(all(set(q) == {'key', 'reason'} for r in rows for q in r['questions']))
         self.assertNotIn('chaos-fake-key', (self.path/'model-trace.jsonl').read_text())
+
+    def test_reacquired_answer_during_rollback_replaces_future_trace_timestamp(self):
+        ns = namespace('classify')
+        row = ['classify', ns, '', [fingerprint(self.a)], self.now[0], 'tech']
+        self.trace.cache_row(row)
+        future = list(row)
+        self.now[0] -= 60
+        row[4] = self.now[0]
+        row[5] = 'world'
+        self.trace.cache_row(row, acquired=True)
+        self.trace.cache_row(future)  # Flush rereads the old future disk record.
+        self.now[0] += TTL
+        self.assertEqual(self.reason('classify', [self.a]), ['cache_expired'])
