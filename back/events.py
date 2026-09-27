@@ -98,6 +98,38 @@ def _fits(pairs):
             and sum(len(title) + len(summary) for _, title, summary in state) <= MAX_CHARS)
 
 
+def pack_batch(pairs):
+    """Pack queued pairs by shared endpoints; preserve ties in queue order.
+
+    Returns one batch plus untouched remainder. Does not generate/drop pairs,
+    change acceptance thresholds, or wait for future work.
+    """
+    remaining = list(pairs)
+    degree = Counter(key for pair in remaining for key in pair.key)
+    batch, used, chars = [], set(), 0
+    while remaining and len(batch) < MAX_QUESTIONS:
+        best = None
+        for index, pair in enumerate(remaining):
+            added = {item[0]: item for item in (pair.left, pair.right) if item[0] not in used}
+            cost = sum(len(title) + len(summary) for _, title, summary in added.values())
+            if len(used) + len(added) > MAX_ITEMS or chars + cost > MAX_CHARS:
+                continue
+            score = (len(pair.key & used), sum(degree[key] for key in pair.key))
+            if best is None or score > best[0]:
+                best = (score, index, added, cost)
+        if best is None:
+            break
+        _, index, added, cost = best
+        batch.append(remaining.pop(index))
+        used.update(added)
+        chars += cost
+    # An oversized singleton still reaches the client's normal error path;
+    # never strand a queue forever if a caller violates normalized limits.
+    if not batch and remaining:
+        batch.append(remaining.pop(0))
+    return batch, remaining
+
+
 class EventMatcher(_ChoiceClient):
     _label = "events"
 

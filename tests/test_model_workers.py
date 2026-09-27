@@ -125,7 +125,7 @@ class ModelWorkerTests(unittest.TestCase):
             self.accept()
             return len(self.calls)==8
         eventually(progressed)
-        self.assertEqual([lane for lane,_ in self.calls],['tone']*3+['classify','events','topics','analysis','tone'])
+        self.assertEqual([lane for lane,_ in self.calls],['tone']*3+['events','topics','classify','analysis','tone'])
 
     def test_unaccepted_dependency_results_block_all_workers(self):
         self.start()

@@ -19,13 +19,13 @@ if __package__:
     from .feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from .classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round, _retryable_failure
     from .analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
-    from .events import candidate_pairs, group_events, _fits as pairs_fit
+    from .events import candidate_pairs, group_events, _fits as pairs_fit, pack_batch as pack_event_batch
     from .topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 else:
     from feedparse import parse_feed, retain_items, merge_items, fit_packet, dedup_key, MAX_ITEMS_LIST
     from classify import CRITERIA, MAX_ITEMS, MAX_CHARS, _http_observer, _failure_detail, _service_round, _retryable_failure
     from analyze import ANALYSIS_CATEGORIES, valid_analysis, analysis_kind
-    from events import candidate_pairs, group_events, _fits as pairs_fit
+    from events import candidate_pairs, group_events, _fits as pairs_fit, pack_batch as pack_event_batch
     from topics import plan as topic_plan, TopicPair, fits as topics_fit, TONE_CRITERIA
 
 
@@ -175,12 +175,12 @@ class Scheduler:
         self.analysis_in_flight = set()
         self.classify_jobs = queue.Queue(maxsize=MAX_ITEMS_LIST)
         self.lanes = (
-            _Lane('classify', self.classify_jobs, False, _items_fit,
-                  lambda batch: self.classifier.classify(batch), ClassifyResult, True),
             _Lane('events', self.event_jobs, True, pairs_fit,
                   lambda batch: self.matcher.match(batch), EventResult, True),
             _Lane('topics', self.topic_jobs, True, topics_fit,
                   lambda batch: self.topic_matcher.match(batch), TopicResult, True),
+            _Lane('classify', self.classify_jobs, False, _items_fit,
+                  lambda batch: self.classifier.classify(batch), ClassifyResult, True),
             _Lane('analysis', self.analysis_jobs, False, _items_fit,
                   lambda batch, **options: self.analyzer.analyze(batch, **options), AnalysisResult),
             _Lane('tone', self.tone_jobs, False, _items_fit,
@@ -473,7 +473,15 @@ class Scheduler:
         # Called under cv. Capture analysis kind here, before releasing cv for HTTP.
         jobs, batch = lane.jobs, [first]
         kind = None
-        if lane.name == 'topics':
+        if lane.name == 'events':
+            with jobs.mutex:
+                queued = [first]
+                while jobs.queue and jobs.queue[0][0] is work:
+                    queued.append(jobs.queue.popleft()[1])
+                batch, remaining = pack_event_batch(queued)
+                jobs.queue.extendleft((work, pair) for pair in reversed(remaining))
+                jobs.not_full.notify_all()
+        elif lane.name == 'topics':
             eligible = self._topic_admission()
             dropped = []
             if first.right[0] not in eligible.get(first.left[0], ()):
