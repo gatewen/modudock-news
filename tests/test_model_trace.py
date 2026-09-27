@@ -40,11 +40,11 @@ class ModelTraceTests(unittest.TestCase):
 
     def test_new_changed_old_and_overlapping_round_provenance(self):
         baseline = self.observe(self.b)
-        self.assertEqual(self.reason('classify', [self.b], item_causes=baseline), ['other'])
+        self.assertEqual(self.reason('classify', [self.b], item_causes=baseline), ['new_item'])
         early = self.observe(self.a)
         self.assertEqual(self.reason('classify', [self.a], item_causes=early), ['new_item'])
         later = self.observe(self.a)
-        self.assertEqual(self.reason('analysis', [self.a], kind='world', item_causes=later), ['other'] * 2)
+        self.assertEqual(self.reason('analysis', [self.a], kind='world', item_causes=later), ['new_item'] * 2)
         changed = (self.a[0], 'UPDATED', self.a[2])
         newest = self.observe(changed)
         self.assertEqual(self.reason('classify', [changed], item_causes=newest), ['content_changed'])
@@ -206,6 +206,10 @@ class ModelTraceTests(unittest.TestCase):
         self.assertEqual(sum(r['retry'] for r in rows), s.total_retries)
         self.assertTrue({'classify', 'analysis', 'events', 'topics', 'tone'} == {r['lane'] for r in rows})
         self.assertTrue(all(r['count'] == len(r['questions']) for r in rows))
+        for lane in ('classify', 'analysis', 'tone'):
+            causes = [q['reason'] for r in rows if r['lane'] == lane for q in r['questions']]
+            self.assertIn('new_item', causes)
+            self.assertNotIn('other', causes)
         self.assertTrue(all(set(q) == {'key', 'reason'} for r in rows for q in r['questions']))
         self.assertNotIn('chaos-fake-key', (self.path/'model-trace.jsonl').read_text())
 
@@ -221,3 +225,26 @@ class ModelTraceTests(unittest.TestCase):
         self.trace.cache_row(future)  # Flush rereads the old future disk record.
         self.now[0] += TTL
         self.assertEqual(self.reason('classify', [self.a]), ['cache_expired'])
+
+    def test_initial_new_item_origin_survives_classification_and_later_round(self):
+        initial = self.observe(self.a)
+        self.assertEqual(self.reason('classify', [self.a], item_causes=initial), ['new_item'])
+        self.trace.cache_row(['classify', namespace('classify'), '', [fingerprint(self.a)], self.now[0], 'world'], acquired=True)
+        later = self.observe(self.a)
+        self.assertEqual(self.reason('analysis', [self.a], kind='finance', item_causes=later), ['new_item'] * 3)
+        self.assertEqual(self.reason('tone', [self.a], item_causes={}), ['new_item'])
+        changed = (self.a[0], self.a[1], 'edited summary')
+        self.observe(changed)
+        later = self.observe(changed)
+        self.assertEqual(self.reason('analysis', [changed], kind='world', item_causes=later), ['content_changed'] * 2)
+        self.assertEqual(self.reason('tone', [changed], item_causes={}), ['content_changed'])
+        self.assertEqual(self.reason('tone', [self.a], item_causes=initial), ['new_item'])
+
+    def test_known_cache_reasons_override_new_and_changed_origins(self):
+        cause = self.observe(self.a)
+        row = ['classify', namespace('classify'), '', [fingerprint(self.a)], self.now[0], 'tech']
+        self.trace.cache_row(row, evicted=True)
+        self.assertEqual(self.reason('classify', [self.a], item_causes=cause), ['cache_evicted'])
+        self.now[0] += TTL
+        self.assertEqual(self.reason('classify', [self.a], item_causes=cause), ['cache_expired'])
+        self.assertEqual(self.reason('classify', [self.a], item_causes=cause, requeued=True), ['requeue'])

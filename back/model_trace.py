@@ -40,7 +40,6 @@ class ModelTrace:
         self.lock = threading.Lock()
         self.io_lock = threading.Lock()
         self.disabled = False
-        self.primed = False
         self.versions, self.causes, self.answers, self.seeds = (OrderedDict() for _ in range(4))
         self.namespaces = {(lane, kind): namespace(lane, kind)
             for lane in ('classify', 'analysis', 'events', 'topics', 'tone')
@@ -86,11 +85,10 @@ class ModelTrace:
                 fp = fingerprint((key, item['title'], item['summary']))
                 previous = self.versions.get(ident)
                 cause = ('content_changed' if previous is not None and previous != fp
-                         else 'other' if previous == fp else self.causes.get(fp, 'new_item' if self.primed and len(self.versions) < MAX_KNOWLEDGE else 'other'))
+                         else self.causes.get(fp, 'new_item' if len(self.versions) < MAX_KNOWLEDGE else 'other'))
                 self._remember(self.versions, ident, fp)
                 self._remember(self.causes, fp, cause)
                 current[fp] = cause
-            self.primed = True
         return current
 
     def prepare(self, lane, batch, kind=None, requeued=False, item_causes=None):
@@ -107,7 +105,7 @@ class ModelTrace:
                     ends.sort()
                 key = digest([lane, ns, kind, ends])
                 known = self.answers.get(key)
-                causes = [(item_causes if item_causes is not None else self.causes).get(fp, 'other') for fp in ends]
+                causes = [(item_causes or {}).get(fp, self.causes.get(fp, 'other')) for fp in ends]
                 if requeued:
                     reason = 'requeue'
                 elif known and self.clock() - known[0] >= TTL:

@@ -1415,7 +1415,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **大小守衛**：model 額外預留 failed 的 failure 固定代碼最長形狀（§20.21）。完整 JSON envelope（ensure_ascii、含換行）限 900 KiB，從 items 尾端裁切。未分類預留最長 category；尚未分析且類別為空或可分析者預留三種 analysis 中最長形狀；event_size 預留三位數，另預留 topic、tone、最多五個話題與 model 狀態。裁切後重算來源 count、classify／analysis pending、event_size，協調者再裝飾事件／話題進度。補送理應不減少首次已送 items；若仍裁切，stderr 記一行後照送，不 raise。空 items 的 envelope 仍超限則拒送。（出處：§12.3、§13.4、§16.5、§18.5、§18.14、§18.16、§18.20）
 - **來源摘要**：每個抓取輪收尾另印一次 `sources round=`：2xx 成功解析／有效 304／失敗分開計；失敗為 timeout、http_4xx、http_5xx、parse、other；實際抓取加解析超過 10 秒為 slow，不計排隊。連敗歸零於成功或有效 304，最多列五個名稱（各20字），整行最多1024 UTF-8 bytes，不含 URL 或錯誤內文。僅 stderr，不增加 sources 封包欄位；real_run 摘要保留此行（§20.41）。
 - **stderr 統計**：有模型准入的 work 在 queued／running／awaiting 與延後補試均清空後，僅寫一次 `model round={id} requests={n} failed={m} elapsed={s:.1f}s classify={a} analysis={b} events={c} topics={d} tone={e}`。requests 是准入批次數（含延後補試），429／529 的 HTTP 重試不另加；行尾另附 http（實際 HTTP 嘗試）、retries（其中重試次數）、total_http／total_retries（本 process 已發起的累計嘗試與重試，跨輪可能包含其他在途 work）。另列 requeued（實際准入的延後批次補試，不含因期限／停用而釋放者），補試 HTTP 照常計入 http；成功補試不增加 failed（§20.46）。三 worker 以每次呼叫的 context 綁定原 work，重試不改歸到新輪。§22.11起，首份列表已送出的零請求輪次也寫一行（requests/http=0、elapsed=0.0s），並在既有欄位後附cached與各lane可用答案筆數；取代§20.20的零請求不寫規則。內容不含新聞、URL 或 key。（出處：§18.15、§18.31、§18.32、§18.37、§18.38）
-- **可選診斷trace**：模組根 `.cache/trace.enable` 存在、重載模組後，每次實際模型HTTP嘗試寫 `.cache/model-trace.jsonl`（含重試／補試）；只存原輪次、lane、題數、雜湊題key及有證據的原因代碼。初始未知與無法歸因者為other；兩檔輪替合計20MiB、0600，關閉時無額外trace I/O／索引。語氣一般／補試出隊重驗最新前五話題成員與內容，空批僅完成in-flight確認，不送HTTP。（§22.12）
+- **可選診斷trace**：模組根 `.cache/trace.enable` 存在、重載模組後，每次實際模型HTTP嘗試寫 `.cache/model-trace.jsonl`（含重試／補試）；只存原輪次、lane、題數、雜湊題key及有證據的原因代碼。初始新內容及延後首次分析／語氣依§22.14記new_item或content_changed，無法歸因者仍為other；兩檔輪替合計20MiB、0600，關閉時無額外trace I/O／索引。語氣一般／補試出隊重驗最新前五話題成員與內容，空批僅完成in-flight確認，不送HTTP。（§22.12）
 
 `body.model` 的現行判斷順序如下；pending 指 classify／analysis／events／topics.pending 與 topics.tone_pending 的任一正值。（出處：§18.20、§18.37、§18.44）
 
@@ -2354,3 +2354,28 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **先紅後綠**：將rev3c三個重現改寫成repo回歸，並補雙向peer合併、每lane／byte裁切、記憶體淘汰、有餘裕保留及已過期本機列不覆蓋未來磁碟列。修前五條缺陷測試共七個assertion failure（容量測試含子情境）；另有一條守衛測試修前已綠。trace新增一條先紅後綠的倒退／舊檔重讀／72h診斷測試，合計新增七條。不可寫目錄的既有測試改為精確驗證讀／寫兩個訊息，仍斷言記憶體答案可用。讀取錯誤使用mock PermissionError，避免執行身分導致chmod測試失真。
 - **原PoC復驗**：種子恢復為新提示「2」、倒退期間重啟即可讀到1筆新答案；讀取受阻時flush成功且disabled=false，後續真正不可寫才disabled=true並各保留一行警告。三個原始PoC全綠，紀錄在 `/private/tmp/news-r13/repro.log`；沒有真API請求或殼修改。
 - **驗證**：`/usr/local/bin/python3 -m unittest` 506／OK（45.013s）；npm555／555（27.273s）；一般chaos6並行×5＝30／30（32.74s），R8快取注入同樣30／30（31.07s），各1800情境。git diff --check通過。jev 0，未commit，所有測試快取與重現都在TemporaryDirectory；使用者啟用中的trace.enable未動。
+
+### 22.14 R14：語氣歸因報告、指紋索引與trace首次問原因
+
+#### R14-1：只作離線報告，不改問法或前半
+
+- 使用cc指定的scratchpad/v08-run.json逐則tone，與外部tone_gold_input.json的73則link／title／summary全部相同。R5的news-tone-eval-r5.json只有混淆矩陣，不能反推出逐則預測，因此本次分析的是v0.8既有答案，不冒稱R5逐則重跑、也不發API。逐則表、來源／摘要長度統計與可重跑join腳本放 `/private/tmp/news-r14/tone-report.md`、`tone-attribution.json`、`read_gold.py`、`tone_report.py`；新聞原文和人工標注不放repo。
+- 兩人共識66則，AI正確58則（87.9%），不一致8則，其中6則AI判中性；另7則A≠B無共識，單獨歸「人工分歧」，不混入模型錯誤分母。人工逐則主歸因：輸入不足0、評價隱含6、模型明顯錯2；另列人工分歧7。準則是現有文字是否缺少判斷線索、是否要推論利害或整體權重、或已有可直接圈出的評價仍漏判；這不是模型內部因果證明。
+- 8個共識錯例兩位標注者皆low；兩位皆high的39則全對。所有73則摘要非空；錯例長度35～200字、中位121字，共識全體中位96字。滿200字或有省略尾碼的共識樣本錯1/21，無此跡象錯7/45；唯一200字錯例已保留雙方關鍵立場，不足以直接歸因截斷。ETtoday與中央社各2個錯例，其餘出錯來源各1個；分母不同且樣本小，不能據此排序媒體品質。
+- 建議維持分類規則，不做「摘要空即待判定」或依摘要長度強改中性（本組無空摘要、未見短摘要集中出錯）。可另考慮在既有語氣說明補「中性指主要陳述事實，不等於事件沒有風險或利多」；本輪沒有實作前半文字，也沒有更改criteria。完整逐案理由及來源／字數表見外部報告。
+
+#### R14-2：只還原當前新聞相關答案
+
+- **基準觸發**：各lane填到上限，共52000筆；目前550則，有7120筆可還原答案（classify／analysis／tone各550、events／topics各2735）。原CacheBridge.restore在cv內複製全庫再掃兩遍，9次中位169.8ms、最大179.1ms，超過50ms，因此實作索引。
+- **索引**：AnswerCache在載入、put、覆寫、淘汰時於同一把store.lock維護 `fingerprint → {answer_key: FIFO序號}`；每筆答案只索引第一端，因配對／話題必須兩端都在目前新聞內，任一固定端當索引錨點即可完整找到候選，取出時仍驗全部端點。索引筆數不超過答案筆數，不另存原文，不改answers.json格式／namespace／TTL／大小或writer流程。覆寫的舊位置刪除，刷新答案取得新FIFO序號；空bucket立即清除。
+- **投影**：`snapshot(fingerprints)`只合併指定指紋的bucket，檢查全部端點皆在範圍，再依原序號排序、驗有效時間並deepcopy相關答案；不掃描／複製無關列。無參數snapshot維持舊介面及語意。CacheBridge仍依原namespace過濾，先恢復分類再取相符analysis kind，false、黏著種子及late answer規則不變。
+- **同基準結果**：最終9次中位27.8ms、最大34.0ms，鎖內耗時下降83.6%；還原操作新增配置的tracemalloc峰值13.60→3.14MB。將快取建立也納入量測，常駐Python heap20.13→23.55MB（索引成本+3.42MB），還原時總峰值33.76→26.82MB。這是控制輸入下的Python heap、不是程序RSS；不是保證任何550則都低於50ms，成本仍隨實際相關答案數增加。初版雙端索引+獨立序號表成本+12.7MB，已改為上述單錨點精簡結構，未保留該初版。
+- **等價驗證**：100組固定seed、五lane、混合namespace／analysis kind／改稿／空範圍，與原全量snapshot路徑逐筆逐順序相等。另測雙端必要性、false、有界淘汰與索引清理、過期覆寫／時鐘倒退／恢復、重載重建、deepcopy隔離與並行寫入。測試禁止投影路徑迭代records全庫，確認兩筆查詢只驗兩筆。量測腳本及數字在 `/private/tmp/news-r14/bench_restore.py`、`memory_restore.py`、before.json、after-final.json及memory-*.json。
+
+#### R14-3：新報導首次問不再歸other
+
+- 根因為§22.12的初始基準刻意把未知指紋標other，且下一輪即把同一指紋的原因清成other，導致稍晚首次送出的分析／語氣失去new_item或content_changed歸因。本節取代這兩項規則：初始列表也可標new_item；同一內容指紋的原始原因跨輪保留，取得另一lane答案不會抹掉它。
+- 首次觀測且沒有既有指紋metadata者記new_item；已觀測同dedup key、title或summary變動者記content_changed。原work保存自己的原因快照；沒有該題的work快照時，回退查該內容指紋的紀錄，不因空dict直接變other。分析每個題欄位與tone沿用同篇來源原因。
+- requeue、已知相同答案的TTL過期或實際淘汰仍優先；topics仍先區分seed_new/topic_expand。既有快取已知內容、跨重載無法識別改稿或已滿診斷索引而無可靠歷史者仍可為other；new_item是首次可觀測的內容，不是聲稱新聞首次發表。新規則只影響後續紀錄，不重寫既有trace，也不觸碰trace.enable。
+- 更新首批／延後分析的舊斷言，先確認兩條測試變紅；補初始新稿→分類成功→下一輪分析／語氣、改稿後延後問、空work原因回退、舊輪歸屬，以及TTL／淘汰／補試優先序。trace啟用的五lane故障整合測試確認classify／analysis／tone皆有new_item且不誤標other。
+- **本輪驗證**：後半全套514／OK（50.840s）；npm555／555（28.481s）；一般chaos6並行×5＝30／30（33.61s）、答案快取注入同樣30／30（33.18s），各1800情境。git diff --check通過。新增6條索引測試與2條trace回歸，既有測試的歸因期望依本節更新；jev 0、未commit、未更動使用者的trace.enable。

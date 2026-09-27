@@ -90,6 +90,10 @@ class AnswerCache:
         self.seed_hint = None
         self.records = self._read()
         self.counts = Counter(row[0] for row in self.records.values())
+        self.by_fingerprint = {}
+        self.next_position = 0
+        for key, row in self.records.items():
+            self._index_row(key, row)
         self.thread = None
         if start_writer:
             self.thread = threading.Thread(target=self._writer, name='news-cache', daemon=True)
@@ -206,7 +210,10 @@ class AnswerCache:
                 self.counts[lane] += 1
             if self.trace is not None:
                 self.trace.cache_row(row, acquired=True)
+            if old is not None:
+                self._unindex_row(key, old)
             self.records[key] = row
+            self._index_row(key, row)
             self.records.move_to_end(key)  # A refreshed expired answer is newly acquired.
             # Bound memory immediately; encoding/filesystem remain off coordinator.
             if self.counts[lane] > self.limits[lane]:
@@ -219,6 +226,7 @@ class AnswerCache:
                     victim = next(k for k, r in self.records.items() if r[0] == lane)
                 if self.trace is not None:
                     self.trace.cache_row(self.records[victim], evicted=True)
+                self._unindex_row(victim, self.records[victim])
                 del self.records[victim]
                 self.counts[lane] -= 1
             self.revision += 1
@@ -249,9 +257,34 @@ class AnswerCache:
             self.revision += 1
         self.wake.set()
 
-    def snapshot(self):
+    def _index_row(self, key, row):
+        # Same lock as records; indexes contain only opaque keys, no news text.
+        # A pair can be restored only if BOTH endpoints are selected. Indexing
+        # its first endpoint is sufficient; projection still checks every end.
+        self.by_fingerprint.setdefault(row[3][0], {})[key] = self.next_position
+        self.next_position += 1
+
+    def _unindex_row(self, key, row):
+        fp = row[3][0]
+        bucket = self.by_fingerprint[fp]
+        del bucket[key]
+        if not bucket:
+            del self.by_fingerprint[fp]
+
+    def snapshot(self, fingerprints=None):
         with self.lock:
-            return [deepcopy(row) for row in self.records.values() if self._valid(row)]
+            if fingerprints is None:
+                rows = self.records.values()
+            else:
+                selected = set(fingerprints)
+                candidates = {}
+                for fp in selected:
+                    candidates.update(self.by_fingerprint.get(fp, {}))
+                # Preserve original FIFO order without scanning unrelated rows.
+                keys = sorted((key for key in candidates if all(fp in selected for fp in self.records[key][3])),
+                              key=candidates.__getitem__)
+                rows = (self.records[key] for key in keys)
+            return [deepcopy(row) for row in rows if self._valid(row)]
 
     def _clean_temps(self):
         # Caller holds the process flock. Never remove a peer's current temp,
@@ -365,7 +398,7 @@ class CacheBridge:
         # cannot be bypassed by their legacy dedup-key-only representation.
         for cache in caches.values():
             cache.clear()
-        rows = self.store.snapshot()
+        rows = self.store.snapshot(reverse)
         for lane, ns, kind, ends, stamp, value in rows:
             if ns != self.namespaces.get((lane, kind)) or any(end not in reverse for end in ends):
                 continue
