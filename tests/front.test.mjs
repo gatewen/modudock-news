@@ -5347,3 +5347,5 @@ test('R15 neutral explanation is shared by focus, topic titles and the existing 
 });
 
 import "./lifecycle.test.mjs";
+
+import "./rows.test.mjs";

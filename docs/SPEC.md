@@ -2419,3 +2419,12 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - 回放腳本與JSON：scratchpad/r18/replay.py、replay-results.json；驗證log在 `/private/tmp/news-r18/`。本輪未commit，不改殼及trace.enable。
 - **真實warm驗證**：事前預估5～20 HTTP、全process硬上限40；唯一一次real_run實際4 HTTP（classify1／analysis1／events0／topics2／tone0），與送出前計數器一致，retries／requeued／failed皆0。16來源全成功、480則，5話題報導數42／4／3／3／3、家數10／4／3／3／3，所有pending歸零；first_list及首個≥20則話題1.92s、all_done2.59s。cached=1613為現行log庫存口徑（非本輪查詢命中率），classify472／analysis337／events155／topics566／tone83。使用repo既有.cache，不清除答案、不更動trace.enable；未另跑舊門檻真API對照，不能將此warm耗時全歸因新門檻。快照／log `/private/tmp/news-r18/real.json`、`real.log`。
 - **驗證結果**：`/usr/local/bin/python3 -m unittest` 521／OK（41.852s）；chaos6並行×5＝30／30（30.74s，1800情境）；門檻回退變異被殺；git diff --check通過。既有fixture修改只讓其原本要覆蓋的候選符合新門檻，未刪除或放寬既有斷言。
+
+### 22.19 R19：清單事件列建構拆分（jev 0）
+
+- **選擇與範圍**：只抽清單中單一事件列的DOM建構，以及搜尋重用同一列時的局部更新，新增原生ES module `front/rows.js`。原區域連續、沒有自行註冊事件／計時器，適合低風險搬移；`front.js` 1902→1805行。沒有抽焦點、工具列或另一套搜尋索引，也不更動CSS與呈現文字。
+- **介面**：`createRowBuilder(dependencies)` 注入 document、make／text、無障礙說明、日期／語氣／標題／摘要等既有建構函式；`build(group, options)` 接收已篩選且排序的非空事件群與明確的查詢、類別、分類狀態、追蹤命中、新標記、展開、新進展狀態，回傳原本的 `{row, markers, latest, latestLink, toggle, reports}`。`update(cached, group, options)` 更新同一DOM列的搜尋命中、展開、最新行隱藏與新徽章，回傳原row。
+- **所有權不變**：篩選／聚合、群組排序、日期與已讀分隔、searchRows快取、手動展開／摘要集合、焦點捕捉／還原、閱讀保位及監聽仍由front.js擁有。rows不註冊資源、不讀儲存、不維護跨列狀態。連結安全與唯一description／summary id沿用原注入函式；清單代表與最新／子報導順序、Tab順序、標籤／aria、只看新進展及搜索快路徑行為不變。
+- **單元測試**：新增6條，驗證標題／最新／meta／摘要／子報導與操作順序、依賴參數、最新報導時間／標題／安全連結條件、分類中守衛、財經／國際／政治標記與說明、搜尋快取更新與全新建構DOM一致、文字注入不生成HTML。以happy-dom注入依賴，不啟動整個模組也可核對row builder。
+- **變異**：12個皆由新增單元測試抓到、0存活：分類pending守衛、政治標記範圍、財經describedby、最新時間／同標題／安全連結、摘要按鈕順序、子報導新徽章、自動展開、快取命中標記清除／最新隱藏／新徽章清除。第一次campaign因assert印整棵DOM造成診斷逾時，不計為殺死；改為同等布林斷言後重跑12個均正常斷言失敗。所有暫改使用finally還原，腳本與log在 `/private/tmp/news-r19/`。
+- **驗證**：`npm test` 567／567（21.548s），含既有561條與200×100步固定種子漫步；git diff --check通過。只改上述前半、測試與本節；jev 0、未commit，不動後半、殼或trace.enable。
