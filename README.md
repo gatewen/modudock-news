@@ -360,6 +360,23 @@ NEWS_WALK_SEEDS=100 NEWS_WALK_STEPS=600 NEWS_WALK_SEED=101 node --test tests/fro
 `--save` 可省略；有設定時保存最後一份完整 list 封包，逾時也保留已收到的部分結果，
 尚未收到列表則不寫檔。
 
+換 jev 模型版本時，可用外部人工標注資料做報導語氣回歸：
+
+```sh
+/usr/local/bin/python3 scripts/tone_eval.py --input /path/to/tone_gold_input.json --gold /path/to/tone_gold.json --gold-b /path/to/tone_gold_b.json --dry-run
+/usr/local/bin/python3 scripts/tone_eval.py --input /path/to/tone_gold_input.json --gold /path/to/tone_gold.json --gold-b /path/to/tone_gold_b.json --max-http 10
+```
+
+三份 JSON 都是陣列，以 `link` 對齊：input 每則含 `link/topic_title/title/summary/source`；
+兩份標注各含 `link/label/confidence`，label 為 `negative/neutral/mixed/positive`，confidence 為 `high/low`。
+資料含新聞原文，請放 repo 外；預設讀目前目錄的上述三個檔名，缺檔會提示，不會呼叫 API。
+`--dry-run` 只估批數；正式執行會使用環境金鑰、production 的 ToneClient 問法及分批限制，依話題分批，**會產生費用**。
+輸出 JSON 包含每位標注者、兩位共識、兩位皆 high 的一致率、正負顛倒數與混淆矩陣（列＝人工、欄＝模型）。
+皆 high 但不同意者另按各人計，不混入共識。未取得答案明列 missing，仍留在一致率分母；未完成以非零退出。
+`--runs 3` 可量同一則跨次標籤一致率（只算每次都有答案者）；單次結果不能代表穩定性。
+`--max-http` 是所有 runs 合計的實際 HTTP 硬上限，含重試，預設 10；重跑前依 dry-run 估算調整。
+更換版本前後使用同一份人工資料，比較一致率、顛倒數及矩陣，而非只看模型彼此是否相同。
+
 dev-check 需要 Go 與提供內建 WebSocket 的 Node，會起自己的殼、連 `/ws` 比對
 完整 catalog 宣告，再關閉自己的 process group；8731 已占用時拒絕執行。
 此檢查不等於瀏覽器掛載驗收。協定測試使用真 subprocess；

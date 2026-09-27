@@ -2213,3 +2213,14 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - 速覽仍依來源與新進展、忽略搜尋；話題整體計數不隨清單篩選縮小。各家按鈕計算該outlet符合類別／題材／數字／搜尋／新進展／追蹤的報導，不受目前source/outlet選值縮小，保留點另一家的反事實計數；同outlet多feed合計。追蹤維持原大小寫不敏感比對，臨時搜尋維持全形／零寬正規化，兩者不在本輪統一。
 - **驗證**：首次抽取既有519測試全綠；新增20條scope純函式測試及2條UI測試，`npm test`共541／541（20.696s），包含原200×100漫步。15個scope邏輯變異首輪殺12／存活3（搜尋輸入正規化、新進展面板範圍、追蹤數搜尋交集），各補獨立測試後15／15全殺。腳本在`/private/tmp/news-r4/mutate_scope.py`，每個變異及整輪皆用finally還原；語法錯誤不當成成功殺變異。jev 0，後半與殼未改。
 - 另獨立執行 `NEWS_WALK_SEEDS=200 NEWS_WALK_STEPS=100 node --test tests/front.walk.test.mjs`：200種子／20000步與覆蓋檢查共201 tests全綠（17.510s）。`git diff --check`與兩個前半模組語法檢查通過，變異後scope.js已還原。
+
+
+### 22.5 R5：外部黃金資料的報導語氣回歸
+
+- 新增 `scripts/tone_eval.py`，只讀外部 JSON，不將新聞原文或標注放入 repo。`--input/--gold/--gold-b` 指定三份陣列，預設目前目錄 `tone_gold_input.json/tone_gold.json/tone_gold_b.json`；缺檔或格式錯誤在建 client 前提示並退出。三份 link 集合必須一致且不重複；標注 label 使用 production 四種 id，confidence 限 high/low，額外 note 可忽略。
+- 依 topic_title 分組、維持輸入順序，呼叫 production `ToneClient.tone_round`；每批最多20則／8000字，每話題使用 production 60秒 round 預算，失敗或不完整即停止整次評估。題目、criteria、模型、0.35 回退及傳輸政策均沿用 production；topic_title 只分組，不添加到模型問法或 state。
+- 輸出 JSON：各標注者、兩位相同標籤的共識、兩位皆high（各標注者與共識分列）之 correct/total/一致率、scored/missing、正面與負面直接顛倒數及四乘四混淆矩陣（列人工、欄模型）。缺漏留在一致率分母，矩陣只列有效答案；空集合一致率為null。high 不一致不硬造共識。
+- `--runs N` 重跑，不共用答案快取；跨次一致率只算所有指定 runs 都有答案的項目，報 eligible/consistent；只有一次時不能據此宣稱模型穩定。`--dry-run` 不建 client、不連網，只估批數。
+- 使用 production HTTP observer 計實際嘗試與 retries；`--max-http`（預設10）為所有runs共用硬上限，呼叫前攔截，不超支。finally 還原 observer。輸出不含 key、URL、新聞原文或錯誤內文；完整退出0，部分結果1，缺檔／設定錯誤2。
+- 本次外部73則／5話題：預估7批，實際7 HTTP／0 retries，73則全部完成。與A 59/73（80.82%）、B 58/73（79.45%）、共識55/66（83.33%）、兩位皆high 38/39（97.44%），正負顛倒皆0；只跑一次，不作跨次穩定性結論。完整矩陣存於 `/private/tmp/news-tone-eval-r5.json`，不納入repo。
+- 驗證：新增10條假client／外部資料／CLI測試，涵蓋兩種分批上限、共識與high分母、混淆與顛倒、缺漏、跨次穩定度、HTTP硬上限與重試、observer例外還原、缺檔與無key不連網；`/usr/local/bin/python3 -m unittest` 430 tests／OK（40.150s），`git diff --check`通過。
