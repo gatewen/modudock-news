@@ -18,7 +18,7 @@ class ModelStatsTests(unittest.TestCase):
     make = tone_helpers.ToneSchedulerTests.make
 
     @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
-    def test_snowball_round_logs_once_after_all_results_and_cache_only_round_is_silent(self):
+    def test_snowball_round_logs_once_and_cache_only_round_logs_zero_requests(self):
         items, _ = snapshot([story('one', 'ALPHA BETA'), story('two', 'BETA DELTA')])
         def respond(payload, *_):
             return tone_response(payload) if 'q_0' in payload['questions'] else response(payload)
@@ -28,13 +28,16 @@ class ModelStatsTests(unittest.TestCase):
             s.log = lambda line: logs.append(line) if line.startswith('model ') else None
             s.start()
             eventually(lambda: len(logs) == 1 and s.last_list['body']['topics']['tone_pending'] == 0, timeout=5)
-            self.assertRegex(logs[0], r'^model round=1 requests=3 failed=0 elapsed=\d+\.\ds classify=0 analysis=0 events=0 topics=2 tone=1 http=3 retries=0 total_http=3 total_retries=0 requeued=0$')
+            self.assertRegex(logs[0], r'^model round=1 requests=3 failed=0 elapsed=\d+\.\ds classify=0 analysis=0 events=0 topics=2 tone=1 http=3 retries=0 total_http=3 total_retries=0 requeued=0 cached=\d+ cached_classify=\d+ cached_analysis=\d+ cached_events=\d+ cached_topics=\d+ cached_tone=\d+$')
             self.assertEqual(s.last_list['body']['topics']['tone_pending'], 0)
             s.refresh()
             eventually(lambda: s.completed == 2)
             with s.cv:
                 s._finish_model_rounds()
-            self.assertEqual(len(logs), 1)
+            self.assertEqual(len(logs), 2)
+            self.assertIn('round=2 requests=0 failed=0 elapsed=0.0s', logs[1])
+            self.assertIn(' http=0 retries=0 total_http=3 ', logs[1])
+            self.assertRegex(logs[1], r' cached=[1-9][0-9]* ')
             self.assertEqual(len(received), 3)
 
     def test_counts_failures_budget_and_exception_sanitization(self):
@@ -73,7 +76,8 @@ class ModelStatsTests(unittest.TestCase):
                 stats = [line for line in logs if line.startswith('model ')]
                 count = 4 if failure or budget == 80 else 5
                 self.assertEqual(stats, [f'model round=7 requests={count} failed={int(bool(failure))} elapsed={count*20:.1f}s '
-                    f'classify=1 analysis=1 events=1 topics=1 tone={int(not failure and budget==100)} http=0 retries=0 total_http=0 total_retries=0 requeued=0'])
+                    f'classify=1 analysis=1 events=1 topics=1 tone={int(not failure and budget==100)} http=0 retries=0 total_http=0 total_retries=0 requeued=0 cached=0 '
+                    'cached_classify=0 cached_analysis=0 cached_events=0 cached_topics=0 cached_tone=0'])
                 self.assertFalse(s.model_rounds)
                 self.assertFalse(any(secret in '\n'.join(logs) for secret in ['SECRET','private.invalid','NEWS-CONTENT']))
 
@@ -211,3 +215,78 @@ class ModelStatsTests(unittest.TestCase):
                     self.assertIn('topics=0 tone=1 http=3 retries=2 total_http=3 total_retries=2',logs[0])
                     self.assertEqual(len(received),3)
                     self.assertFalse(work.failed)
+
+
+class ZeroModelStatsTests(unittest.TestCase):
+    def make(self):
+        from tests.test_scheduler import Sink
+        logs = []
+        return Scheduler([{'name': 'x', 'url': 'https://example.test/rss'}], None, Sink(), 1, log=logs.append), logs
+
+    def test_disabled_empty_successful_list_logs_once_and_rejected_does_not(self):
+        from back.scheduler import Cache
+        s, logs = self.make()
+        s.round_id = 1
+        s._emit([Cache()], [])
+        with s.cv:
+            s._finish_model_rounds()
+            s._finish_model_rounds()
+        self.assertEqual(len(logs), 1)
+        self.assertEqual(logs[0], 'model round=1 requests=0 failed=0 elapsed=0.0s '
+            'classify=0 analysis=0 events=0 topics=0 tone=0 http=0 retries=0 '
+            'total_http=0 total_retries=0 requeued=0 cached=0 '
+            'cached_classify=0 cached_analysis=0 cached_events=0 cached_topics=0 cached_tone=0')
+        s.round_id = 2
+        s.outbox.put = lambda _: False
+        s._emit([Cache()], [])
+        with s.cv:
+            s._finish_model_rounds()
+        self.assertEqual(len(logs), 1)
+
+    def test_zero_round_waits_for_old_inflight_and_unaccepted_completion(self):
+        from back.scheduler import ClassifyResult
+        s, logs = self.make()
+        work = ModelRound(2)
+        s.model_work = work
+        s.model_rounds[2] = work
+        with s.cv:
+            s.in_flight.add('old')
+            s._finish_model_rounds()
+            self.assertFalse(logs)
+            s.in_flight.clear()
+            s.results.append(ClassifyResult({}, (), 1))
+            s._finish_model_rounds()
+            self.assertFalse(logs)
+            s.results.clear()
+            s._finish_model_rounds()
+        self.assertEqual(len(logs), 1)
+        self.assertFalse(s.model_rounds)
+
+    def test_cached_inventory_false_kind_and_visible_endpoint_rules(self):
+        s, _ = self.make()
+        s.classify_cache.update(a='world', b='finance', invisible='world')
+        s.analysis_cache.update(a={'kind':'world','trend':'other','region':'other'},
+                               b={'kind':'world','trend':'other','region':'other'})
+        s.tone_cache.update(a='neutral', invisible='positive')
+        pair = Pair(('a','',''), ('b','',''), .5)
+        automatic = Pair(('b','',''), ('c','',''), 1)
+        s._pairs_for = lambda packet: (pair, automatic)
+        s.event_cache.update({pair.key:False, automatic.key:True})
+        s.topic_cache.update({('a','b'):False, ('a','invisible'):True})
+        packet={'body':{'items':[{'link':key} for key in ('a','b','c')]}}
+        expected=dict(classify=2,analysis=1,events=1,topics=1,tone=1)
+        self.assertEqual(s._cached_counts(packet), expected)
+        self.assertEqual(s._cached_counts(packet), expected)
+
+
+    def test_superseded_zero_round_does_not_wait_for_unrelated_new_work_forever(self):
+        s, logs = self.make()
+        old, current = ModelRound(1), ModelRound(2)
+        s.model_work = current
+        s.model_rounds.update({1: old, 2: current})
+        s.in_flight.add('new-round-key')
+        with s.cv:
+            s._finish_model_rounds()
+        self.assertEqual(len(logs), 1)
+        self.assertIn('round=1 requests=0', logs[0])
+        self.assertEqual(list(s.model_rounds), [2])

@@ -49,6 +49,15 @@ class AnswerCacheTests(unittest.TestCase):
             self.assertNotIn(forbidden, raw)
         self.assertEqual(self.cache.path.stat().st_mode & 0o777, 0o600)
 
+    def test_contract_ttl_is_72_hours_not_an_implementation_relative_clock(self):
+        self.put()
+        self.cache.flush()
+        self.now += 72 * 3600 - 1
+        self.assertEqual(len(self.new().snapshot()), 1)
+        self.now += 1
+        self.assertEqual(self.cache.snapshot(), [])
+        self.assertEqual(self.new().snapshot(), [])
+
     def test_ttl_absolute_hits_never_extend_and_future_is_miss(self):
         self.put()
         stamp = self.cache.snapshot()[0][4]
@@ -420,17 +429,22 @@ class AnswerCacheTests(unittest.TestCase):
             try:
                 scheduler.start()
                 eventually(lambda: scenario.settled() and scheduler.last_list['body']['model']['state'] == 'done', timeout=5)
-                return deepcopy(scheduler.last_list['body']), dict(scenario.calls)
+                return deepcopy(scheduler.last_list['body']), dict(scenario.calls), scenario.logs
             finally:
                 scheduler.stop()
                 for worker in scheduler.workers + scheduler.classify_workers + [scheduler.coordinator]:
                     worker.join(2)
                     self.assertFalse(worker.is_alive())
-        first, calls = run(self.cache)
+        first, calls, _ = run(self.cache)
         self.assertTrue(all(calls.get(lane, 0) for lane in ac.LIMITS), calls)
         self.assertTrue(self.cache.flush())
-        second, calls = run(self.new())
+        second, calls, logs = run(self.new())
         self.assertEqual(calls, {})
+        stats = [line for line in logs if line.startswith('model round=')]
+        self.assertEqual(len(stats), 1)
+        self.assertIn('requests=0 failed=0 elapsed=0.0s', stats[0])
+        self.assertIn('http=0 retries=0 total_http=0', stats[0])
+        self.assertRegex(stats[0], r' cached=[1-9][0-9]* ')
         for field in ('items', 'topics', 'events', 'classify', 'analysis'):
             self.assertEqual(first[field], second[field], field)
 

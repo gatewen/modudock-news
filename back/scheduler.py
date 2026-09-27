@@ -75,6 +75,7 @@ class ModelRound:
     awaiting: int = 0
     logged: bool = False
     admitted: bool = True  # Initial list must reach Outbox before HTTP starts.
+    cached: dict = field(default_factory=lambda: dict.fromkeys(('classify', 'analysis', 'events', 'topics', 'tone'), 0))
 
 
 @dataclass
@@ -392,7 +393,13 @@ class Scheduler:
         # cv held: results may generate more work, so queue emptiness alone is not completion.
         queues = (self.classify_jobs, self.analysis_jobs, self.event_jobs, self.topic_jobs, self.tone_jobs)
         for round_id, work in list(self.model_rounds.items()):
-            if work.running:
+            if work.running or not work.admitted:
+                continue
+            # A zero-request round may still inherit work from an older round.
+            # Do not log zero before those acknowledgements can refill its queues.
+            if work is self.model_work and not any(work.requests.values()) and (self.model_running or self.results
+                    or self.in_flight or self.analysis_in_flight or self.event_in_flight
+                    or self.topic_in_flight or self.tone_in_flight):
                 continue
             queued = False
             for jobs in queues:
@@ -401,10 +408,12 @@ class Scheduler:
             if work.awaiting or queued or any(entry[1] is work for entry in self.model_requeues):
                 continue
             counts = work.requests
-            elapsed = max(0, self.model_clock() - work.started)
+            elapsed = max(0, self.model_clock() - work.started) if work.started is not None else 0
             self.log(f"model round={round_id} requests={sum(counts.values())} failed={work.failures} "
                      f"elapsed={elapsed:.1f}s " + ' '.join(f'{kind}={count}' for kind, count in counts.items())
-                     + f" http={work.http} retries={work.retries} total_http={self.total_http} total_retries={self.total_retries} requeued={work.requeued}")
+                     + f" http={work.http} retries={work.retries} total_http={self.total_http} total_retries={self.total_retries} requeued={work.requeued}"
+                     + f" cached={sum(work.cached.values())} "
+                     + ' '.join(f'cached_{lane}={count}' for lane, count in work.cached.items()))
             work.logged = True
             if self.answer_cache is not None:
                 self.answer_cache.store.request_flush()
@@ -1028,6 +1037,18 @@ class Scheduler:
             self.log("list packet rejected: " + str(exc)[:200])
         return None
 
+    def _cached_counts(self, packet):
+        # Inventory at initial emission, not lookup counts: resends cannot inflate it.
+        keys = {dedup_key(item['link']) for item in packet['body']['items']}
+        return dict(
+            classify=sum(key in self.classify_cache for key in keys),
+            analysis=sum(self.classify_cache.get(key) in ANALYSIS_CATEGORIES
+                         and self._cached_analysis(key) is not None for key in keys),
+            events=sum(not pair.automatic and pair.key in self.event_cache
+                       for pair in self._pairs_for(packet)),
+            topics=sum(set(key) <= keys for key in self.topic_cache),
+            tone=sum(key in self.tone_cache for key in keys))
+
     def _emit(self, caches, statuses):
         packet = {"t": "msg", "seq": self.seq, "body": {
             "op": "list", "items": merge_items([cache.items for cache in caches], self.feeds),
@@ -1048,6 +1069,7 @@ class Scheduler:
         with self.cv:
             work = self.model_work
             work.admitted = False
+            work.cached = self._cached_counts(packet)
             packet = self._decorate_events(packet)
             if self._classify_enabled():
                 self._enqueue_classification(packet)
@@ -1068,6 +1090,8 @@ class Scheduler:
                                 kept.append((queued_work, item))
                         lane.jobs.queue.clear()
                         lane.jobs.queue.extend(kept)
+            if sent is not None:
+                self.model_rounds[work.round_id] = work
             work.admitted = True
             self.cv.notify_all()
         return sent
