@@ -91,6 +91,8 @@ class AnswerCache:
         self.records = self._read()
         self.counts = Counter(row[0] for row in self.records.values())
         self.by_fingerprint = {}
+        self.lane_fifo = {lane: OrderedDict() for lane in self.limits}
+        self.time_bounds = {lane: (math.inf, -math.inf) for lane in self.limits}
         self.next_position = 0
         for key, row in self.records.items():
             self._index_row(key, row)
@@ -217,13 +219,7 @@ class AnswerCache:
             self.records.move_to_end(key)  # A refreshed expired answer is newly acquired.
             # Bound memory immediately; encoding/filesystem remain off coordinator.
             if self.counts[lane] > self.limits[lane]:
-                # An NTP rollback can make an existing FIFO tail future-dated.
-                # Prefer evicting unusable rows even before the next disk prune.
-                now = self.clock()
-                victim = next((k for k, r in self.records.items()
-                               if r[0] == lane and not now - TTL < r[4] <= now), None)
-                if victim is None:
-                    victim = next(k for k, r in self.records.items() if r[0] == lane)
+                victim = self._victim(lane, self.clock())
                 if self.trace is not None:
                     self.trace.cache_row(self.records[victim], evicted=True)
                 self._unindex_row(victim, self.records[victim])
@@ -231,6 +227,23 @@ class AnswerCache:
                 self.counts[lane] -= 1
             self.revision += 1
         self.wake.set()
+
+    def _victim(self, lane, now):
+        fifo = self.lane_fifo[lane]
+        low, high = self.time_bounds[lane]
+        if now - TTL < low and high <= now:
+            return next(iter(fifo))  # Common path: no scan, including other lanes.
+        # Conservative bounds may include a removed timestamp. Only a possible
+        # expiry/rollback takes this slow path, bounded by this lane's capacity.
+        victim = None
+        low, high = math.inf, -math.inf
+        for key, stamp in fifo.items():
+            if victim is None and not now - TTL < stamp <= now:
+                victim = key
+                continue
+            low, high = min(low, stamp), max(high, stamp)
+        self.time_bounds[lane] = low, high
+        return victim if victim is not None else next(iter(fifo))
 
     def _valid_seeds(self, hint, *, retain_future=False):
         return (isinstance(hint, dict) and set(hint) == {'namespace', 'at', 'items'}
@@ -263,8 +276,16 @@ class AnswerCache:
         # its first endpoint is sufficient; projection still checks every end.
         self.by_fingerprint.setdefault(row[3][0], {})[key] = self.next_position
         self.next_position += 1
+        lane, stamp = row[0], row[4]
+        self.lane_fifo[lane][key] = stamp
+        low, high = self.time_bounds[lane]
+        self.time_bounds[lane] = min(low, stamp), max(high, stamp)
 
     def _unindex_row(self, key, row):
+        lane = row[0]
+        del self.lane_fifo[lane][key]
+        if not self.lane_fifo[lane]:
+            self.time_bounds[lane] = math.inf, -math.inf
         fp = row[3][0]
         bucket = self.by_fingerprint[fp]
         del bucket[key]

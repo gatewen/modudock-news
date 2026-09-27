@@ -1415,7 +1415,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - **大小守衛**：model 額外預留 failed 的 failure 固定代碼最長形狀（§20.21）。完整 JSON envelope（ensure_ascii、含換行）限 900 KiB，從 items 尾端裁切。未分類預留最長 category；尚未分析且類別為空或可分析者預留三種 analysis 中最長形狀；event_size 預留三位數，另預留 topic、tone、最多五個話題與 model 狀態。裁切後重算來源 count、classify／analysis pending、event_size，協調者再裝飾事件／話題進度。補送理應不減少首次已送 items；若仍裁切，stderr 記一行後照送，不 raise。空 items 的 envelope 仍超限則拒送。（出處：§12.3、§13.4、§16.5、§18.5、§18.14、§18.16、§18.20）
 - **來源摘要**：每個抓取輪收尾另印一次 `sources round=`：2xx 成功解析／有效 304／失敗分開計；失敗為 timeout、http_4xx、http_5xx、parse、other；實際抓取加解析超過 10 秒為 slow，不計排隊。連敗歸零於成功或有效 304，最多列五個名稱（各20字），整行最多1024 UTF-8 bytes，不含 URL 或錯誤內文。僅 stderr，不增加 sources 封包欄位；real_run 摘要保留此行（§20.41）。
 - **stderr 統計**：有模型准入的 work 在 queued／running／awaiting 與延後補試均清空後，僅寫一次 `model round={id} requests={n} failed={m} elapsed={s:.1f}s classify={a} analysis={b} events={c} topics={d} tone={e}`。requests 是准入批次數（含延後補試），429／529 的 HTTP 重試不另加；行尾另附 http（實際 HTTP 嘗試）、retries（其中重試次數）、total_http／total_retries（本 process 已發起的累計嘗試與重試，跨輪可能包含其他在途 work）。另列 requeued（實際准入的延後批次補試，不含因期限／停用而釋放者），補試 HTTP 照常計入 http；成功補試不增加 failed（§20.46）。三 worker 以每次呼叫的 context 綁定原 work，重試不改歸到新輪。§22.11起，首份列表已送出的零請求輪次也寫一行（requests/http=0、elapsed=0.0s），並在既有欄位後附cached與各lane可用答案筆數；取代§20.20的零請求不寫規則。內容不含新聞、URL 或 key。（出處：§18.15、§18.31、§18.32、§18.37、§18.38）
-- **可選診斷trace**：模組根 `.cache/trace.enable` 存在、重載模組後，每次實際模型HTTP嘗試寫 `.cache/model-trace.jsonl`（含重試／補試）；只存原輪次、lane、題數、雜湊題key及有證據的原因代碼。初始新內容及延後首次分析／語氣依§22.14記new_item或content_changed，無法歸因者仍為other；兩檔輪替合計20MiB、0600，關閉時無額外trace I/O／索引。語氣一般／補試出隊重驗最新前五話題成員與內容，空批僅完成in-flight確認，不送HTTP。（§22.12）
+- **可選診斷trace**：模組根 `.cache/trace.enable` 存在、重載模組後，每次實際模型HTTP嘗試寫 `.cache/model-trace.jsonl`（含重試／補試）；只存原輪次、lane、題數、雜湊題key及有證據的原因代碼。初始新內容及延後首次分析／語氣依§22.14記new_item或content_changed，版本資訊滿52000筆時依LRU淘汰，首次可觀測的新內容仍記new_item（§22.17）；無法歸因者仍為other；兩檔輪替合計20MiB、0600，關閉時無額外trace I/O／索引。語氣一般／補試出隊重驗最新前五話題成員與內容，空批僅完成in-flight確認，不送HTTP。（§22.12）
 
 `body.model` 的現行判斷順序如下；pending 指 classify／analysis／events／topics.pending 與 topics.tone_pending 的任一正值。（出處：§18.20、§18.37、§18.44）
 
@@ -2376,7 +2376,7 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 
 - 根因為§22.12的初始基準刻意把未知指紋標other，且下一輪即把同一指紋的原因清成other，導致稍晚首次送出的分析／語氣失去new_item或content_changed歸因。本節取代這兩項規則：初始列表也可標new_item；同一內容指紋的原始原因跨輪保留，取得另一lane答案不會抹掉它。
 - 首次觀測且沒有既有指紋metadata者記new_item；已觀測同dedup key、title或summary變動者記content_changed。原work保存自己的原因快照；沒有該題的work快照時，回退查該內容指紋的紀錄，不因空dict直接變other。分析每個題欄位與tone沿用同篇來源原因。
-- requeue、已知相同答案的TTL過期或實際淘汰仍優先；topics仍先區分seed_new/topic_expand。既有快取已知內容、跨重載無法識別改稿或已滿診斷索引而無可靠歷史者仍可為other；new_item是首次可觀測的內容，不是聲稱新聞首次發表。新規則只影響後續紀錄，不重寫既有trace，也不觸碰trace.enable。
+- requeue、已知相同答案的TTL過期或實際淘汰仍優先；topics仍先區分seed_new/topic_expand。既有快取已知內容、跨重載無法識別改稿者仍可為other（本節原有滿表即other規則已由§22.17取代）；new_item是首次可觀測的內容，不是聲稱新聞首次發表。新規則只影響後續紀錄，不重寫既有trace，也不觸碰trace.enable。
 - 更新首批／延後分析的舊斷言，先確認兩條測試變紅；補初始新稿→分類成功→下一輪分析／語氣、改稿後延後問、空work原因回退、舊輪歸屬，以及TTL／淘汰／補試優先序。trace啟用的五lane故障整合測試確認classify／analysis／tone皆有new_item且不誤標other。
 - **本輪驗證**：後半全套514／OK（50.840s）；npm555／555（28.481s）；一般chaos6並行×5＝30／30（33.61s）、答案快取注入同樣30／30（33.18s），各1800情境。git diff --check通過。新增6條索引測試與2條trace回歸，既有測試的歸因期望依本節更新；jev 0、未commit、未更動使用者的trace.enable。
 
@@ -2396,3 +2396,14 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - 新增5條測試：監聽 capture／選項、兩種 timer 清理與卸載後回呼、已觸發／取消 timer 不留存、observer 冪等清理、同一 happy-dom Window 連續100次 mount/unmount。每次掛載40監聽、觸發2個timeout及1個observer，卸載皆回到0；保留的殼回呼不能復活UI。
 - 12個變異首輪全殺、0存活：漏清監聽／timeout／interval／observer、capture錯誤、已執行timeout未移除、手動取消兩種timer失效、卸載後timer仍回呼、unmount漏dispose、observer漏登錄、遲到observer漏清。scratchpad腳本每個變異皆以finally還原。
 - **驗證**：`npm test` 561／561（20.502s），包含既有556條與200×100步固定種子漫步；`git diff --check` 通過。jev 0，不動後半、殼或 trace.enable，未commit。變異與測試紀錄在 `/private/tmp/news-r16/`。
+
+
+### 22.17 R17：滿載答案淘汰與trace版本LRU（jev 0）
+
+- **滿載put**：每lane另維護 `lane_fifo`（key→timestamp OrderedDict），與records／指紋索引在同一store.lock同步建立、刷新、淘汰；合計筆數不超過答案容量52000，沒有延後刪除的heap或無界歷史。一般時鐘下以該lane FIFO頭 O(1) 選受害者，不掃全庫、也不掃該lane。命中仍不刷新TTL或FIFO，過期重問仍移至尾端。
+- **時鐘異常與過期**：每lane維護保守最小／最大時間界限；只有界限可能過期或位於未來時，才掃該lane（最多上限+1列），優先淘汰最早進入的不可用答案，同次重算界限。刪除造成的過寬界限最多引發一次重新確認；其他lane不受影響。保留§22.13「未來／過期答案優先讓位給當前有效答案」規則，不改落盤合併、TTL或恢復語意。
+- **量測**：使用rev3d原repro_put_scan.py，五lane全滿52000筆、200次新tone put，修前1.622ms/put，修後0.006ms/put（約降99.6%）；這是合成固定時鐘的程序內平均，不是網路或端到端數字。操作次數測試禁止records全表掃描，正常路徑亦禁止lane.items掃描，避免只靠易受負載影響的耗時斷言。
+- **trace LRU**：刪除「versions滿52000後新指紋一律other」分支，沿用_remember的LRU：目前列表觀測即更新最近使用順序，溢出淘汰最舊版本；已知仍在表的改稿維持content_changed，首次可觀測內容為new_item，TTL／淘汰／補試原因的優先序不變。舊內容被遺忘後再次出現可能是new_item，代表目前可觀測範圍，不聲稱首次發布。四張診斷表仍各有上限。原52000滿表PoC新稿原因由other恢復new_item。
+- **trace存檔成本保留**：原flush PoC本機修前off/on為0.68/0.88s，修後0.68/0.90s（約+32%，審查量測+36%）。主要額外成本為同一份答案檔讀取後的逐列驗證與cache_row診斷更新，並非再讀一份完整檔案；此工作已在背景writer、store.lock外，但仍消耗Python CPU／GIL與trace.lock。不能單純跳過，否則其他process寫入、過期答案及淘汰原因的證據可能遺失；本輪不改這條流程，明列為選擇性trace的成本，關閉trace仍無這項額外掃描。不更動使用者的trace.enable。
+- **回歸測試**：新增每lane滿載禁止掃描／只淘汰自己最舊、倒退時優先淘汰future尾端且不掃別lane、過期刷新FIFO／重載重建／TTL邊界、長序列索引容量與順序；trace新增滿表後新稿與最近使用改稿測試，既有滿表斷言依新規則改成new_item。修前5個failure及1個索引尚不存在的error，修後針對性測試全綠。重現與量測紀錄在 `/private/tmp/news-r17/`。
+- **驗證**：`/usr/local/bin/python3 -m unittest` 519／OK（44.703s）；一般chaos6並行×5＝30／30（29.25s），R8答案快取注入版同樣30／30（30.68s），各1800個假client情境。git diff --check通過；jev 0、未commit，前半與殼未更動。

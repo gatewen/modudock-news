@@ -135,9 +135,25 @@ class ModelTraceTests(unittest.TestCase):
         with patch('back.model_trace.MAX_KNOWLEDGE', 2):
             self.observe(self.a, self.b, ('c', 'c', ''))
             causes = self.observe(('d', 'd', ''))
-            self.assertEqual(self.reason('classify', [('d', 'd', '')], item_causes=causes), ['other'])
+            self.assertEqual(self.reason('classify', [('d', 'd', '')], item_causes=causes), ['new_item'])
         self.assertEqual(len(self.trace.versions), 2)
         self.assertEqual(len(self.trace.causes), 2)
+
+    def test_full_versions_lru_preserves_recent_edits_and_admits_fresh_items(self):
+        from back.answer_cache import digest
+        from back.feedparse import dedup_key
+        with patch('back.model_trace.MAX_KNOWLEDGE', 3):
+            c, d = ('https://example.test/c', 'c', ''), ('https://example.test/d', 'd', '')
+            self.observe(self.a, self.b, c)
+            self.observe(self.a)  # Touch a, so b is least recently used.
+            causes = self.observe(d)
+            self.assertEqual(self.reason('tone', [d], item_causes=causes), ['new_item'])
+            self.assertNotIn(digest(dedup_key(self.b[0])), self.trace.versions)
+            edited = (self.a[0], 'edited', self.a[2])
+            causes = self.observe(edited)
+            self.assertEqual(self.reason('classify', [edited], item_causes=causes), ['content_changed'])
+            self.assertEqual(len(self.trace.versions), 3)
+            self.assertLessEqual(len(self.trace.causes), 3)
 
     def test_scheduler_actual_http_retry_and_requeue_rows_match_stats(self):
         from tests import test_model_requeue as helpers

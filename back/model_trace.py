@@ -85,7 +85,7 @@ class ModelTrace:
                 fp = fingerprint((key, item['title'], item['summary']))
                 previous = self.versions.get(ident)
                 cause = ('content_changed' if previous is not None and previous != fp
-                         else self.causes.get(fp, 'new_item' if len(self.versions) < MAX_KNOWLEDGE else 'other'))
+                         else self.causes.get(fp, 'new_item'))
                 self._remember(self.versions, ident, fp)
                 self._remember(self.causes, fp, cause)
                 current[fp] = cause
