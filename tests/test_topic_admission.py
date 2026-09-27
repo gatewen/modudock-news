@@ -110,3 +110,40 @@ class TopicAdmissionTests(unittest.TestCase):
         self.assertNotIn(extra['link'], s._topic_admission()[seed])
         s.topic_cache[seed,extra['link']] = True
         self.assertNotIn(extra['link'], s._topic_admission()[seed])
+
+    def test_empty_completion_keeps_started_round_open_until_accepted(self):
+        items, groups = snapshot()
+        for retry in (False, True):
+            with self.subTest(retry=retry):
+                s = self.make(items, groups)
+                logs = []; s.log = logs.append
+                w = ModelRound(7, started=0)
+                w.requests['classify'] = 1
+                s.model_rounds[7] = w
+                pair = TopicPair(('gone', 'gone', ''), ('x', 'x', ''))
+                s.topic_in_flight.add(pair.key)
+                lane = next(l for l in s.lanes if l.name == 'topics')
+                with patch('back.scheduler.group_events', return_value=groups), s.cv:
+                    if retry:
+                        # The retry path must use the same empty-completion accounting.
+                        batch = s._prune_topic_batch(w, [pair], {})
+                    else:
+                        batch, _ = s._take_batch(lane, w, pair)
+                    self.assertEqual(batch, [])
+                    s._finish_model_rounds()
+                    self.assertFalse(w.logged)
+                    self.assertEqual(logs, [])
+                    result = s.results.popleft()
+                    self.assertEqual(result.round_id, 7)
+                    self.assertTrue(result.accounted)
+                    self.assertEqual(w.awaiting, 1)
+                    s.active = True
+                    s._accept(result)
+                    self.assertEqual(w.awaiting, 0)
+                    self.assertFalse(s.topic_in_flight)
+                    s._finish_model_rounds()
+                self.assertTrue(w.logged)
+                self.assertEqual(len(logs), 1)
+                self.assertIn('requests=1', logs[0])
+                self.assertIn('topics=0', logs[0])
+                self.assertIn('http=0', logs[0])

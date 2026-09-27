@@ -15,6 +15,7 @@ class ModelWorkerTests(unittest.TestCase):
     def setUp(self):
         self.gates = [threading.Event() for _ in range(3)]
         self.calls = []
+        self.call_workers = []
         self.logs = []
         self.now = [0]
         self.lock = threading.Lock()
@@ -23,6 +24,7 @@ class ModelWorkerTests(unittest.TestCase):
             with self.lock:
                 index = len(self.calls)
                 self.calls.append((lane, batch))
+                self.call_workers.append(threading.current_thread().name)
             return self.handler(lane, batch, index)
         self.classifier = SimpleNamespace(enabled=True, clock=lambda:self.now[0], budget=60,
                                           classify=lambda batch:call('classify',batch))
@@ -110,6 +112,12 @@ class ModelWorkerTests(unittest.TestCase):
         self.assertIn('classify=5 analysis=0 events=0 topics=0 tone=0',self.logs[0])
 
     def test_newly_free_worker_takes_highest_priority_before_queued_low_work(self):
+        self.check_newly_free_worker('news-classify-2', ['events','topics','classify','analysis','tone'])
+
+    def test_first_worker_keeps_normal_priority_when_not_starved(self):
+        self.check_newly_free_worker('news-classify-1', ['events','topics','classify','analysis','tone'])
+
+    def check_newly_free_worker(self, worker, expected):
         self.handler=self.block_three
         self.queue('tone',[(str(i),'title','') for i in range(61)])
         self.start()
@@ -120,12 +128,12 @@ class ModelWorkerTests(unittest.TestCase):
             self.queue('topics',[TopicPair(('s','s',''),('t','t',''))])
             self.queue('events',[Pair(('l','l',''),('r','r',''),.5)])
             self.queue('classify',[('c','c','')])
-        self.gates[0].set()
+        self.gates[self.call_workers.index(worker)].set()
         def progressed():
             self.accept()
             return len(self.calls)==8
         eventually(progressed)
-        self.assertEqual([lane for lane,_ in self.calls],['tone']*3+['events','topics','classify','analysis','tone'])
+        self.assertEqual([lane for lane,_ in self.calls],['tone']*3+expected)
 
     def test_unaccepted_dependency_results_block_all_workers(self):
         self.start()
@@ -399,3 +407,87 @@ class ModelWorkerTests(unittest.TestCase):
                 self.s.last_list={'body':{'items':[]}}
                 self.assertFalse(self.s._unresolved_events())
                 self.assertEqual(generate.call_count,3)
+
+    def test_starvation_guard_waits_fifteen_seconds_and_stops_after_one_admission(self):
+        from back.scheduler import CLASSIFY_STARVATION_SECONDS
+        self.assertEqual(CLASSIFY_STARVATION_SECONDS, 15)
+        self.queue('classify', [('c','c','')])
+        self.queue('events', [Pair(('l','l',''),('r','r',''),.5)])
+        with self.s.cv:
+            self.now[0] = 100
+            self.assertEqual(self.s._next_lane().name, 'events')  # Not started.
+            self.work.started = 100
+            self.work.deadline = 160
+            self.now[0] = 114.999
+            self.assertEqual(self.s._next_lane().name, 'events')
+            self.now[0] = 115
+            self.assertEqual(self.s._next_lane().name, 'classify')
+            self.work.requests['classify'] = 1
+            self.assertEqual(self.s._next_lane().name, 'events')
+            self.work.requests['classify'] = 0
+            for field, value in [('admitted', False), ('failed', True), ('deadline', 115)]:
+                old = getattr(self.work, field)
+                setattr(self.work, field, value)
+                self.assertNotEqual(getattr(self.s._next_lane(), 'name', None), 'classify')
+                setattr(self.work, field, old)
+            self.classifier.service_circuit_open = True
+            self.s.model_running = 1
+            self.assertIsNone(self.s._next_lane())
+            self.s.model_running = 0
+            self.classifier.service_circuit_open = False
+            self.s.model_work = ModelRound(2, started=115)  # Use queued work's age, not current round's.
+            self.assertEqual(self.s._next_lane().name, 'classify')
+            self.s.classify_jobs.get_nowait()
+            self.assertEqual(self.s._next_lane().name, 'events')
+
+    def test_five_second_requests_rescue_one_classification_batch_in_budget(self):
+        from tests.test_events import disjoint
+        pending = []
+        entered = threading.Condition()
+        calls_at = []
+        gates = []
+        def slow(lane, batch, index):
+            gate = threading.Event()
+            with entered:
+                pending.append(gate); gates.append(gate)
+                calls_at.append((lane, self.now[0], threading.current_thread().name))
+                entered.notify_all()
+            if not gate.wait(5):
+                raise AssertionError('virtual-time driver did not release request')
+            return self.success(lane, batch)
+        self.handler = slow
+        self.queue('classify', [(str(i),'title','') for i in range(480)])  # 24 batches
+        pairs = disjoint(400)  # Forty event batches can occupy all three workers for >60s.
+        self.queue('events', pairs)
+        self.s.event_in_flight.update(p.key for p in pairs)
+        topics = [TopicPair(('s','seed',''), (f't{i}','topic','x'*5000)) for i in range(40)]
+        self.queue('topics', topics)
+        self.s._topic_admission = lambda: {'s': {f't{i}' for i in range(40)}}
+        self.start()
+        try:
+            for tick in range(12):
+                deadline = time.monotonic()+4
+                while True:
+                    self.accept()
+                    with entered:
+                        if len(pending) == 3:
+                            current = pending[:]; pending.clear()
+                            break
+                        self.assertLess(time.monotonic(), deadline, 'three virtual requests must make progress')
+                        entered.wait(.01)
+                if tick == 0:
+                    self.assertEqual(Counter(lane for lane, _, _ in calls_at), {'events':3})
+                self.now[0] = (tick+1)*5
+                for gate in current: gate.set()
+            eventually(self.accept)
+            self.assertEqual(self.work.requests['classify'], 1)
+            self.assertEqual(len(self.s.classify_cache), 20)
+            self.assertEqual([at for lane, at, _ in calls_at if lane == 'classify'], [15])
+            self.assertEqual(self.work.requests['events'], 35)
+            self.assertEqual(self.work.requests['topics'], 0)  # Still depends on unfinished pairs.
+            self.assertTrue(all(at < 60 for _, at, _ in calls_at))
+            self.assertEqual(len(self.logs), 1)
+            self.assertIn('classify=1', self.logs[0])
+        finally:
+            self.s.stop()
+            for gate in gates: gate.set()

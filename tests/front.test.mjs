@@ -5309,3 +5309,17 @@ test('R4 partial classification never moves pending items into other facet', t =
   assert.equal(names().get('other'),'其他 1');assert.equal(names().get('tech'),'科技 1');
   assert.equal(h.container.querySelectorAll('.nw-category')[0].textContent,'科技');
 });
+
+test('R6 classification label requires positive pending and an absent category', t => {
+  const h=setup(t);
+  for (const pending of [0, undefined, -1, '1', 0.5]) {
+    h.message({...listing([article({category:''})]),model:{state:'working'},classify:{enabled:true,pending}});
+    assert.equal(h.container.querySelector('.nw-category').textContent,'未分類');
+  }
+  for (const category of ['zzz', {}, [], 12, false]) {
+    h.message({...listing([article({category})]),model:{state:'working'},classify:{enabled:true,pending:1}});
+    assert.equal(h.container.querySelector('.nw-category').textContent,'未分類');
+  }
+  h.message({...listing([article({category:''})]),model:{state:'working'},classify:{enabled:true,pending:1}});
+  assert.equal(h.container.querySelector('.nw-category').textContent,'分類中');
+});

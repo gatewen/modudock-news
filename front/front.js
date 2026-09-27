@@ -457,7 +457,7 @@ export default function mount(ctx) {
   let savedView = null;
   let topics = [];
   let toneAudit = null;
-  let analysisEnabled = true;
+  let analysisEnabled = true, classificationPending = 0;
   let eventsPending = 0;
   let historyAt = Date.now();
   let updatedText = "", failedText = "", classificationText = "";
@@ -1390,7 +1390,7 @@ export default function mount(ctx) {
         describe(tag, description, tagDescriptions);
         info.append(tag);
       }
-      if (!categories.value) info.append(make("span", "nw-category", categoryNames.get(category) || (modelState === "working" && analysisEnabled && !category ? "分類中" : "未分類")));
+      if (!categories.value) info.append(make("span", "nw-category", categoryNames.get(category) || (modelState === "working" && analysisEnabled && classificationPending > 0 && (item.category == null || item.category === "") ? "分類中" : "未分類")));
       info.append(make("span", "nw-source", text(item.source)), groupTime(group.reports));
       appendTone(info, item, group.reports);
       row.append(newsTitle(item, "nw-title", newGroups[index] && index >= prefix), meta);
@@ -1766,6 +1766,7 @@ export default function mount(ctx) {
     const classify = body.classify && typeof body.classify === "object" ? body.classify : {};
     analysisEnabled = classify.enabled !== false;
     const pending = Number.isInteger(classify.pending) && classify.pending >= 0 ? classify.pending : 0;
+    classificationPending = pending;
     const offNotice = classify.enabled === false && modelState === "off"
       ? {no_key: ["分類未啟用：未設定 API 金鑰", "設定 TYPESAFE_API_KEY 後重新載入模組"],
          auth: ["分類已停用：API 金鑰無效", "請確認金鑰後重新載入模組"]}[modelReason] : null;

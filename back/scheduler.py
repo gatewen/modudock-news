@@ -30,6 +30,7 @@ else:
 
 
 MODEL_WORKERS = 3
+CLASSIFY_STARVATION_SECONDS = 15
 SOURCE_LOG_MAX = 1024
 SOURCE_FAILURES = ("timeout", "http_4xx", "http_5xx", "parse", "other")
 
@@ -408,6 +409,17 @@ class Scheduler:
         if (getattr(self.classifier, "service_circuit_open", False)
                 and self.model_running):
             return None
+        # Rescue only a round that has made no classification request after
+        # its first admission. cv also covers the caller's requests increment,
+        # so peers immediately resume normal priority once one batch is sent.
+        with self.classify_jobs.mutex:
+            work = self.classify_jobs.queue[0][0] if self.classify_jobs.queue else None
+        if (work is not None and work.admitted and not work.failed
+                and work.started is not None and work.requests['classify'] == 0
+                and self.model_clock() - work.started >= CLASSIFY_STARVATION_SECONDS
+                and (work.deadline is None or self.model_clock() < work.deadline)
+                and self._classify_enabled()):
+            return next(lane for lane in self.lanes if lane.name == 'classify')
         for lane in self.lanes:
             # Includes queued and completed-but-unaccepted event work. Lower
             # lanes may proceed while an event HTTP request is still in flight.
@@ -459,14 +471,19 @@ class Scheduler:
         return topic_plan(items, groups, self.topic_cache, order, self.last_topic_seeds,
                           outlets=self._outlets(), admission=True)
 
-    def _prune_topic_batch(self, batch, eligible):
+    def _prune_topic_batch(self, work, batch, eligible):
         kept, dropped = [], []
         for pair in batch:
             (kept if pair.right[0] in eligible.get(pair.left[0], ()) else dropped).append(pair)
         if dropped:
-            # Only the coordinator releases in-flight ownership; no request,
-            # failure, or awaiting count belongs to these empty completions.
-            self._submit_classification(TopicResult({}, tuple(p.key for p in dropped)))
+            # Only the coordinator releases ownership. Keep a started round
+            # open until that acknowledgement can refill topics/tone; pruning
+            # alone must not create a model round or count as an HTTP request.
+            accounted = self.model_rounds.get(work.round_id) is work and not work.logged
+            if accounted:
+                work.awaiting += 1
+            self._submit_classification(TopicResult({}, tuple(p.key for p in dropped),
+                                                    work.round_id, accounted))
         return kept
 
     def _take_batch(self, lane, work, first):
@@ -502,7 +519,7 @@ class Scheduler:
                     else:
                         index += 1
                 jobs.not_full.notify_all()
-            self._prune_topic_batch(dropped, eligible)
+            self._prune_topic_batch(work, dropped, eligible)
         elif lane.name == 'analysis':
             kind = analysis_kind(self.classify_cache.get(first[0], ""))
             # Leave other kinds in their original positions/order.
@@ -571,7 +588,7 @@ class Scheduler:
                     lane, work, batch, kind = self.model_requeues[index]
                     del self.model_requeues[index]
                     if lane.name == 'topics':
-                        batch = self._prune_topic_batch(batch, self._topic_admission())
+                        batch = self._prune_topic_batch(work, batch, self._topic_admission())
                 else:
                     work, item = lane.jobs.get_nowait()
                     batch, kind = self._take_batch(lane, work, item)

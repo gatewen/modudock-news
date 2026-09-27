@@ -147,7 +147,8 @@ class TopicSchedulerTests(unittest.TestCase):
                 return not all(q.empty() for q in [s.topic_jobs,s.event_jobs,s.analysis_jobs,s.classify_jobs])
             s._submit_classification = submit
             s._classify_worker()
-            self.assertEqual(calls, ['events','topics','classify'] + (['analysis'] if budget==100 else []))
+            # The 20s event batch triggers the zero-classification rescue.
+            self.assertEqual(calls, ['events','classify','topics'] + (['analysis'] if budget==100 else []))
             self.assertIsInstance(results[-1], AnalysisResult)
             if budget==60: self.assertTrue(work.failed)
 

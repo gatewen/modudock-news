@@ -386,10 +386,22 @@ class EventSchedulerTests(unittest.TestCase):
         self.assertEqual(len(items), 300)
         with server(response) as (url, received):
             scheduler, sink, _ = self.make(items, self.clients(url), cached=False)
-            admissions = []
+            admissions, bypassed = [], []
             take_batch = scheduler._take_batch
             def record_admission(lane, work, first):
                 admissions.append(lane.name)  # Called under cv, before concurrent HTTP starts.
+                with scheduler.classify_jobs.mutex:
+                    head = work if lane.name == 'classify' else (scheduler.classify_jobs.queue[0][0]
+                            if scheduler.classify_jobs.queue else None)
+                starved = (head is not None and head.admitted and not head.failed and head.started is not None
+                           and head.requests['classify'] == 0 and scheduler.model_clock()-head.started >= 15
+                           and (head.deadline is None or scheduler.model_clock() < head.deadline))
+                priority = ['classify', 'events', 'analysis'] if starved else ['events', 'classify', 'analysis']
+                for name in priority[:priority.index(lane.name)]:
+                    jobs = next(line.jobs for line in scheduler.lanes if line.name == name)
+                    with jobs.mutex:
+                        if jobs.queue and jobs.queue[0][0].admitted:
+                            bypassed.append((lane.name, name))
                 return take_batch(lane, work, first)
             scheduler._take_batch = record_admission
             scheduler.start()
@@ -407,7 +419,7 @@ class EventSchedulerTests(unittest.TestCase):
             self.assertEqual(final['analysis']['pending'], 0)
             self.assertEqual(len(final['items']), 300)
             stages = [kind(p) for _, _, p in received]
-            self.assertEqual(admissions, sorted(admissions, key=['events', 'classify', 'analysis'].index))
+            self.assertEqual(bypassed, [])  # Exact priority at every admission, including the starvation guard.
             self.assertCountEqual(stages, admissions)  # HTTP arrival order can differ from admission order.
             while not sink.packets.empty():
                 packet = sink.packets.get_nowait()
@@ -443,9 +455,11 @@ class EventSchedulerTests(unittest.TestCase):
                 after = scheduler._decorate(deepcopy(scheduler.last_list))['body']['events']['pending']
             self.assertGreater(after, 0)
             self.assertLess(after, first['events']['pending'])
-            # Six event batches consume the shared 60s before classification.
-            self.assertEqual([kind(p) for _, _, p in received], ['events'] * 6)
-            self.assertEqual(now[0], 60)
+            # After 20s without classification, rescue one batch. The last
+            # event request was admitted at 51s; its in-flight reply may end at 61s.
+            self.assertEqual([kind(p) for _, _, p in received], ['events'] * 2 + ['classify'] + ['events'] * 4)
+            self.assertEqual(now[0], 61)
+            self.assertEqual(len(scheduler.classify_cache), 20)
             while not sink.packets.empty():
                 sink.packets.get_nowait()
             scheduler.refresh()
