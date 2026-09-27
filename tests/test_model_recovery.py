@@ -78,6 +78,7 @@ class RecoveryTests(unittest.TestCase):
                 s, packet, calls, logs, now, gate = self.make(items, lane)
                 seed, target = (i['link'] for i in items)
                 topic = {'id':'a'*12,'title':'topic','sources':3,'count':2,'keys':[seed,target]}
+                s._topic_admission = lambda: {seed: {target} if (seed,target) not in s.topic_cache else set()}
                 plan = lambda *_: ([topic], [] if (seed,target) in s.topic_cache else [(seed,target)])
                 with patch.object(s, '_topic_plan', side_effect=plan):
                     s.last_list = s._decorate(packet)

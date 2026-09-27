@@ -133,6 +133,8 @@ class TopicSchedulerTests(unittest.TestCase):
                 analyzer=SimpleNamespace(enabled=True, analyze=request('analysis')),
                 matcher=SimpleNamespace(enabled=True, match=request('events')),
                 topic_matcher=SimpleNamespace(enabled=True, match=request('topics')))
+            # This unit isolates lane ordering, not topic eligibility.
+            s._topic_admission = lambda: {'seed': {'topic'}}
             work = ModelRound(1)
             s.topic_jobs.put((work, TopicPair(('seed','seed',''),('topic','topic',''))))
             s.event_jobs.put((work, Pair(('left','left',''),('right','right',''), .5)))

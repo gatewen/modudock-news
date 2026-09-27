@@ -56,6 +56,7 @@ class ModelStatsTests(unittest.TestCase):
                 s = Scheduler([{'name':'A','url':'unused'}], None, None, 1, classifier=classifier,
                               analyzer=client('analysis','analyze'), matcher=client('events','match'),
                               topic_matcher=client('topics','match'), tone_client=client('tone','tone'), log=logs.append)
+                s._topic_admission = lambda: {'seed': {'t'}}
                 work = ModelRound(7)
                 queues = [s.classify_jobs, s.analysis_jobs, s.event_jobs, s.topic_jobs, s.tone_jobs]
                 s.classify_cache['a'] = 'finance'

@@ -139,6 +139,7 @@ class ToneSchedulerTests(unittest.TestCase):
             s = Scheduler([{'name':'A','url':'unused'}],None,None,1,classifier=classifier,
                 analyzer=client('analysis','analyze'), matcher=client('events','match'),
                 topic_matcher=client('topics','match'), tone_client=client('tone','tone'))
+            s._topic_admission=lambda: {'seed': {'t'}}
             work=ModelRound(1)
             s.classify_jobs.put((work,('c','c','')))
             s.classify_cache['a']='finance'

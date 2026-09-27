@@ -32,6 +32,8 @@ class ModelWorkerTests(unittest.TestCase):
             matcher=SimpleNamespace(enabled=True, match=lambda batch:call('events',batch)),
             topic_matcher=SimpleNamespace(enabled=True, match=lambda batch:call('topics',batch)),
             tone_client=SimpleNamespace(enabled=True, tone=lambda batch:call('tone',batch)), log=self.logs.append)
+        # Synthetic lane tests have no topic-bearing list; test eligibility separately.
+        self.s._topic_admission = lambda: {'s': {'t'}, 'a': {'b'}}
         self.work = ModelRound(1)
 
     def tearDown(self):
@@ -223,6 +225,7 @@ class ModelWorkerTests(unittest.TestCase):
         pairs=disjoint(40)
         pending=[(records[0]['link'],item['link']) for item in records[1:]]
         self.s._topic_plan=lambda packet:([],pending)
+        self.s._topic_admission=lambda: {records[0]['link']: {key for _, key in pending}}
         if lane=='events':
             self.s.topic_matcher=None
             self.s.tone_client=None

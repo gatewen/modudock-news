@@ -36,8 +36,12 @@ def words(title):
     return result
 
 
-def plan(items, groups, cache, feed_order, previous=(), *, outlets=None):
-    """Reuse previous seed identities, then rank built topics for display."""
+def plan(items, groups, cache, feed_order, previous=(), *, outlets=None, admission=False):
+    """Reuse previous seed identities, then rank built topics for display.
+
+    admission=True returns seed -> eligible keys for all built topics, before
+    the display/pending caps. It shares membership decisions with normal plan.
+    """
     outlets = outlets or {}
     records = {dedup_key(item['link']): item for item in items}
     dates = {key: datetime.fromisoformat(item['published']) for key, item in records.items()}
@@ -58,6 +62,7 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None):
     seed_candidates = [seed for seed in previous if seed in records]
     seed_candidates.extend(min(events[event], key=order.get) for event in seeds)
     claimed, topics, pending = set(), [], []
+    eligible = {}
     for seed in seed_candidates:
         event = event_of[seed]
         # Seed-qualified events are always claimed whole. Only smaller
@@ -93,11 +98,14 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None):
             break
         if source_count(members) < 3:
             continue
+        eligible[seed] = frozenset(candidates)
         pending.extend(unanswered)
         claimed.update(members)
         topics.append({'id': sha1(seed.encode('utf-8')).hexdigest()[:12], 'title': records[seed]['title'],
                        'sources': source_count(members), 'count': len(members),
                        'keys': sorted(members, key=order.get)})
+    if admission:
+        return eligible
     topics.sort(key=lambda topic: (-topic['sources'], -topic['count'], topic['id']))
     topics = topics[:MAX_TOPICS]
     selected_ids = {topic['id'] for topic in topics}

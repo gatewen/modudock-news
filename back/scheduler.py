@@ -447,11 +447,55 @@ class Scheduler:
         # acceptance/eviction can change the answer without replacing last_list.
         return any(key not in self.event_cache for key in self._event_candidate_keys)
 
+    def _topic_admission(self):
+        # cv held. last_list's event fields may lag newly accepted answers.
+        if self.last_list is None:
+            return {}
+        items = self.last_list['body']['items']
+        matches = {p.key: True for p in self._pairs_for(self.last_list) if p.automatic}
+        matches.update(self.event_cache)
+        order = [f['name'] for f in self.feeds]
+        groups = group_events(items, matches, order)
+        return topic_plan(items, groups, self.topic_cache, order, self.last_topic_seeds,
+                          outlets=self._outlets(), admission=True)
+
+    def _prune_topic_batch(self, batch, eligible):
+        kept, dropped = [], []
+        for pair in batch:
+            (kept if pair.right[0] in eligible.get(pair.left[0], ()) else dropped).append(pair)
+        if dropped:
+            # Only the coordinator releases in-flight ownership; no request,
+            # failure, or awaiting count belongs to these empty completions.
+            self._submit_classification(TopicResult({}, tuple(p.key for p in dropped)))
+        return kept
+
     def _take_batch(self, lane, work, first):
         # Called under cv. Capture analysis kind here, before releasing cv for HTTP.
         jobs, batch = lane.jobs, [first]
         kind = None
-        if lane.name == 'analysis':
+        if lane.name == 'topics':
+            eligible = self._topic_admission()
+            dropped = []
+            if first.right[0] not in eligible.get(first.left[0], ()):
+                dropped.append(first)
+                batch = []
+            with jobs.mutex:
+                index = 0
+                while index < len(jobs.queue):
+                    next_work, pair = jobs.queue[index]
+                    if next_work is not work:
+                        break
+                    if pair.right[0] not in eligible.get(pair.left[0], ()):
+                        dropped.append(pair)
+                        del jobs.queue[index]
+                    elif lane.fits(batch + [pair]):
+                        batch.append(pair)
+                        del jobs.queue[index]
+                    else:
+                        index += 1
+                jobs.not_full.notify_all()
+            self._prune_topic_batch(dropped, eligible)
+        elif lane.name == 'analysis':
             kind = analysis_kind(self.classify_cache.get(first[0], ""))
             # Leave other kinds in their original positions/order.
             # cv owns admission; the queue mutex protects its storage.
@@ -518,9 +562,13 @@ class Scheduler:
                     index = self._next_requeue()
                     lane, work, batch, kind = self.model_requeues[index]
                     del self.model_requeues[index]
+                    if lane.name == 'topics':
+                        batch = self._prune_topic_batch(batch, self._topic_admission())
                 else:
                     work, item = lane.jobs.get_nowait()
                     batch, kind = self._take_batch(lane, work, item)
+                if not batch:
+                    continue
                 if work.deadline is None:
                     work.deadline = self.model_clock() + self.model_budget
                     self.cv.notify_all()  # Coordinator must schedule its deadline wake.

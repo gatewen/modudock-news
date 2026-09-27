@@ -184,6 +184,7 @@ class ModelRequeueTests(unittest.TestCase):
             order=[]
             pair=Pair(('a','A',''),('b','B',''),.5)
             topic=TopicPair(('a','A',''),('c','C',''))
+            s._topic_admission=lambda: {'a': {'c'}}
             def match(batch):
                 order.append('events')
                 if order==['events']:

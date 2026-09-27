@@ -99,7 +99,9 @@ class Endurance:
 
     def open(self, request, timeout):
         with self.lock:
-            mode = self.mode if not self.injected else 'ok'
+            # A bad-response round must also fail its one allowed requeue.
+            # A single injected failure may now recover completely.
+            mode = self.mode if not self.injected or self.mode == 'bad' else 'ok'
             self.injected = True
             hold = self.hold
             self.hold = False

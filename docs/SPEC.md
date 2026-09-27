@@ -2159,3 +2159,21 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - 三條新增回歸先紅後綠：同列表只計算一次且答案／淘汰即時生效；裝飾、fit、enqueue、send與交錯副本共用；fit裁切及link/title/summary/published／順序改動會失效。原last_list身分替換測試繼續通過；200輪耐久測試另檢查兩份候選與列表的容量上限。
 - 使用審查的 `rev08/instr_full.py`，相同550則滿額首輪測試：修前84次candidate_pairs、累計9.029秒、wall10.44秒；修後1次、0.110秒、wall1.54秒（最多150975候選）。候選計算耗時降低約98.8%，整體約85.2%；為本機量測，不作跨硬體秒數保證。
 - **完整驗證**：`/usr/local/bin/python3 -m unittest` 411 tests／OK（39.511s）；`npm test` 519／519（20.911s）。chaos固定seed=47000、每次60情境，6份process並行×5批，30／30通過（1800情境）；未改chaos資料或斷言。量測／紅綠結果及30份log保存在 `/private/tmp/news-v08/pairs-*.log`、`/private/tmp/news-v08/chaos-pairs/`。未commit、真jev 0。
+
+## §22 v0.9 增補：第三次自主進化紀錄
+
+### 22.1 R1：模型用量診斷（2026-09-27）
+
+- 原 v0.8 冷啟動478則為100批（分類24／分析19／配對13／話題40／基調4）。原封包沒有逐批答案，不從最終話題反推 false 數。
+- scratchpad `r1trace` 新抓480則、記錄每批題目雜湊識別與答案：99批／99 HTTP，分類24、分析20、配對12、話題38、基調5；話題557題中493 false，配對162題中103 false。兩份新聞不同，18.8s與12.84s不可當成改版加速證據。
+- 離線評估：一批／連續兩批全false就停止，分別少21／8則最終話題成員；不採用。提高共同特徵詞門檻亦漏報，不更改成員判定與問法。每次plan重新排序、擴張新特徵，並不保證整輪後續批次單調變弱。
+
+### 22.2 R2：話題出隊重驗與同種子裝箱
+
+- worker於cv內取topics批次時，用目前last_list新聞、最新event_cache（含自動配對邊）、topic_cache與黏著種子重建規劃。不得信任last_list尚未補送的event/topic欄位。
+- `topics.plan(..., admission=True)`提供相同建構流程中前10個建構話題的可問題目，於最終前5名截斷及每種子60個pending截斷前取得；原plan預設回傳與成員規則不變。已有答案、已納入、已由前面的話題收走或不再符合候選規則的題目剔除；不在建構名單的種子亦剔除。不是拿前5名pending的60題當白名單，避免誤砍仍有效的已排隊題。
+- 只合併已排隊、同ModelRound、同種子的題目；可跨過其他種子，不跨下一輪、不等待新題。仍最多19題／20則state／8000字，其他lane優先序、3 worker、預算、門檻與成員判定不變。
+- 剔除工作以空TopicResult交回協調者釋放in-flight，不寫false快取、不計requests/http/failed/awaiting；整批剔空不呼叫HTTP。延後補試的topics批次也先重驗。佇列鎖內只收集剔除項，釋放佇列鎖後才提交完成，避免結果背壓與佇列鎖互等。
+- r1trace固定答案經正式scheduler出隊／裝箱回放：38→28批、557→495題；480則逐則topic一致、前5話題id／家數／則數／排序一致、pending及in-flight歸零，沒有缺失答案或網路請求。這是離線回放，不保證三並行真實執行也恰好28批。
+- 驗證：`/usr/local/bin/python3 -m unittest` 416 tests／OK（40.176s）；`npm test` 519／519。chaos原資料／斷言不改，固定seed47000、60情境／次，6並行×5＝30／30通過（1800情境）。五條新增准入測試覆蓋前10建構／非60題白名單、最新配對與話題答案、整事件收走、跨種子裝箱與輪界、空批釋放且零HTTP／失敗／awaiting。原優先序、預算、重試、統計測試為合成key明確注入eligible，原斷言保留；耐久壞回應輪改為補試仍壞，確保終局failed覆蓋不依賴單次故障能否自動恢復。
+- 真實冷啟動預估85～100 HTTP、硬上限100；完成89 HTTP／89批、retries=0、requeued=0、failed=0。480則，分類24、分析19、配對12、話題29（488題）、基調5；all_done16.10s、first_topic≥20為9.65s、首份列表5.24s。對照R1首份列表2.05s、all_done12.84s，兩次model elapsed均10.8s；資料／答案與抓取耗時不同，只確認省請求，不聲稱真實速度改善。輸出與安全過濾trace在scratchpad外部目錄 `/private/tmp/news-r2/real/`；固定答案回放腳本在既有 `scratchpad/r1trace/replay_worker.py`，chaos logs在 `/private/tmp/news-r2/chaos/`。
