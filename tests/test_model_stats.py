@@ -19,7 +19,7 @@ class ModelStatsTests(unittest.TestCase):
 
     @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_snowball_round_logs_once_and_cache_only_round_logs_zero_requests(self):
-        items, _ = snapshot([story('one', 'ALPHA BETA'), story('two', 'BETA DELTA')])
+        items, _ = snapshot([story('one', 'ALPHA ALPHAX BETA BETAX'), story('two', 'BETA BETAX DELTA DELTAX')])
         def respond(payload, *_):
             return tone_response(payload) if 'q_0' in payload['questions'] else response(payload)
         with server(respond) as (url, received):

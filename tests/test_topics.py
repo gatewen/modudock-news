@@ -14,7 +14,7 @@ def story(key, title, source='A', hour=0):
 
 
 def snapshot(extra=(), seeds=None, size=100):
-    items = seeds if seeds is not None else [story(f's{i}', '川普訪美 ALPHA', source, i) for i, source in enumerate('ABC')]
+    items = seeds if seeds is not None else [story(f's{i}', '川普訪美 ALPHA ALPHAX', source, i) for i, source in enumerate('ABC')]
     items = items + list(extra)
     groups = {dedup_key(i['link']): {'event': 'seed' if i['link'].split('/')[-1].startswith('s') else i['link']} for i in items}
     for i in range(size - len(items)):
@@ -30,11 +30,45 @@ def response(payload, *_):
 
 
 class PlanTests(unittest.TestCase):
+    def test_two_distinct_features_required_in_pending_and_admission_even_for_cached_true(self):
+        seeds = [story(f's{i}', title, source) for i, (title, source) in
+                 enumerate(zip(('ORBIT', 'SIGNAL', 'UNIQUE'), 'ABC'))]
+        single = story('lone', 'ORBIT ORBIT')
+        enough = story('enough', 'ORBIT SIGNAL')
+        items, groups = snapshot([single, enough], seeds)
+        seed = seeds[0]['link']
+        for cache in ({}, {(seed, single['link']): True}):
+            out, pending = plan(items, groups, cache, list('ABC'))
+            self.assertEqual(out[0]['count'], 3)
+            self.assertEqual(pending, [(seed, enough['link'])])
+            self.assertEqual(plan(items, groups, cache, list('ABC'), admission=True),
+                             {seed: frozenset([enough['link']])})
+
+    def test_dynamic_feature_union_expands_after_answer_and_sibling_without_features_still_asked(self):
+        seeds = [story(f's{i}', 'ORBIT SIGNAL', source) for i, source in enumerate('ABC')]
+        bridge = story('bridge', 'ORBIT SIGNAL BRIDGE ROUTE')
+        later = story('later', 'BRIDGE ROUTE')
+        sibling = story('sibling', 'UNRELATED')
+        items, groups = snapshot([bridge, later, sibling], seeds)
+        groups[sibling['link']] = groups[bridge['link']]
+        seed = seeds[0]['link']
+        self.assertEqual(plan(items, groups, {}, list('ABC'))[1], [(seed, bridge['link'])])
+        cache = {(seed, bridge['link']): True}
+        out, pending = plan(items, groups, cache, list('ABC'))
+        self.assertEqual(out[0]['count'], 4)
+        self.assertEqual(pending, [(seed, sibling['link']), (seed, later['link'])])
+        cache[seed, later['link']] = True
+        cache[seed, sibling['link']] = False
+        out, pending = plan(items, groups, cache, list('ABC'))
+        self.assertEqual(out[0]['count'], 5)
+        self.assertNotIn(sibling['link'], out[0]['keys'])
+        self.assertEqual(pending, [])
+
     def test_zero_width_words_and_candidates_preserve_zwj(self):
         for separator in '\u200b\u200c\u2060\ufeff':
             with self.subTest(separator=repr(separator)):
                 self.assertEqual(words(separator.join('特朗普ALPHA')), words('川普ALPHA'))
-                candidate = story('candidate', separator.join('川普訪美 ALPHA'))
+                candidate = story('candidate', separator.join('川普訪美 ALPHA ALPHAX'))
                 items, groups = snapshot([candidate])
                 topics, pending = plan(items, groups, {}, ['A', 'B', 'C'])
                 self.assertEqual(len(topics), 1)
@@ -42,8 +76,8 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(words('AB\u200dCD'), {'AB', 'CD'})
 
     def test_two_source_event_cannot_seed_even_with_cached_third_source_expansion(self):
-        seeds = [story(f's{i}', 'ALPHA', source) for i, source in enumerate('AB')]
-        third = story('third', 'ALPHA', 'C')
+        seeds = [story(f's{i}', 'ALPHA ALPHAX', source) for i, source in enumerate('AB')]
+        third = story('third', 'ALPHA ALPHAX', 'C')
         items, groups = snapshot([third], seeds)
         seed = seeds[0]['link']
         cache = {(seed, third['link']): True}
@@ -54,11 +88,11 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(set(retained[0]['keys']), {item['link'] for item in seeds + [third]})
         self.assertEqual(pending, [])
 
-    def test_pending_limit_keeps_older_high_overlap_ahead_of_newer_single_term_candidates(self):
-        seeds = [story(f's{i}', ' '.join(f'TERM{n}' for n in range(10)), source)
+    def test_pending_limit_keeps_older_high_overlap_ahead_of_newer_two_feature_candidates(self):
+        seeds = [story(f's{i}', ' '.join(f'TERM{n} EXTRA{n}' for n in range(10)), source)
                  for i, source in enumerate('ABC')]
-        newer = [story(f'candidate{i}', f'TERM{i % 10}', hour=1 + i / 10) for i in range(70)]
-        stronger = story('high-overlap', 'TERM0 TERM1', hour=0)
+        newer = [story(f'candidate{i}', f'TERM{i % 10} EXTRA{i % 10}', hour=1 + i / 10) for i in range(70)]
+        stronger = story('high-overlap', 'TERM0 EXTRA0 TERM1 EXTRA1', hour=0)
         items, groups = snapshot(newer + [stronger], seeds, size=300)
         topics, pending = plan(items, groups, {}, ['A', 'B', 'C'])
         self.assertEqual(len(topics), 1)
@@ -85,12 +119,12 @@ class PlanTests(unittest.TestCase):
         seeds, extras, groups, previous = [], [], {}, []
         for n, size in enumerate([3, 3, 3, 3, 3, 10]):
             for j in range(size):
-                item = story(f'event{n}-{j}', f'TERM{n}', chr(65 + j), n)
+                item = story(f'event{n}-{j}', f'TERM{n} EXTRA{n}', chr(65 + j), n)
                 seeds.append(item)
                 groups[item['link']] = {'event': str(n)}
                 if j == 0 and n < 5:
                     previous.append(item['link'])
-            extras.append(story(f'candidate{n}', f'TERM{n}'))
+            extras.append(story(f'candidate{n}', f'TERM{n} EXTRA{n}'))
         items, padded_groups = snapshot(extras, seeds, size=200)
         padded_groups.update(groups)
         topics, pending = plan(items, padded_groups, {}, list('ABCDEFGHIJ'), previous)
@@ -125,8 +159,8 @@ class PlanTests(unittest.TestCase):
         self.assertEqual(topics[0]['count'], 3)
 
     def test_two_layer_snowball_admits_only_direct_reports_and_replans_siblings(self):
-        extra = [story('one', 'ALPHA BETA'), story('sibling', 'GAMMA'), story('two', 'BETA DELTA'),
-                 story('three', 'DELTA'), story('four', 'GAMMA')]
+        extra = [story('one', 'ALPHA ALPHAX BETA BETAX'), story('sibling', 'GAMMA'), story('two', 'BETA BETAX DELTA DELTAX'),
+                 story('three', 'DELTA DELTAX'), story('four', 'GAMMA')]
         items, groups = snapshot(extra)
         groups[extra[1]['link']] = groups[extra[0]['link']]
         seed = items[0]['link']
@@ -141,14 +175,14 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn((seed, extra[3]['link']), plan(items, groups, cache, ['A','B','C'])[1])
 
     def test_window_anchored_to_seed_latest_includes_48_hours(self):
-        extra = [story('left', 'ALPHA', hour=-46), story('right', 'ALPHA', hour=50),
-                 story('before', 'ALPHA', hour=-46.001), story('after', 'ALPHA', hour=50.001)]
+        extra = [story('left', 'ALPHA ALPHAX', hour=-46), story('right', 'ALPHA ALPHAX', hour=50),
+                 story('before', 'ALPHA ALPHAX', hour=-46.001), story('after', 'ALPHA ALPHAX', hour=50.001)]
         items, groups = snapshot(extra)
         pending = plan(items, groups, {}, ['A','B','C'])[1]
         self.assertEqual({key for _, key in pending}, {extra[0]['link'], extra[1]['link']})
 
     def test_taken_seed_is_skipped_max_five_and_feed_order_breaks_rep_ties(self):
-        seeds = [story(f's{n}-{i}', f'TOKEN{n} COMMON', source) for n in range(7) for i, source in enumerate('ABC')]
+        seeds = [story(f's{n}-{i}', f'TOKEN{n} COMMON COMMONX', source) for n in range(7) for i, source in enumerate('ABC')]
         items, groups = snapshot(seeds=seeds, size=300)
         for n in range(7):
             for i in range(3): groups[seeds[n * 3 + i]['link']] = {'event': f'{n:012d}'}
@@ -163,9 +197,9 @@ class PlanTests(unittest.TestCase):
         self.assertNotIn(sha1(seeds[5]['link'].encode()).hexdigest()[:12], [t['id'] for t in merged])
 
     def test_pending_cap_60_rank_by_overlap_then_newest_and_seed_order(self):
-        title = ' '.join(f'TERM{i}' for i in range(10))
+        title = ' '.join(f'TERM{i} EXTRA{i}' for i in range(10))
         seeds = [story(f's{i}', title, source) for i, source in enumerate('ABC')]
-        extra = [story(f'x{i}', f'TERM{i % 10}', hour=i / 10) for i in range(70)]
+        extra = [story(f'x{i}', f'TERM{i % 10} EXTRA{i % 10}', hour=i / 10) for i in range(70)]
         items, groups = snapshot(extra, seeds, 300)
         pending = plan(items, groups, {}, ['A','B','C'])[1]
         self.assertEqual(len(pending), 60)
@@ -187,8 +221,8 @@ class PlanTests(unittest.TestCase):
 
 class StickyPlanTests(unittest.TestCase):
     def scene(self):
-        a = [story(f'sa{i}', 'COMMON ALPHA', source, 3) for i, source in enumerate('ABC')]
-        b = [story(f'sb{i}', 'COMMON BETA', source, 1) for i, source in enumerate('ABC')]
+        a = [story(f'sa{i}', 'COMMON COMMONX ALPHA ALPHAX', source, 3) for i, source in enumerate('ABC')]
+        b = [story(f'sb{i}', 'COMMON COMMONX BETA BETAX', source, 1) for i, source in enumerate('ABC')]
         items, groups = snapshot(seeds=a+b)
         for item in a: groups[item['link']] = {'event':'a'}
         for item in b: groups[item['link']] = {'event':'b'}
@@ -200,7 +234,7 @@ class StickyPlanTests(unittest.TestCase):
         cache = {(seed, b[0]['link']):True}
         first, _ = plan(items, groups, cache, ['A','B','C','D','E'])
         for i, source in enumerate('DE'):
-            item = story(f'new{i}', 'COMMON BETA', source, 8)
+            item = story(f'new{i}', 'COMMON COMMONX BETA BETAX', source, 8)
             items.append(item); groups[item['link']] = {'event':'b'}
         sticky, pending = plan(items, groups, cache, ['A','B','C','D','E'], [seed])
         retained = next(t for t in sticky if t['id'] == first[0]['id'])
@@ -224,7 +258,7 @@ class StickyPlanTests(unittest.TestCase):
         # Old seed and its cached expansion still only cover A/B; a new
         # eligible seed must be able to take those reports afterwards.
         items.remove(a[2])
-        extra = story('extra', 'COMMON ALPHA', 'B')
+        extra = story('extra', 'COMMON COMMONX ALPHA ALPHAX', 'B')
         items.append(extra); groups[extra['link']] = {'event':'extra'}
         seed, replacement = a[0]['link'], b[0]['link']
         cache = {(seed, extra['link']):True, (replacement, seed):True,
@@ -240,7 +274,7 @@ class StickyPlanTests(unittest.TestCase):
         aseed, bseed = a[0]['link'], b[0]['link']
         self.assertEqual(plan(items, groups, {}, ['A','B','C']),
                          plan(items, groups, {}, ['A','B','C'], ['missing']))
-        extra = story('extra', 'COMMON BETA', 'A')
+        extra = story('extra', 'COMMON COMMONX BETA BETAX', 'A')
         items.append(extra); groups[extra['link']] = {'event':'b'}
         first, _ = plan(items, groups, {}, ['A','B','C'], [aseed,bseed])
         second, _ = plan(items[::-1], groups, {}, ['A','B','C'], [bseed,aseed])
@@ -291,7 +325,7 @@ class TopicMatcherTests(unittest.TestCase):
 class PerReportMembershipTests(unittest.TestCase):
     def test_siblings_require_own_answers_even_without_shared_words(self):
         # Three feeds, only two outlets: this remains a per-report event.
-        extra=[story('one','ALPHA'),story('brother','完全無關詞','D'),story('sister','別的描述','E')]
+        extra=[story('one','ALPHA ALPHAX'),story('brother','完全無關詞','D'),story('sister','別的描述','E')]
         items,groups=snapshot(extra)
         for x in extra: groups[x['link']]={'event':'other'}
         seed=items[0]['link'];cache={(seed,extra[0]['link']):True}
@@ -313,8 +347,8 @@ class PerReportMembershipTests(unittest.TestCase):
 
     def test_siblings_precede_general_candidates_within_shared_cap(self):
         siblings=[story(f'x{i}','NOOVERLAP',hour=0) for i in range(65)]
-        ordinary=story('general','ALPHA',hour=20)
-        trigger=story('trigger','ALPHA')
+        ordinary=story('general','ALPHA ALPHAX',hour=20)
+        trigger=story('trigger','ALPHA ALPHAX')
         items,groups=snapshot([trigger,*siblings,ordinary],size=300)
         for x in [trigger,*siblings]:groups[x['link']]={'event':'other'}
         seed=items[0]['link'];cache={(seed,trigger['link']):True}
@@ -329,9 +363,9 @@ class PerReportMembershipTests(unittest.TestCase):
 
 class ClaimedReportsTests(unittest.TestCase):
     def scene(self, size=3, headlines=False):
-        seeds = [story(f's{i}', '川普訪美 ALPHA', src, 5) for i, src in enumerate('ABC')]
-        other = [story('x0', 'ALPHA BETA', 'D', 0)]
-        other += [story(f'x{i}', 'BETA', src, 0) for i, src in enumerate('EFGH'[:size-1], 1)]
+        seeds = [story(f's{i}', '川普訪美 ALPHA ALPHAX', src, 5) for i, src in enumerate('ABC')]
+        other = [story('x0', 'ALPHA ALPHAX BETA BETAX', 'D', 0)]
+        other += [story(f'x{i}', 'BETA BETAX', src, 0) for i, src in enumerate('EFGH'[:size-1], 1)]
         rest = [story(f'o{n}_{j}', f'主題{n}詞 GAMMA{n}', src, 1)
                 for n in range(5) for j, src in enumerate('ABCD')] if headlines else []
         items, groups = snapshot(other+rest, seeds, size=300)
@@ -369,7 +403,7 @@ class ClaimedReportsTests(unittest.TestCase):
 
     def test_false_or_unasked_siblings_can_be_candidates_for_another_topic(self):
         items,groups,seed,other=self.scene()
-        third=[story(f'z{i}','BETA 專屬新事件',src,2) for i,src in enumerate('GHI')]
+        third=[story(f'z{i}','BETA BETAX 專屬新事件',src,2) for i,src in enumerate('GHI')]
         items.extend(third)
         for x in third:groups[x['link']]={'event':'third'}
         second=third[0]['link']

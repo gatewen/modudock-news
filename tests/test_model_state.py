@@ -22,7 +22,7 @@ class ModelStateTests(unittest.TestCase):
                     if s.round_id <= failures: return 403, b'PRIVATE RBAC', {}
                     return tone_response(payload) if 'q_0' in payload['questions'] else response(payload)
                 with server(respond) as (url, received):
-                    s, sink = self.make(url, snapshot([story('one', 'ALPHA')])[0])
+                    s, sink = self.make(url, snapshot([story('one', 'ALPHA ALPHAX')])[0])
                     s.classifier.clock = lambda: now[0]
                     for client in (s.analyzer, s.matcher, s.topic_matcher, s.tone_client):
                         client.clock = s.classifier.clock
@@ -69,7 +69,7 @@ class ModelStateTests(unittest.TestCase):
                         now[0] = 61
                     return tone_response(payload) if 'q_0' in payload['questions'] else response(payload)
                 with server(respond) as (url, _):
-                    s, sink = self.make(url, snapshot([story('one', 'ALPHA BETA'), story('two', 'BETA DELTA')])[0])
+                    s, sink = self.make(url, snapshot([story('one', 'ALPHA ALPHAX BETA BETAX'), story('two', 'BETA BETAX DELTA DELTAX')])[0])
                     s.model_clock = lambda: now[0]
                     s.start()
                     initial = sink.packets.get(timeout=2)

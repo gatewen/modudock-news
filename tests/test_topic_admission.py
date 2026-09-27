@@ -21,9 +21,9 @@ class TopicAdmissionTests(unittest.TestCase):
         seeds, groups = [], {}
         for n in range(11):
             for j, source in enumerate('ABC'):
-                i = story(f'e{n}-{j}', f'TERM{n}', source, n)
+                i = story(f'e{n}-{j}', f'TERM{n} EXTRA{n}', source, n)
                 seeds.append(i); groups[i['link']] = {'event': str(n)}
-        extras = [story(f'x{n}-{j}', f'TERM{n}') for n in range(11) for j in range(65)]
+        extras = [story(f'x{n}-{j}', f'TERM{n} EXTRA{n}') for n in range(11) for j in range(65)]
         for i in extras: groups[i['link']] = {'event': i['link']}
         items = seeds + extras
         previous = tuple(seeds[n*3]['link'] for n in range(11))
@@ -33,13 +33,13 @@ class TopicAdmissionTests(unittest.TestCase):
         self.assertNotIn(previous[10], eligible)
 
     def test_live_cache_whole_event_claims_and_interleaved_packing(self):
-        extras = [story(f'x{i}', 'ALPHA EXTENSION') for i in range(24)]
+        extras = [story(f'x{i}', 'ALPHA ALPHAX EXTENSION') for i in range(24)]
         items, groups = snapshot(extras, size=400)
         s = self.make(items, groups); work = ModelRound(1)
         seed = items[0]['link']; row = lambda i: (i['link'], i['title'], i['summary'])
         pairs = [TopicPair(row(items[0]), row(i)) for i in extras]
         # One true takes both reports in another seed-qualified event.
-        group = [story(f'g{i}', 'OTHER ALPHA', source) for i, source in enumerate('BCD')]
+        group = [story(f'g{i}', 'OTHER ALPHA ALPHAX', source) for i, source in enumerate('BCD')]
         items.extend(group)
         for i in group: groups[i['link']] = {'event': 'whole'}
         s.topic_cache[seed, group[0]['link']] = True
@@ -95,9 +95,9 @@ class TopicAdmissionTests(unittest.TestCase):
         self.assertFalse(s.model_rounds)
 
     def test_admission_rebuilds_groups_from_latest_event_cache(self):
-        seeds = [story(f's{i}', 'ALPHA ' + word, source)
+        seeds = [story(f's{i}', 'ALPHA ALPHAX ' + word, source)
                  for i, (word, source) in enumerate(zip(('ONE','TWO','THREE'), 'ABC'))]
-        extra = story('extra', 'ALPHA REACTION')
+        extra = story('extra', 'ALPHA ALPHAX REACTION')
         items, groups = snapshot([extra], seeds=seeds)
         s = self.make(items, groups)
         # Display fields deliberately lag acceptance; only current cache may merge.

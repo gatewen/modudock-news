@@ -57,7 +57,7 @@ class EventPackingTests(unittest.TestCase):
         self.assertEqual(list(s.event_jobs.queue),[(old,p) for p in pairs[10:12]]+[(new,pairs[12])])
 
     def test_topics_admit_without_any_classification(self):
-        items,groups=snapshot([story('candidate','ALPHA REACTION')])
+        items,groups=snapshot([story('candidate','ALPHA ALPHAX REACTION')])
         s=admission_tests.TopicAdmissionTests().make(items,groups)
         with s.cv:
             s.model_work=ModelRound(s.round_id)

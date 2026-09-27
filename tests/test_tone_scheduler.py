@@ -27,7 +27,7 @@ class ToneSchedulerTests(unittest.TestCase):
     def test_second_round_waits_for_event_acceptance_before_topics_then_failing_tone(self):
         for fail in [False, True]:
             with self.subTest(tone_fails=fail):
-                items, _ = snapshot([story('one', 'ALPHA BETA'), story('two', 'BETA DELTA')])
+                items, _ = snapshot([story('one', 'ALPHA ALPHAX BETA BETAX'), story('two', 'BETA BETAX DELTA DELTAX')])
                 s, _ = self.make('http://unused.invalid', items)
                 seed = items[0]['link']
                 s.topic_cache.update({(seed, items[3]['link']): True, (seed, items[4]['link']): True})
@@ -86,7 +86,7 @@ class ToneSchedulerTests(unittest.TestCase):
 
     @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_topic_members_all_categories_only_once_after_topics_and_resend_counts_reports(self):
-        items, _ = snapshot([story('one','ALPHA BETA'), story('two','BETA DELTA')])
+        items, _ = snapshot([story('one','ALPHA ALPHAX BETA BETAX'), story('two','BETA BETAX DELTA DELTAX')])
         kinds = []
         def respond(payload, *_):
             kinds.append('tone' if 'q_0' in payload['questions'] else 'topics')

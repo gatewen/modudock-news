@@ -20,6 +20,8 @@ else:
 MAX_TOPICS = 5
 MAX_BUILT_TOPICS = 10
 MAX_PENDING = 60
+# R18 blind review: 7/10 removed members were off-topic; retain sibling recall.
+MIN_COMMON_FEATURES = 2
 WINDOW = timedelta(hours=48)
 CRITERIA = {
     "same_topic": "同一個話題：同一件大事的報導、後續發展、各方反應、評論或影響",
@@ -78,7 +80,7 @@ def plan(items, groups, cache, feed_order, previous=(), *, outlets=None, admissi
             member_events = {event_of[key] for key in members}
             candidates = [key for key in records if key not in members and key not in claimed
                           and abs(dates[key] - latest) <= WINDOW
-                          and (event_of[key] in member_events or features[key] & terms)]
+                          and (event_of[key] in member_events or len(features[key] & terms) >= MIN_COMMON_FEATURES)]
             additions = set()
             for key in candidates:
                 if cache.get((seed, key)) is True:

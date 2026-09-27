@@ -49,7 +49,7 @@ class TopicSchedulerTests(unittest.TestCase):
             return s.completed == 1 and not (s.in_flight or s.analysis_in_flight or s.event_in_flight or s.topic_in_flight)
 
     def test_event_gate_snowball_resends_same_at_no_publish_and_no_duplicate_work(self):
-        extra = [story('one','ALPHA BETA'), story('two','BETA DELTA'), story('three','DELTA EPSILON')]
+        extra = [story('one','ALPHA ALPHAX BETA BETAX'), story('two','BETA BETAX DELTA DELTAX'), story('three','DELTA DELTAX EPSILON')]
         items, _ = snapshot(extra)
         gate, entered = threading.Event(), threading.Event()
         self.gates.append(gate)
@@ -97,7 +97,7 @@ class TopicSchedulerTests(unittest.TestCase):
             while not sink.packets.empty(): self.assertEqual(sink.packets.get_nowait()['t'], 'msg')
 
     def test_false_result_clears_pending_failure_does_not_cache_and_auth_disables_all(self):
-        items, _ = snapshot([story('one','ALPHA REACTION')])
+        items, _ = snapshot([story('one','ALPHA ALPHAX REACTION')])
         for status in [200, 500, 401, 403]:
             with self.subTest(status=status), server(lambda p,*_: (status, {'answers':{
                 q:{'choice':'different','probabilities':{'different':.9}} for q in p['questions']}}, {})) as (url, received):
@@ -153,7 +153,7 @@ class TopicSchedulerTests(unittest.TestCase):
             if budget==60: self.assertTrue(work.failed)
 
     def test_topic_cache_fifo_late_results_active_suppression_and_no_change_no_resend(self):
-        items, _ = snapshot([story('one','ALPHA REACTION')])
+        items, _ = snapshot([story('one','ALPHA ALPHAX REACTION')])
         with server(response) as (url, _):
             s, _ = self.make(url, items)
             packet = s._emit(s.caches, [{'name':f['name'],'count':0} for f in s.feeds])
@@ -174,7 +174,7 @@ class TopicSchedulerTests(unittest.TestCase):
                 self.assertEqual(next(iter(s.topic_cache)), ('unused','0'))
 
     def test_disabled_keeps_known_topic_members_and_zero_pending(self):
-        items, _ = snapshot([story('one','ALPHA REACTION')])
+        items, _ = snapshot([story('one','ALPHA ALPHAX REACTION')])
         with server(response) as (url, received):
             s, _ = self.make(url, items)
             s.topic_cache[items[0]['link'], items[3]['link']] = True
@@ -185,7 +185,7 @@ class TopicSchedulerTests(unittest.TestCase):
             self.assertEqual(received, [])
 
     def test_size_reserves_topics_before_first_emit_and_resend_keeps_links(self):
-        items, _ = snapshot([story('one','ALPHA REACTION')])
+        items, _ = snapshot([story('one','ALPHA ALPHAX REACTION')])
         with server(response) as (url, _):
             s, _ = self.make(url, items)
             with s.cv:
@@ -208,7 +208,7 @@ class TopicSchedulerTests(unittest.TestCase):
 
     @patch("back.scheduler.MODEL_WORKERS", 1)  # Serial regression; parallel admission covered in test_model_workers.
     def test_topic_failure_releases_remaining_batches_and_next_round_can_retry(self):
-        title = ' '.join(f'TERM{i}' for i in range(10))
+        title = ' '.join(f'TERM{i} EXTRA{i}' for i in range(10))
         seeds = [story(f's{i}', title, source) for i,source in enumerate('ABC')]
         extra = [story(f'x{i}', f'TERM{i%10} REACTION{i}') for i in range(50)]
         items, _ = snapshot(extra, seeds, 300)
@@ -254,7 +254,7 @@ class TopicSchedulerTests(unittest.TestCase):
             self.assertEqual(s.last_topic_seeds, (older['link'],))
 
     def test_pending_events_retain_only_previous_members_and_recount_sources_tone(self):
-        old_member=story('one','ALPHA BETA','D')
+        old_member=story('one','ALPHA ALPHAX BETA BETAX','D')
         items, groups=snapshot([old_member])
         with server(response) as (url, _):
             s, _=self.make(url,items)
