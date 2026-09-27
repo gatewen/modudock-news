@@ -5345,3 +5345,5 @@ test('R15 neutral explanation is shared by focus, topic titles and the existing 
   assert.equal(hints[0].childElementCount,0);
   assert.equal(hints[0].textContent.includes('\n'),false);
 });
+
+import "./lifecycle.test.mjs";

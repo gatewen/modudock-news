@@ -2386,3 +2386,13 @@ cx-mod 第二次使用者走查（00:12）5 條；採用 2、3、4、5，**不�
 - 「報導語氣（則）」與「各家報導語氣（則）」沿用既有 title，在原說明後接「中性表示未明顯強調正面或負面，不代表沒有風險或利多」；各家表下方既有 nw-hint 同步接上同一句。
 - 共用文字常數，不新增段落、換行或說明列，保留自然折行；原先非媒體立場與各家計數範圍的說明不變。只補解讀限制，不改模型問法、標籤、計數、篩選或版面樣式。
 - 測試核對首頁／進入話題後的語氣 title、各家標題 title，以及唯一既有提示段落的文字與結構。
+
+### 22.16 R16：前半掛載資源集中管理（jev 0）
+
+- 新增原生 ES module `front/lifecycle.js`，每次 mount 建立獨立 `createLifecycle(view)`；提供 `on(target,type,fn,opts)`、`timeout/clearTimeout`、`interval/clearInterval`、`observer` 與冪等 `dispose`。不使用全域資源表或新計時器。
+- `front.js` 的40個 DOM／window監聽、首載與重新整理的30秒 timeout、ResizeObserver 統一登錄。卸載先沿用既有 lastSeen 保存與 disposed 設定，再一次清理資源；畫面、篩選、排序、回焦點、儲存與資料結構清空流程不變。目前產品沒有 interval，管理器仍涵蓋其註冊與取消。
+- 監聽清理保留註冊時 capture 值，即使呼叫端之後修改 options 也可移除；保留 passive 註冊選項。timeout 執行前即從持有集合移除，手動取消也移除；dispose 清除計時器與 observer 引用，已排入執行佇列的 timer callback 在卸載後不呼叫產品邏輯。dispose 後不再登錄監聽／計時器，遲到的 observer 立即 disconnect。
+- 殼的 `ctx.channel.onMessage`／`ctx.onUp` 沒有承諾取消訂閱回傳值，不臆造 unsubscribe；保持原先 disposed 守衛，殼負責自身回呼生命週期。
+- 新增5條測試：監聽 capture／選項、兩種 timer 清理與卸載後回呼、已觸發／取消 timer 不留存、observer 冪等清理、同一 happy-dom Window 連續100次 mount/unmount。每次掛載40監聽、觸發2個timeout及1個observer，卸載皆回到0；保留的殼回呼不能復活UI。
+- 12個變異首輪全殺、0存活：漏清監聽／timeout／interval／observer、capture錯誤、已執行timeout未移除、手動取消兩種timer失效、卸載後timer仍回呼、unmount漏dispose、observer漏登錄、遲到observer漏清。scratchpad腳本每個變異皆以finally還原。
+- **驗證**：`npm test` 561／561（20.502s），包含既有556條與200×100步固定種子漫步；`git diff --check` 通過。jev 0，不動後半、殼或 trace.enable，未commit。變異與測試紀錄在 `/private/tmp/news-r16/`。

@@ -1,4 +1,5 @@
 // Native ES module; untrusted feed fields are only assigned as text.
+import {createLifecycle} from "./lifecycle.js";
 import { css } from "./style.js";
 import {aggregatePanel, aggregateHistory} from "./panel.js";
 import {selectScope, facetCounts, groupItems as scopeGroups, isNew as scopeIsNew} from "./scope.js";
@@ -17,6 +18,7 @@ let shortcutId = 0;
 export default function mount(ctx) {
   const document = ctx.container.ownerDocument;
   const view = document.defaultView;
+  const lifecycle = createLifecycle(view);
   function loadState(name) {
     try { return JSON.parse(view.localStorage.getItem(`modudock.module.news.${name}`)); }
     catch { return null; }
@@ -432,11 +434,11 @@ export default function mount(ctx) {
     if (!initialStage) return;
     if (newRound || modelState !== "working") {
       initialStage = false;
-      if (initialTimer !== null) view.clearTimeout(initialTimer);
+      if (initialTimer !== null) lifecycle.clearTimeout(initialTimer);
       initialTimer = null;
     } else if (initialWorkAt === null) {
       initialWorkAt = Date.now();
-      initialTimer = view.setTimeout(() => {
+      initialTimer = lifecycle.timeout(() => {
         initialTimer = null;
         if (disposed || !initialStage || modelState !== "working") return;
         const position = captureReading(); drawItems(); restoreReading(position);
@@ -510,7 +512,7 @@ export default function mount(ctx) {
     refresh.setAttribute("aria-disabled", "true");
     refresh.textContent = "↻ 更新中…";
     list.setAttribute("aria-busy", "true");
-    refreshTimer = view.setTimeout(() => {
+    refreshTimer = lifecycle.timeout(() => {
       finishRefresh();
       refreshNotice = "更新未完成，稍後自動重試";
       if (received) drawItems();
@@ -520,7 +522,7 @@ export default function mount(ctx) {
     ctx.channel.send({ op: "refresh" });
   }
   function finishRefresh() {
-    if (refreshTimer !== null) view.clearTimeout(refreshTimer);
+    if (refreshTimer !== null) lifecycle.clearTimeout(refreshTimer);
     refreshTimer = null;
     refresh.removeAttribute("aria-disabled");
     refresh.disabled = !up || disposed;
@@ -1817,47 +1819,47 @@ export default function mount(ctx) {
     }
     syncPanelDisclosure();
   }) : null;
-  panelObserver?.observe(root);
-  topicOrder.addEventListener("click", onTopicOrder);
-  topicLatest.addEventListener("click", onTopicOrder);
-  focusToggle.addEventListener("click", onFocusToggle);
-  topicSources.addEventListener("click", onOutlet);
-  outletMore.addEventListener("click", onOutletMore);
-  outletClear.addEventListener("click", onOutletClear);
-  panelToggle.addEventListener("blur", syncPanelDisclosure);
-  panelToggle.addEventListener("click", onPanelToggle);
-  shortcutToggle.addEventListener("click", toggleShortcuts);
-  overview.addEventListener("click", onOverview);
-  newOnly.addEventListener("click", onNewOnly);
-  markRead.addEventListener("click", onMarkRead);
-  undoRead.addEventListener("click", onUndoRead);
-  newClear.addEventListener("click", onNewClear);
-  searchToggle.addEventListener("click", onSearchToggle);
-  searchInput.addEventListener("input", onSearch);
-  searchInput.addEventListener("keydown", onSearchKey);
-  searchClear.addEventListener("click", onSearchClear);
-  root.addEventListener("keydown", readingKeyboard);
-  view.addEventListener("pointerdown", readingPointer);
-  view.addEventListener("wheel", readingPointer, {passive:true});
-  root.addEventListener("keydown", onBrowseKey);
-  list.addEventListener("click", onExpand);
-  list.addEventListener("click", onSummary);
-  focusList.addEventListener("click", onFocus);
-  focusList.addEventListener("click", onTone);
-  focusList.addEventListener("click", onSummary);
-  clearAll.addEventListener("click", onClearAll);
-  ranking.addEventListener("click", onTheme);
-  panel.addEventListener("click", onCount);
-  clearTheme.addEventListener("click", onClearTheme);
-  historyToggle.addEventListener("click", onHistory);
-  refresh.addEventListener("click", onRefresh);
-  sources.addEventListener("change", onSourceOrCategory);
-  categories.addEventListener("change", onSourceOrCategory);
-  watchToggle.addEventListener("click", onWatchToggle);
-  watchSave.addEventListener("click", onWatchSave);
-  watchInput.addEventListener("keydown", onWatchKey);
-  watchOnly.addEventListener("click", onWatchOnly);
-  view.addEventListener("pagehide", persistLastSeen);
+  if (panelObserver) lifecycle.observer(panelObserver).observe(root);
+  lifecycle.on(topicOrder, "click", onTopicOrder);
+  lifecycle.on(topicLatest, "click", onTopicOrder);
+  lifecycle.on(focusToggle, "click", onFocusToggle);
+  lifecycle.on(topicSources, "click", onOutlet);
+  lifecycle.on(outletMore, "click", onOutletMore);
+  lifecycle.on(outletClear, "click", onOutletClear);
+  lifecycle.on(panelToggle, "blur", syncPanelDisclosure);
+  lifecycle.on(panelToggle, "click", onPanelToggle);
+  lifecycle.on(shortcutToggle, "click", toggleShortcuts);
+  lifecycle.on(overview, "click", onOverview);
+  lifecycle.on(newOnly, "click", onNewOnly);
+  lifecycle.on(markRead, "click", onMarkRead);
+  lifecycle.on(undoRead, "click", onUndoRead);
+  lifecycle.on(newClear, "click", onNewClear);
+  lifecycle.on(searchToggle, "click", onSearchToggle);
+  lifecycle.on(searchInput, "input", onSearch);
+  lifecycle.on(searchInput, "keydown", onSearchKey);
+  lifecycle.on(searchClear, "click", onSearchClear);
+  lifecycle.on(root, "keydown", readingKeyboard);
+  lifecycle.on(view, "pointerdown", readingPointer);
+  lifecycle.on(view, "wheel", readingPointer, {passive:true});
+  lifecycle.on(root, "keydown", onBrowseKey);
+  lifecycle.on(list, "click", onExpand);
+  lifecycle.on(list, "click", onSummary);
+  lifecycle.on(focusList, "click", onFocus);
+  lifecycle.on(focusList, "click", onTone);
+  lifecycle.on(focusList, "click", onSummary);
+  lifecycle.on(clearAll, "click", onClearAll);
+  lifecycle.on(ranking, "click", onTheme);
+  lifecycle.on(panel, "click", onCount);
+  lifecycle.on(clearTheme, "click", onClearTheme);
+  lifecycle.on(historyToggle, "click", onHistory);
+  lifecycle.on(refresh, "click", onRefresh);
+  lifecycle.on(sources, "change", onSourceOrCategory);
+  lifecycle.on(categories, "change", onSourceOrCategory);
+  lifecycle.on(watchToggle, "click", onWatchToggle);
+  lifecycle.on(watchSave, "click", onWatchSave);
+  lifecycle.on(watchInput, "keydown", onWatchKey);
+  lifecycle.on(watchOnly, "click", onWatchOnly);
+  lifecycle.on(view, "pagehide", persistLastSeen);
   ctx.channel.onMessage((body) => {
     if (!disposed && body && body.op === "list") renderList(body);
   });
@@ -1872,63 +1874,23 @@ export default function mount(ctx) {
     unmount() {
       if (disposed) return;
       persistLastSeen();
-      view.removeEventListener("pagehide", persistLastSeen);
       disposed = true;
-      panelObserver?.disconnect();
-      topicOrder.removeEventListener("click", onTopicOrder);
-      topicLatest.removeEventListener("click", onTopicOrder);
-      focusToggle.removeEventListener("click", onFocusToggle);
-      topicSources.removeEventListener("click", onOutlet);
-      outletMore.removeEventListener("click", onOutletMore);
-      outletClear.removeEventListener("click", onOutletClear);
-      panelToggle.removeEventListener("blur", syncPanelDisclosure);
-      panelToggle.removeEventListener("click", onPanelToggle);
+      lifecycle.dispose();
       up = false;
       finishRefresh();
-      if (initialTimer !== null) view.clearTimeout(initialTimer);
+      if (initialTimer !== null) lifecycle.clearTimeout(initialTimer);
       initialTimer = null;
-      root.removeEventListener("keydown", readingKeyboard);
-      view.removeEventListener("pointerdown", readingPointer);
-      view.removeEventListener("wheel", readingPointer);
       refresh.disabled = true;
-      shortcutToggle.removeEventListener("click", toggleShortcuts);
       shortcutOrigin = null;
-      overview.removeEventListener("click", onOverview);
-      newOnly.removeEventListener("click", onNewOnly);
-      markRead.removeEventListener("click", onMarkRead);
-      undoRead.removeEventListener("click", onUndoRead);
       undoReading = null;
-      newClear.removeEventListener("click", onNewClear);
-      searchToggle.removeEventListener("click", onSearchToggle);
-      searchInput.removeEventListener("input", onSearch);
-      searchInput.removeEventListener("keydown", onSearchKey);
-      searchClear.removeEventListener("click", onSearchClear);
       searchIndex = new WeakMap();
       searchRows.clear();
-      root.removeEventListener("keydown", onBrowseKey);
-      historyToggle.removeEventListener("click", onHistory);
-      refresh.removeEventListener("click", onRefresh);
-      sources.removeEventListener("change", onSourceOrCategory);
-      categories.removeEventListener("change", onSourceOrCategory);
-      watchToggle.removeEventListener("click", onWatchToggle);
-      watchSave.removeEventListener("click", onWatchSave);
-      watchInput.removeEventListener("keydown", onWatchKey);
-      watchOnly.removeEventListener("click", onWatchOnly);
-      list.removeEventListener("click", onExpand);
-      list.removeEventListener("click", onSummary);
       summaries.clear();
-      focusList.removeEventListener("click", onFocus);
-      focusList.removeEventListener("click", onTone);
-      focusList.removeEventListener("click", onSummary);
       toneAudit = null;
       expanded.clear();
       sourceOrder.clear();
       sourceOutlets.clear();
-      clearAll.removeEventListener("click", onClearAll);
-      ranking.removeEventListener("click", onTheme);
-      panel.removeEventListener("click", onCount);
       selectedCount = null;
-      clearTheme.removeEventListener("click", onClearTheme);
       selectedTheme = "";
       selectedTopic = "";
       savedView = null;
