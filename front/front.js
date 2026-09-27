@@ -1,5 +1,6 @@
 // Native ES module; untrusted feed fields are only assigned as text.
 import { css } from "./style.js";
+import {selectScope, facetCounts, groupItems as scopeGroups, isNew as scopeIsNew, contributes as scopeContributes} from "./scope.js";
 import {
   categoryNames, themeNames, regionNames, regionTopics, issueNames, issueTopics, topicNames,
   financial, validAnalysis, topicOf, arrow, eventId, searchText,
@@ -550,27 +551,8 @@ export default function mount(ctx) {
     if (typeof item.tone === "string" && names.has(item.tone))
       meta.append(make("span", `nw-tone-tag nw-tone-tag-${item.tone}`, names.get(item.tone)));
   }
-  function groupItems(scoped) {
-    const groups = new Map();
-    for (const item of scoped) {
-      const id = eventId(item);
-      const key = id || Symbol(); // Invalid metadata must never merge two reports.
-      if (!groups.has(key)) groups.set(key, {id, reports: []});
-      groups.get(key).reports.push(item);
-    }
-    const timestamp = item => {
-      const value = Date.parse(text(item.published));
-      return Number.isFinite(value) ? value : Infinity;
-    };
-    for (const group of groups.values()) {
-      group.reports.sort((a, b) => (timestamp(a) - timestamp(b))
-        || ((sourceOrder.get(text(a.source)) ?? Infinity) - (sourceOrder.get(text(b.source)) ?? Infinity)) || 0);
-    }
-    return [...groups.values()];
-  }
-  function isNew(item) {
-    return lastSeen !== null && Date.parse(text(item.published)) > lastSeen;
-  }
+  function groupItems(scoped) { return scopeGroups(scoped, sourceOrder); }
+  function isNew(item) { return scopeIsNew(item, lastSeen); }
   function newsTitle(item, className, marked = isNew(item)) {
     let safeURL = null;
     try {
@@ -914,34 +896,19 @@ export default function mount(ctx) {
     });
   }
   function contributes(group, id, category = categories.value) {
-    const analysis = group.reports.map(validAnalysis).find(Boolean);
-    if (!analysis) return false;
-    if (id.startsWith("signal:")) {
-      const signal = category === "world" ? analysis?.trend : analysis?.market;
-      const index = category === "world"
-        ? {escalation: 0, stalemate: 1, deescalation: 2}[signal]
-        : {positive: 0, mixed: 1, negative: 3}[signal];
-      return Number(id.slice(7)) === (index ?? (category === "world" ? 3 : 2));
-    }
-    return analysis?.theme === "macro" && (id === "macro:all"
-      || arrow(analysis) === (id === "macro:bull" ? "▲" : "▼"));
+    return scopeContributes(group, id, category);
   }
-  function drawOverview() {
+  function drawOverview(counts) {
     overview.hidden = !received || Boolean(categories.value || selectedTopic || selectedCount?.topic
       || searchText(searchInput.value).trim() || onlyWatched) || !analysisEnabled;
     if (overview.hidden) return;
     for (const button of overviewButtons) {
       const category = button.dataset.overview, world = category === "world";
-      let groups = groupItems(items.filter(item => item && text(item.category) === category
-        && (!sources.value || text(item.source) === sources.value)));
-      if (onlyNew) groups = groups.filter(group => group.reports.some(isNew));
-      const analyzed = groups.filter(group => group.reports.some(item => validAnalysis(item))).length;
-      const up = groups.filter(group => contributes(group, "signal:0", category)).length;
-      const down = groups.filter(group => contributes(group, world ? "signal:2" : "signal:3", category)).length;
+      const {total, analyzed, up, down} = counts.get(category);
       const name = `${world ? "國際" : "財經"}${onlyNew ? "新進展" : ""}`;
-      const coverage = analyzed < groups.length ? `（已分析 ${analyzed}／${groups.length}）` : "";
+      const coverage = analyzed < total ? `（已分析 ${analyzed}／${total}）` : "";
       button.textContent = `${name} ${world ? "升級" : "偏多"} ${up} 件・${world ? "緩和" : "偏空"} ${down} 件${coverage}${analyzed < 10 ? "（樣本少）" : ""}`;
-      button.title = `${analyzed < groups.length ? `已分析 ${analyzed}／${groups.length} 個事件；` : ""}依標題與摘要判斷${world ? "局勢走向" : "對股市影響，非行情"}。點選查看${world ? "國際" : "財經"}面板`;
+      button.title = `${analyzed < total ? `已分析 ${analyzed}／${total} 個事件；` : ""}依標題與摘要判斷${world ? "局勢走向" : "對股市影響，非行情"}。點選查看${world ? "國際" : "財經"}面板`;
     }
   }
   function onOverview(event) {
@@ -1275,63 +1242,37 @@ export default function mount(ctx) {
     sourceDescription.textContent = [...sources.options].find(option => option.value === sources.value)?.title || "";
     const focusWasInside = keepFocus && root.contains(document.activeElement);
     const focused = keepFocus ? focusIdentity(document.activeElement) : null;
-    const availableItems = items.filter(item => item && typeof item === "object");
+    const selection = selectScope(items, {source: sources.value, category: categories.value,
+      topic: selectedTopic, outlet: selectedOutlet, theme: selectedTheme, count: selectedCount,
+      onlyNew, onlyWatched, trackedWords, search: searchInput.value, chronological}, lastSeen,
+      {sourceOrder, sourceOutlets, searchIndex});
+    selectedTheme = selection.normalized.theme;
+    selectedCount = selection.normalized.count;
+    selectedOutlet = selection.normalized.outlet;
+    chronological = selection.normalized.chronological;
     for (const option of searchOnly ? [] : categories.options) {
-      const count = groupItems(availableItems.filter(item => (!sources.value || text(item.source) === sources.value)
-        && (!option.value || text(item.category) === option.value))).length;
+      const count = selection.facets.categories.get(option.value) || 0;
       const next = `${categoryNames.get(option.value) || "全部類別"} ${count}`;
       if (option.textContent !== next) option.textContent = next;
     }
     for (const option of searchOnly ? [] : sources.options) {
-      const count = groupItems(availableItems.filter(item => (!categories.value || text(item.category) === categories.value)
-        && (!option.value || text(item.source) === option.value))).length;
+      const count = selection.facets.sources.get(option.value) || 0;
       const next = `${option.value || "全部來源"} ${count}${option.dataset.statusSuffix || ""}`;
       if (option.textContent !== next) option.textContent = next;
     }
-    const applicable = categories.value === "politics" ? issueTopics : categories.value === "world" ? regionTopics
-      : financial(categories.value) ? themeNames : new Map();
-    if (selectedTheme && !applicable.has(selectedTheme)) selectedTheme = "";
-    if (selectedCount && selectedCount.category !== categories.value) selectedCount = null;
-    drawOverview();
-    const scopeTopic = selectedTopic || selectedCount?.topic;
-    if (!scopeTopic) { selectedOutlet = ""; chronological = false; }
-    let scoped = items.filter(item => item && typeof item === "object"
-      && (!sources.value || text(item.source) === sources.value)
-      && (!categories.value || text(item.category) === categories.value)
-      && (!scopeTopic || item.topic === scopeTopic));
-    // A theme filter matches individual reports. Validate before the optional
-    // new-progress restriction so toggling it cannot discard the user's theme.
-    if (selectedTheme && !scoped.some(item => topicOf(validAnalysis(item)) === selectedTheme)) selectedTheme = "";
-    if (selectedOutlet) scoped = scoped.filter(item => outletOf(item) === selectedOutlet);
-    // Keep complete eligible events, including their older representative.
-    if (onlyNew) {
-      const eligible = new Set(groupItems(scoped).filter(group => group.reports.some(isNew)).flatMap(group => group.reports));
-      scoped = scoped.filter(item => eligible.has(item));
-    }
-    if (!searchOnly) drawPanel(scoped); // Theme filtering must not shrink the panel's scope.
+    drawOverview(selection.overview);
+    const {scoped, scopeTopic, groupIndices, matches, query, watchedCount, newCount: count, listGroups: groups} = selection;
+    const hits = item => selection.searchHits.has(item);
+    if (!searchOnly) drawPanel(scoped); // Search/theme do not shrink the panel.
     const rendered = document.createDocumentFragment();
-    const filtered = scoped.filter(item => !selectedTheme || topicOf(validAnalysis(item)) === selectedTheme);
-    const allGroups = groupItems(filtered).filter(group => !selectedCount || contributes(group, selectedCount.id));
-    const groupIndices = new Map(allGroups.map((group, index) => [group, index]));
-    const matches = new Map(allGroups.map(group => [group, trackedWords.find(word => group.reports.some(item =>
-      text(item.title).toLowerCase().includes(word.toLowerCase()) || text(item.summary).toLowerCase().includes(word.toLowerCase())))]));
-    const query = searchText(searchInput.value).trim();
-    const hits = item => !query || (searchIndex.get(item) || []).some(value => value.includes(query));
-    const searchedGroups = allGroups.filter(group => group.reports.some(hits));
-    const watchedCount = searchedGroups.filter(group => matches.get(group)
-      && (!onlyNew || group.reports.some(isNew))).length;
     watchOnly.disabled = trackedWords.length === 0;
     watchOnly.hidden = trackedWords.length === 0;
     watchOnly.setAttribute("aria-pressed", String(onlyWatched));
     watchOnly.title = `只顯示標題或摘要含你的關鍵字的新聞（${watchedCount} 個事件）`;
     watchDescription.textContent = watchOnly.title;
     watchGuide.hidden = trackedWords.length > 0;
-    watchOnly.textContent = `只看追蹤 ${watchedCount}`;  // Events, like the list and status.
-    const matchedGroups = searchedGroups.filter(group => !onlyWatched || matches.get(group));
-    const count = matchedGroups.filter(group => group.reports.some(isNew)).length;
-    const groups = matchedGroups.filter(group => !onlyNew || group.reports.some(isNew));
-    if (chronological && scopeTopic) groups.sort((a, b) => reportTime(a.reports[0]) - reportTime(b.reports[0]));
-    drawTopicTools(scopeTopic, groups);
+    watchOnly.textContent = `只看追蹤 ${watchedCount}`;
+    drawTopicTools(scopeTopic, selection.topicSummary);
     markRead.hidden = lastSeen === null || count === 0 || undoReading !== null;
     markRead.disabled = !Number.isFinite(readingBoundary()) || (lastSeen !== null && readingBoundary() <= lastSeen);
     undoRead.hidden = undoReading === null;
@@ -1449,7 +1390,7 @@ export default function mount(ctx) {
         describe(tag, description, tagDescriptions);
         info.append(tag);
       }
-      if (!categories.value) info.append(make("span", "nw-category", categoryNames.get(category) || "未分類"));
+      if (!categories.value) info.append(make("span", "nw-category", categoryNames.get(category) || (modelState === "working" && analysisEnabled && !category ? "分類中" : "未分類")));
       info.append(make("span", "nw-source", text(item.source)), groupTime(group.reports));
       appendTone(info, item, group.reports);
       row.append(newsTitle(item, "nw-title", newGroups[index] && index >= prefix), meta);
@@ -1514,18 +1455,7 @@ export default function mount(ctx) {
     const stamp = Date.parse(text(item.published));
     return Number.isFinite(stamp) ? stamp : Infinity;
   }
-  function outletGroups(name, topic) {
-    const query = searchText(searchInput.value).trim();
-    return groupItems(items.filter(item => item && item.topic === topic && outletOf(item) === name
-      && (!categories.value || item.category === categories.value)
-      && (!selectedTheme || topicOf(validAnalysis(item)) === selectedTheme)))
-      .filter(group => (!selectedCount || contributes(group, selectedCount.id))
-        && (!onlyNew || group.reports.some(isNew))
-        && (!query || group.reports.some(item => [item.title, item.summary].some(value => searchText(value).includes(query))))
-        && (!onlyWatched || group.reports.some(item => trackedWords.some(word => [item.title, item.summary]
-          .some(value => text(value).toLowerCase().includes(word.toLowerCase()))))));
-  }
-  function drawTopicTools(topic, visibleGroups) {
+  function drawTopicTools(topic, summary) {
     topicTools.hidden = !topic;
     topicTotals.hidden = !topic;
     topicVisible.hidden = true;
@@ -1546,13 +1476,11 @@ export default function mount(ctx) {
     outletMore.setAttribute("aria-expanded", String(outletsExpanded));
     topicSources.removeAttribute("title");
     if (!topic) return;
-    const members = items.filter(item => item && item.topic === topic);
-    const totalGroups = groupItems(members);
-    const outlets = new Set(members.map(outletOf).filter(Boolean));
-    topicTotals.textContent = `整個話題：${totalGroups.length} 個事件・${members.length} 則・${outlets.size} 家`;
-    const visibleReports = visibleGroups.reduce((count,group)=>count+group.reports.length,0);
-    topicVisible.hidden = visibleReports >= members.length;
-    topicVisible.textContent = topicVisible.hidden ? "" : `目前顯示：${visibleGroups.length} 個事件・${visibleReports} 則`;
+    const {events: totalEvents, reports: totalReports, outlets: totalOutlets,
+      visibleEvents, visibleReports, ranked} = summary;
+    topicTotals.textContent = `整個話題：${totalEvents} 個事件・${totalReports} 則・${totalOutlets} 家`;
+    topicVisible.hidden = visibleReports >= totalReports;
+    topicVisible.textContent = topicVisible.hidden ? "" : `目前顯示：${visibleEvents} 個事件・${visibleReports} 則`;
     topicOrder.textContent = "時間順序";
     topicOrder.title = "由舊到新，依發布時間，非事件發生時間";
     topicOrder.setAttribute("aria-pressed", String(chronological));
@@ -1560,18 +1488,11 @@ export default function mount(ctx) {
     orderHint.hidden = !chronological;
     outletLabel.textContent = selectedOutlet ? `只看：${selectedOutlet}` : "";
     outletClear.hidden = !selectedOutlet;
-    const order = new Map();
-    for (const item of items.filter(item => item?.topic === topic)) {
-      const name = outletOf(item);
-      if (name) order.set(name, Math.min(order.get(name) ?? Infinity, sourceOrder.get(text(item.source)) ?? Infinity));
-    }
     for (const [id,name] of toneLabels) {
       const label = make("span", "nw-outlet-legend-item");
       label.append(toneSwatch(id), document.createTextNode(name));
       outletLegend.append(label);
     }
-    const ranked = [...order.keys()].map(name => [name, outletGroups(name, topic).flatMap(group=>group.reports)])
-      .sort((a,b)=>b[1].length-a[1].length || order.get(a[0])-order.get(b[0]));
     ranked.forEach(([name,reports],index)=>{
       const row = make("div", "nw-outlet-row");
       const button = make("button", "nw-outlet");
@@ -1798,8 +1719,8 @@ export default function mount(ctx) {
     const previous = sources.value;
     const records = Array.isArray(body.sources) ? body.sources : [];
     const options = new Map([...sources.options].map(option => [option.value, option]));
-    const allText = `全部來源 ${groupItems(items.filter(item => item && typeof item === "object"
-      && (!categories.value || text(item.category) === categories.value))).length}`;
+    const facets = facetCounts(items, {source: sources.value, category: categories.value});
+    const allText = `全部來源 ${facets.sources.get("") || 0}`;
     if (all.textContent !== allText) all.textContent = allText;
     const names = new Set();
     sourceOutlets = new Map();
@@ -1811,8 +1732,7 @@ export default function mount(ctx) {
       sourceOutlets.set(name, outlet && outlet.length <= 64 ? outlet : name);
       const option = options.get(name) || document.createElement("option");
       option.value = name;
-      const count = groupItems(items.filter(item => item && typeof item === "object" && text(item.source) === name
-        && (!categories.value || text(item.category) === categories.value))).length;
+      const count = facets.sources.get(name) || 0;
       const date = confirmedAt(source);
       const today = new Date();
       const sameDay = date && date.getFullYear() === today.getFullYear()

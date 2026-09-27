@@ -5282,3 +5282,30 @@ for(const mode of ['seen','dates']) test(`R45 list children retain listitem sema
     browseKey(h,h.window.document.activeElement,'k');assert.equal(h.window.document.activeElement,title);
   }
 });
+
+// Pure selection tests share the standard frontend test entry point.
+import './scope.test.mjs';
+
+test('R4 pending category reads 分類中 only while enabled model is working', t => {
+  const h=setup(t);
+  for(const [state,enabled,expected] of [['working',true,'分類中'],['paused',true,'未分類'],
+    ['done',true,'未分類'],['off',false,'未分類'],['working',false,'未分類']]) {
+    h.message({...listing([article({category:''})]),model:{state},classify:{enabled,pending:1}});
+    const label=h.container.querySelector('.nw-category');
+    assert.equal(label.textContent,expected);
+    assert.ok(label.closest('.nw-meta')); // inherits --nw-muted
+  }
+});
+
+test('R4 partial classification never moves pending items into other facet', t => {
+  const h=setup(t);
+  const rows=[article({link:'https://e.test/a',category:''}),article({link:'https://e.test/b',category:'other'}),
+    article({link:'https://e.test/c',category:'finance'})];
+  const names=()=>new Map([...h.categories.options].map(o=>[o.value,o.textContent]));
+  h.message({...listing(rows),model:{state:'working'},classify:{enabled:true,pending:1}});
+  assert.equal(names().get(''),'全部類別 3');assert.equal(names().get('other'),'其他 1');
+  assert.equal(h.container.querySelectorAll('.nw-category')[0].textContent,'分類中');
+  h.message({...listing([{...rows[0],category:'tech'},...rows.slice(1)]),model:{state:'done'},classify:{enabled:true,pending:0}});
+  assert.equal(names().get('other'),'其他 1');assert.equal(names().get('tech'),'科技 1');
+  assert.equal(h.container.querySelectorAll('.nw-category')[0].textContent,'科技');
+});
