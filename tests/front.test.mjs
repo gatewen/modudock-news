@@ -5169,7 +5169,7 @@ test('R34 outlet tone wording and small samples use judged reports, preserve pro
   const h=setup(t),body=outletToneFixture();h.message(body);focusTopicButtons(h)[0].click();
   const section=h.container.querySelector('.nw-topic-sources');
   assert.equal(section.querySelector('h3').textContent,'各家報導語氣（則）');
-  assert.equal(section.querySelector('.nw-outlet-explanation').textContent,'依每則標題與摘要判讀對此事件的語氣（AI 判定），不代表媒體整體立場');
+  assert.equal(section.querySelector('.nw-outlet-explanation').textContent,'依每則標題與摘要判讀對此事件的語氣（AI 判定），不代表媒體整體立場。中性表示未明顯強調正面或負面，不代表沒有風險或利多');
   const row=()=>[...section.querySelectorAll('.nw-outlet-row')].find(n=>n.querySelector('button').dataset.outlet==='公視');
   assert.equal(row().querySelector('button').textContent,'公視 5');
   assert.equal(row().querySelector('.nw-outlet-small').textContent,'樣本少');
@@ -5325,3 +5325,23 @@ test('R6 classification label requires positive pending and an absent category',
 });
 
 import "./panel.test.mjs";
+
+
+test('R15 neutral explanation is shared by focus, topic titles and the existing outlet hint', t => {
+  const h=setup(t);h.message(outletToneFixture());
+  const explanation='中性表示未明顯強調正面或負面，不代表沒有風險或利多';
+  const checkTitles=()=> {
+    const labels=[...h.container.querySelectorAll('.nw-tone-labels')];
+    assert.ok(labels.length>0);
+    for(const node of labels) assert.ok(node.title.endsWith(explanation));
+    assert.ok(h.container.querySelector('.nw-topic-sources h3').title.includes(explanation));
+  };
+  checkTitles();
+  focusTopicButtons(h)[0].click();
+  checkTitles();
+  const hints=h.container.querySelectorAll('.nw-outlet-explanation');
+  assert.equal(hints.length,1);
+  assert.ok(hints[0].textContent.endsWith(explanation));
+  assert.equal(hints[0].childElementCount,0);
+  assert.equal(hints[0].textContent.includes('\n'),false);
+});

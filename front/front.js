@@ -209,10 +209,11 @@ export default function mount(ctx) {
   const outletChip = make("div", "nw-outlet-chip");
   outletChip.hidden = true;
   outletChip.append(outletLabel, outletClear);
-  const toneExplanation = "依標題與摘要判斷報導的語氣：正面＝強調成果、進展、合作或利多；負面＝強調分歧、受挫、風險、抗議或批評；中性＝主要陳述事實、行程或背景；正反並陳；非媒體立場";
+  const neutralExplanation = "中性表示未明顯強調正面或負面，不代表沒有風險或利多";
+  const toneExplanation = "依標題與摘要判斷報導的語氣：正面＝強調成果、進展、合作或利多；負面＝強調分歧、受挫、風險、抗議或批評；中性＝主要陳述事實、行程或背景；正反並陳；非媒體立場。" + neutralExplanation;
   const outletHeading = make("h3", "nw-heading", "各家報導語氣（則）");
   outletHeading.title = toneExplanation + "。各家則數只算該家符合目前篩選的報導，清單會保留整個事件，所以加總可能與目前顯示不同";
-  const outletExplanation = make("p", "nw-hint nw-outlet-explanation", "依每則標題與摘要判讀對此事件的語氣（AI 判定），不代表媒體整體立場");
+  const outletExplanation = make("p", "nw-hint nw-outlet-explanation", "依每則標題與摘要判讀對此事件的語氣（AI 判定），不代表媒體整體立場。" + neutralExplanation);
   const outletLegend = make("div", "nw-outlet-legend");
   const outletRows = make("div", "nw-outlet-rows");
   const outletExtra = make("div", "nw-outlet-rows");
