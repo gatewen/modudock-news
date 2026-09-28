@@ -214,6 +214,33 @@ class MergeAndSizeTests(unittest.TestCase):
         self.assertEqual(fp.merge_items([[old], [newer], [tied]]), [tied])  # A owns the key; its newest wins.
         self.assertEqual(fp.dedup_key(old["link"]), "https://example.com/x?a=1")
 
+    def test_udn_story_category_aliases_merge_without_rewriting_links(self):
+        a = self.item('生醫族群旺季來了', 'https://money.udn.com/money/story/5710/9781980', source='證券')
+        b = dict(a, link='https://money.udn.com/money/story/5607/9781980', source='產業',
+                 published='2026-09-22T00:00:00.000000Z')
+        feeds = [dict(name=n, url='https://money.udn.com/rss') for n in ('證券', '產業')]
+        for lists in ([[a], [b]], [[b], [a]]):
+            self.assertEqual(fp.merge_items(lists, feeds), [a])
+        self.assertEqual(fp.merge_items([[a, dict(b, source='證券')]], feeds), [dict(b, source='證券')])
+        self.assertEqual(fp.merge_items([[a, dict(b, source='證券', published=a['published'])]], feeds), [a])
+        key = fp.dedup_key(a['link'])
+        self.assertEqual(key, fp.dedup_key(b['link'] + '?utm_source=x#fragment'))
+        self.assertEqual(fp.dedup_key(key), key)
+        for prefix in ('https://udn.com/story/', 'https://www.udn.com/story/'):
+            self.assertEqual(fp.dedup_key(prefix+'123/9781980'), fp.dedup_key(prefix+'456/9781980/'))
+
+    def test_story_alias_dedup_is_host_and_path_scoped(self):
+        for host in ('example.com', 'udn.com.evil.test', 'notudn.com', 'cna.com.tw'):
+            self.assertNotEqual(fp.dedup_key(f'https://{host}/story/1/123'),
+                                fp.dedup_key(f'https://{host}/story/2/123'))
+        base = 'https://money.udn.com/money/story/1/123'
+        for other in ('https://money.udn.com/money/story/1/124',
+                      'https://money.udn.com/money/story/2/123?page=2',
+                      'https://money.udn.com/money/story/2/123/extra',
+                      'https://money.udn.com/money/story/abc/123',
+                      'https://cna.com.tw/story/1/123'):
+            self.assertEqual(len(fp.merge_items([[self.item('同文', base), self.item('同文', other)]])), 2)
+
     def test_sort_ties_stable_and_list_cap(self):
         items = [self.item(f"{i:03d}", f"https://example.com/{i}", source=chr(65 + i % 10)) for i in range(fp.MAX_ITEMS_LIST + 10)]
         first = fp.merge_items([list(reversed(items))])

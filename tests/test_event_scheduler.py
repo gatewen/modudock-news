@@ -406,7 +406,12 @@ class EventSchedulerTests(unittest.TestCase):
             scheduler._take_batch = record_admission
             scheduler.start()
             first = self.round(sink)
-            self.assertEqual(len(first['items']), 300)
+            # The unchanged snapshot contains UDN story 9775664 under two
+            # category paths; §24.1 now correctly emits one article.
+            expected_links = {i['link'] for i in items} - {
+                'https://money.udn.com/money/story/5612/9775664'}
+            self.assertEqual(len(first['items']), 299)
+            self.assertEqual({i['link'] for i in first['items']}, expected_links)
             self.assertGreater(first['events']['pending'], 0)
             eventually(lambda: scheduler.completed == 1 and self.idle(scheduler), timeout=10)
             eventually(lambda: scheduler.last_list['body']['events']['pending'] == 0
@@ -417,7 +422,8 @@ class EventSchedulerTests(unittest.TestCase):
             self.assertEqual(final['events']['pending'], 0)
             self.assertEqual(final['classify']['pending'], 0)
             self.assertEqual(final['analysis']['pending'], 0)
-            self.assertEqual(len(final['items']), 300)
+            self.assertEqual(len(final['items']), 299)
+            self.assertEqual({i['link'] for i in final['items']}, expected_links)
             stages = [kind(p) for _, _, p in received]
             self.assertEqual(bypassed, [])  # Exact priority at every admission, including the starvation guard.
             self.assertCountEqual(stages, admissions)  # HTTP arrival order can differ from admission order.

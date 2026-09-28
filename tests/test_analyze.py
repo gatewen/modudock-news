@@ -51,7 +51,7 @@ class AnalyzeTests(unittest.TestCase):
         self.assertEqual(payload["model"], "jev-1.13.0")
         self.assertEqual(payload["state"], {f"news_{i}": {"title": "標題", "summary": "摘要"} for i in range(2)})
         self.assertEqual(set(payload["questions"]), {f"{name}_{i}" for name in instructions for i in range(2)})
-        self.assertEqual(len(expected_criteria["theme"]), 22)
+        self.assertEqual(len(expected_criteria["theme"]), 24)
         for i in range(2):
             for name in instructions:
                 self.assertEqual(payload["questions"][f"{name}_{i}"], {
@@ -59,6 +59,21 @@ class AnalyzeTests(unittest.TestCase):
                     "criteria": expected_criteria[name]})
         self.assertEqual(len({q["instructions"] for q in payload["questions"].values()}), 6)
         self.assertNotIn("private-key", json.dumps(payload))
+
+    def test_biotech_retail_request_and_decode(self):
+        from back.analyze import THEME_CRITERIA, valid_analysis
+        self.assertEqual(list(THEME_CRITERIA)[-4:], ['biotech', 'retail', 'macro', 'other'])
+        self.assertEqual(THEME_CRITERIA['biotech'], '生技醫療、製藥、醫材')
+        self.assertIn('不含消費電子硬體或軟體、電商平台服務', THEME_CRITERIA['retail'])
+        reply = answers()
+        for i, theme in enumerate(('biotech', 'retail')):
+            reply['answers'][f'theme_{i}'] = {'choice': theme, 'probabilities': {theme: .9}}
+        with server(lambda *_: (200, reply, {})) as (url, received):
+            result = self.client(url).analyze(items())
+        for i, theme in enumerate(('biotech', 'retail')):
+            self.assertEqual(result[f'private-key-{i}']['theme'], theme)
+            self.assertTrue(valid_analysis(result[f'private-key-{i}']))
+            self.assertIn(theme, received[0][2]['questions'][f'theme_{i}']['criteria'])
 
     def test_twenty_item_limit_sixty_questions_and_local_indices(self):
         with server(lambda p, *_: (200, answers(len(p["state"])), {})) as (url, received):

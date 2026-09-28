@@ -241,7 +241,15 @@ def dedup_key(link):
     parts = urlsplit(link)
     query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)
              if not k.startswith("utm_") and k != "fbclid"]
-    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), ""))
+    path = parts.path
+    host = (parts.hostname or "").lower().rstrip(".")
+    if host == "udn.com" or host.endswith(".udn.com"):
+        # UDN category codes are routing aliases, not article identity. Keep
+        # host/product prefix and non-tracking queries; never rewrite the link.
+        match = re.fullmatch(r"(/(?:money/)?story)/[0-9]+/([0-9]+)/?", path)
+        if match:
+            path = f"{match[1]}/{match[2]}"
+    return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), ""))
 
 
 _MATCH_IGNORED = str.maketrans('', '', '\u200b\u200c\u2060\ufeff')

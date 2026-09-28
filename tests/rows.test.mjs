@@ -104,3 +104,14 @@ test('fresh search rendering equals cached update and displays hostile strings o
   assert.equal(built.row.querySelector('.nw-title').textContent,group.reports[0].title);
   assert.equal(built.row.querySelectorAll('.nw-search-match').length,2);
 });
+
+
+test('biotech and retail row tags render names and existing direction colors',t=>{
+  const {builder,group,opts}=fixture(t);
+  for(const [theme,name,dir,arrow,cls] of [['biotech','生技醫療','bull','▲','nw-up'],['retail','零售通路','bear','▼','nw-down']]) {
+    const row=builder.build({...group,reports:[story({analysis:{kind:'finance',market:'positive',theme,dir,dir_p:.8}})]},opts).row;
+    const tag=row.querySelector('.nw-tag');
+    assert.equal(tag.textContent,`${name} ${arrow}`);
+    assert.ok(tag.classList.contains(cls));
+  }
+});

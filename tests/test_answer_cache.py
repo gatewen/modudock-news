@@ -94,6 +94,52 @@ class AnswerCacheTests(unittest.TestCase):
         with patch.object(ac.classify.Classifier, '_questions', lambda self, size, context: {'new': 'question'}):
             self.assertNotEqual(original, ac.namespace('classify'))
 
+    def test_new_finance_themes_invalidate_only_finance_answers_once(self):
+        from back.analyze import THEME_CRITERIA
+        kinds = [('classify', ''), ('analysis', 'finance'), ('analysis', 'world'),
+                 ('analysis', 'politics'), ('events', ''), ('topics', ''), ('tone', '')]
+        old_criteria = {k: v for k, v in THEME_CRITERIA.items() if k not in ('biotech', 'retail')}
+        c_item = ('https://example.test/c', '標題丙', '摘要丙')
+        a, b, c = map(ac.fingerprint, (self.a, self.b, c_item))
+        old_answer = dict(kind='finance', market='positive', theme='other', dir='bull', dir_p=.9)
+        items = [dict(link=i[0], title=i[1], summary=i[2]) for i in (self.a, self.b, c_item)]
+        with patch.dict(THEME_CRITERIA, old_criteria, clear=True):
+            old = {key: ac.namespace(*key) for key in kinds}
+            self.cache.put('analysis', old['analysis', 'finance'], 'finance', [a], old_answer)
+            for lane, value in [('classify', 'finance'), ('events', False), ('topics', True), ('tone', 'neutral')]:
+                self.cache.put(lane, old[lane, ''], '', [a, b] if lane in ('events', 'topics') else [a], value)
+            for kind, value in [('world', dict(kind='world', trend='other', region='other')),
+                                ('politics', dict(kind='politics', issue='other'))]:
+                fp = b if kind == 'world' else c
+                self.cache.put('analysis', old['analysis', kind], kind, [fp], value)
+        self.cache.flush()
+        self.cache = self.new()
+        for key in kinds:
+            if key == ('analysis', 'finance'):
+                self.assertNotEqual(ac.namespace(*key), old[key])
+            else:
+                self.assertEqual(ac.namespace(*key), old[key])
+        scheduler = self.scheduler()
+        scheduler.answer_cache.restore(scheduler, items)
+        self.assertFalse(scheduler.analysis_cache)
+        for lane in ('classify', 'events', 'topics', 'tone'):
+            self.assertEqual(len(ac.CacheBridge.caches(scheduler)[lane]), 1, lane)
+        for kind in ('world', 'politics'):
+            fp = b if kind == 'world' else c
+            link = self.b[0] if kind == 'world' else c_item[0]
+            self.cache.put('classify', ac.namespace('classify'), '', [fp], kind)
+            scheduler.answer_cache.restore(scheduler, items)
+            self.assertEqual(scheduler.analysis_cache[link]['kind'], kind)
+        new_answer = dict(old_answer, theme='biotech')
+        self.cache.put('analysis', ac.namespace('analysis', 'finance'), 'finance', [a], new_answer)
+        self.cache.flush()
+        self.cache = self.new()
+        scheduler = self.scheduler()
+        scheduler.answer_cache.restore(scheduler, items)
+        self.assertEqual(scheduler.analysis_cache[self.a[0]], new_answer)
+        scheduler.answer_cache.restore(scheduler, items)
+        self.assertEqual(scheduler.analysis_cache[self.a[0]], new_answer)
+
     def test_topic_feature_threshold_invalidates_only_topic_disk_answers(self):
         items = [dict(link=i[0], title=i[1], summary=i[2]) for i in (self.a, self.b)]
         a, b = map(ac.fingerprint, (self.a, self.b))

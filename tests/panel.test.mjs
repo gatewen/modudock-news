@@ -142,3 +142,15 @@ test('world history treats other and not_conflict as unrelated, with escalation 
   assert.deepEqual(b.values,[1,1,1,2]);assert.equal(b.denominator,3);assert.equal(b.mode,'count');
   assert.deepEqual(b.widths,[20,20,20,40]);
 });
+
+
+test('biotech and retail use shared labels, fixed order and direction bars',()=>{
+  assert.deepEqual([...themeNames].slice(-4),[
+    ['biotech','生技醫療'],['retail','零售通路'],['macro','大盤／總經'],['other','其他']]);
+  const groups=[group(report(1,{analysis:finance('positive','retail','bull')})),
+    group(report(2,{analysis:finance('negative','biotech','bear')}))];
+  const p=aggregatePanel(groups,'finance');
+  assert.deepEqual(p.ranked.map(([id])=>id),['biotech','retail']);
+  assert.deepEqual(p.ranked.map(([,c])=>c.widths),[[0,100,0],[100,0,0]]);
+  assert.deepEqual(p.values,[1,0,0,1]);
+});

@@ -11,7 +11,8 @@ export const themeNames = new Map([
   ["display", "光電面板"], ["leo", "低軌衛星"], ["energy", "能源"],
   ["ev", "電動車"], ["financials", "金融"], ["property", "營建房產"],
   ["transport", "航運航空"], ["consumer_elec", "消費電子"], ["petrochem", "原物料傳產"],
-  ["software", "軟體網路"], ["industrial", "工業電腦"], ["macro", "大盤／總經"], ["other", "其他"],
+  ["software", "軟體網路"], ["industrial", "工業電腦"],
+  ["biotech", "生技醫療"], ["retail", "零售通路"], ["macro", "大盤／總經"], ["other", "其他"],
 ]);
 export const regionNames = new Map([
   ["us_china", "美中"], ["asia_pacific", "亞太"], ["middle_east", "中東"],

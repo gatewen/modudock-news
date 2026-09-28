@@ -156,7 +156,8 @@ console.log(JSON.stringify({labels:[...themeNames],values:p.values,
         submillis=[item(1,source='公視',value=analysis('negative','energy','bear')),item(2,event=f'{1:012x}')]
         for row, micro in zip(submillis,(100,900)):
             row['published']=(NOW-timedelta(hours=1)).replace(microsecond=micro).isoformat()
-        for rows in (fixture(), submillis):
+        for rows in (fixture(), submillis, [item(90, value=analysis(theme='biotech')),
+                                          item(91, value=analysis('negative', 'retail', 'bear'))]):
             out=subprocess.run(['node','--input-type=module','-e',script],cwd=Path(__file__).resolve().parents[1],
                 input=json.dumps(dict(items=rows,feeds=FEEDS,now=NOW.isoformat())),text=True,capture_output=True,check=True)
             front=json.loads(out.stdout); body=build_digest(rows,FEEDS,NOW)
